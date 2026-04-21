@@ -26,6 +26,7 @@ class SimulationWorker(QObject):
         self.table_columns = 6
         self.queue_walkway_y = 142.0
         self.top_walkway_y = 250.0
+        self.bottom_walkway_y = 742.0
         self.door = (52.0, 72.0)
         self.exit = (1228.0, 740.0)
         self.stalls: list[Stall] = []
@@ -61,7 +62,7 @@ class SimulationWorker(QObject):
                 self._spawn_due_students()
                 self._complete_ready_food()
                 self._update_students(game_delta)
-                self._separate_students()
+                self._separate_students(game_delta)
                 self.frameReady.emit(self._build_frame())
                 QThread.msleep(16)
 
@@ -235,7 +236,7 @@ class SimulationWorker(QObject):
                     self.served_students += 1
             elif student.state == StudentState.LEAVING:
                 arrived = self._move_student(student, game_delta, student.walk_speed * 0.95)
-                if arrived:
+                if arrived or self._is_inside_exit(student):
                     student.state = StudentState.DONE
                     to_remove.append(student.id)
 
@@ -343,15 +344,25 @@ class SimulationWorker(QObject):
     ) -> list[tuple[float, float]]:
         aisle_x = self._adjacent_aisle_x(table, seat_index)
         access_y = self._seat_access_y(table, seat_index)
-        return self._compact_path(
-            [
+        main_walkway_y = self._table_walkway_y(table)
+        if main_walkway_y == self.bottom_walkway_y:
+            points = [
+                (start_x, self.top_walkway_y),
+                (aisle_x, self.top_walkway_y),
+                (aisle_x, self.bottom_walkway_y),
+                (aisle_x, access_y),
+                (seat_x, access_y),
+                (seat_x, seat_y),
+            ]
+        else:
+            points = [
                 (start_x, self.top_walkway_y),
                 (aisle_x, self.top_walkway_y),
                 (aisle_x, access_y),
                 (seat_x, access_y),
                 (seat_x, seat_y),
             ]
-        )
+        return self._compact_path(points)
 
     def _set_exit_path(self, student: Student) -> None:
         if student.table_id is None or student.seat_index is None:
@@ -361,18 +372,22 @@ class SimulationWorker(QObject):
         table = self.tables[student.table_id]
         aisle_x = self._adjacent_aisle_x(table, student.seat_index)
         access_y = self._seat_access_y(table, student.seat_index)
+        main_walkway_y = self._table_walkway_y(table)
         self._set_path(
             student,
             self._compact_path(
                 [
                     (student.x, access_y),
                     (aisle_x, access_y),
-                    (aisle_x, self.top_walkway_y),
-                    (self.exit[0], self.top_walkway_y),
+                    (aisle_x, main_walkway_y),
+                    (self.exit[0], main_walkway_y),
                     self.exit,
                 ]
             ),
         )
+
+    def _table_walkway_y(self, table: Table) -> float:
+        return self.bottom_walkway_y if table.y >= 520.0 else self.top_walkway_y
 
     def _adjacent_aisle_x(self, table: Table, seat_index: int) -> float:
         column = table.id % self.table_columns
@@ -424,19 +439,24 @@ class SimulationWorker(QObject):
                 return False
         return arrived
 
-    def _separate_students(self) -> None:
+    def _separate_students(self, game_delta: float) -> None:
         movable = [
             student
             for student in self.students.values()
             if student.state not in (StudentState.EATING, StudentState.DONE)
         ]
         min_distance = 25.0
+        congestion_distance = 34.0
+        crowded_ids: set[int] = set()
         for _ in range(3):
             for index, first in enumerate(movable):
                 for second in movable[index + 1 :]:
                     dx = second.x - first.x
                     dy = second.y - first.y
                     gap = (dx * dx + dy * dy) ** 0.5
+                    if gap < congestion_distance:
+                        crowded_ids.add(first.id)
+                        crowded_ids.add(second.id)
                     if gap >= min_distance:
                         continue
                     if gap < 0.01:
@@ -457,6 +477,15 @@ class SimulationWorker(QObject):
                     second.x = max(28.0, min(self.width - 28.0, second.x))
                     second.y = max(28.0, min(self.height - 28.0, second.y))
             self._avoid_static_obstacles(movable)
+
+        for student in movable:
+            if student.id in crowded_ids:
+                student.congestion_time += game_delta
+                if student.congestion_time >= 2.8:
+                    self._try_start_detour(student, movable)
+                    student.congestion_time = 0.0
+            else:
+                student.congestion_time = max(0.0, student.congestion_time - game_delta * 1.5)
 
     def _avoid_static_obstacles(self, students: list[Student]) -> None:
         obstacles = self._obstacle_rects()
@@ -483,6 +512,75 @@ class SimulationWorker(QObject):
             rects.append((table.x - 22.0, table.y - 14.0, table.x + 22.0, table.y + 14.0))
         return rects
 
+    def _try_start_detour(self, student: Student, students: list[Student]) -> None:
+        if self.game_time < student.detour_until:
+            return
+        if student.state in (StudentState.QUEUED, StudentState.EATING, StudentState.DONE):
+            return
+
+        original_path = list(student.path) if student.path else [(student.target_x, student.target_y)]
+        candidate = self._find_detour_point(student, students)
+        if candidate is None:
+            return
+
+        student.path = self._compact_path([candidate, *original_path])
+        student.target_x, student.target_y = student.path[0]
+        student.detour_until = self.game_time + 5.0
+
+    def _find_detour_point(
+        self,
+        student: Student,
+        students: list[Student],
+    ) -> tuple[float, float] | None:
+        dx = student.target_x - student.x
+        dy = student.target_y - student.y
+        gap = (dx * dx + dy * dy) ** 0.5
+        if gap < 1.0:
+            dx, dy, gap = 1.0, 0.0, 1.0
+
+        nx = -dy / gap
+        ny = dx / gap
+        forward_x = dx / gap
+        forward_y = dy / gap
+        candidates: list[tuple[float, float]] = []
+        for side in (1.0, -1.0):
+            for side_step in (54.0, 78.0, 102.0):
+                candidates.append((student.x + nx * side * side_step, student.y + ny * side * side_step))
+
+        self.rng.shuffle(candidates)
+        for point in candidates:
+            if self._is_walkable_point(point[0], point[1], students, ignored_student_id=student.id):
+                return point
+        return None
+
+    def _is_walkable_point(
+        self,
+        x: float,
+        y: float,
+        students: list[Student],
+        ignored_student_id: int | None = None,
+    ) -> bool:
+        margin = 30.0
+        if x < margin or x > self.width - margin or y < margin or y > self.height - margin:
+            return False
+        for left, top, right, bottom in self._obstacle_rects():
+            if left - 18.0 <= x <= right + 18.0 and top - 18.0 <= y <= bottom + 18.0:
+                return False
+        for other in students:
+            if other.id == ignored_student_id:
+                continue
+            if distance(x, y, other.x, other.y) < 38.0:
+                return False
+        return True
+
+    def _is_inside_exit(self, student: Student) -> bool:
+        left, top, right, bottom = self._exit_rect()
+        return left <= student.x <= right and top <= student.y <= bottom
+
+    def _exit_rect(self) -> tuple[float, float, float, float]:
+        x, y = self.exit
+        return x - 58.0, y - 58.0, x + 58.0, y + 58.0
+
     def _active_student_count(self) -> int:
         return sum(1 for student in self.students.values() if student.state != StudentState.DONE)
 
@@ -498,6 +596,7 @@ class SimulationWorker(QObject):
             "exit": self.exit,
             "width": self.width,
             "height": self.height,
+            "walk_paths": self._build_walk_paths(),
             "stalls": [
                 {
                     "id": stall.id,
@@ -529,6 +628,7 @@ class SimulationWorker(QObject):
                     "y": student.y,
                     "target_x": student.target_x,
                     "target_y": student.target_y,
+                    "path": list(student.path),
                     "state": student.state.value,
                     "meat_pref": student.meat_pref,
                     "veg_pref": student.veg_pref,
@@ -549,3 +649,32 @@ class SimulationWorker(QObject):
             return 0.0
         remaining = self._stall_cook_remaining(stall)
         return max(0.0, min(1.0, 1.0 - remaining / stall.cook_time))
+
+    def _build_walk_paths(self) -> list[dict[str, Any]]:
+        left = 70.0
+        right = self.width - 40.0
+        aisle_xs = sorted(
+            {
+                round(max(92.0, table.x - 92.5), 1)
+                for table in self.tables
+            }
+            | {
+                round(min(self.width - 64.0, table.x + 92.5), 1)
+                for table in self.tables
+            }
+        )
+        paths: list[dict[str, Any]] = [
+            {"kind": "queue", "points": [(left, self.queue_walkway_y), (right, self.queue_walkway_y)]},
+            {"kind": "top", "points": [(left, self.top_walkway_y), (right, self.top_walkway_y)]},
+            {"kind": "bottom", "points": [(left, self.bottom_walkway_y), (right, self.bottom_walkway_y)]},
+            {"kind": "door", "points": [self.door, (self.door[0], self.queue_walkway_y)]},
+            {"kind": "exit", "points": [(self.exit[0], self.bottom_walkway_y), self.exit]},
+        ]
+        for aisle_x in aisle_xs:
+            paths.append(
+                {
+                    "kind": "aisle",
+                    "points": [(aisle_x, self.top_walkway_y), (aisle_x, self.bottom_walkway_y)],
+                }
+            )
+        return paths

@@ -4,6 +4,7 @@ from dataclasses import replace
 
 from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -46,11 +47,13 @@ class MainWindow(QMainWindow):
         self.time_scale_slider.setValue(6)
         self.time_scale_slider.setFixedWidth(180)
         self.time_scale_slider.setToolTip("调整仿真内时间和现实时间的比例")
+        self.path_checkbox = QCheckBox("显示路径")
 
         self.start_button.clicked.connect(self._open_config_dialog)
         self.pause_button.clicked.connect(self._toggle_pause)
         self.stop_button.clicked.connect(self.stopRequested.emit)
         self.time_scale_slider.valueChanged.connect(self._time_scale_slider_changed)
+        self.path_checkbox.toggled.connect(self.canvas.set_show_paths)
 
         top_bar = QHBoxLayout()
         top_bar.addWidget(self.start_button)
@@ -59,6 +62,7 @@ class MainWindow(QMainWindow):
         top_bar.addSpacing(18)
         top_bar.addWidget(self.time_scale_label)
         top_bar.addWidget(self.time_scale_slider)
+        top_bar.addWidget(self.path_checkbox)
         top_bar.addSpacing(18)
         top_bar.addWidget(self.status_label, 1)
 

@@ -57,6 +57,8 @@ class Student:
     walk_speed: float = 14.0
     table_walk_speed: float = 12.0
     path: list[tuple[float, float]] = field(default_factory=list)
+    congestion_time: float = 0.0
+    detour_until: float = 0.0
 
     @property
     def eating_time(self) -> float:
