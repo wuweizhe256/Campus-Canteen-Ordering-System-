@@ -12,9 +12,14 @@ class CanvasWidget(QWidget):
         super().__init__(parent)
         self.setMinimumSize(1024, 640)
         self.frame: dict | None = None
+        self.show_paths = False
 
     def set_frame(self, frame: dict) -> None:
         self.frame = frame
+        self.update()
+
+    def set_show_paths(self, show_paths: bool) -> None:
+        self.show_paths = show_paths
         self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
@@ -32,6 +37,8 @@ class CanvasWidget(QWidget):
         painter.translate(x_offset, y_offset)
         painter.scale(scale, scale)
         self._draw_floor(painter)
+        if self.show_paths:
+            self._draw_path_debug(painter)
         self._draw_door(painter)
         self._draw_exit(painter)
         self._draw_stalls(painter)
@@ -56,6 +63,35 @@ class CanvasWidget(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor("#e9efe0"))
         painter.drawRoundedRect(QRectF(18, 18, width - 36, height - 36), 8, 8)
+
+    def _draw_path_debug(self, painter: QPainter) -> None:
+        painter.setFont(QFont("Microsoft YaHei UI", 8, QFont.Weight.Bold))
+        colors = {
+            "queue": QColor("#2563eb"),
+            "top": QColor("#0891b2"),
+            "bottom": QColor("#16a34a"),
+            "aisle": QColor("#64748b"),
+            "door": QColor("#1d4ed8"),
+            "exit": QColor("#15803d"),
+        }
+        for path in self.frame.get("walk_paths", []):
+            points = path["points"]
+            if len(points) < 2:
+                continue
+            color = colors.get(path["kind"], QColor("#475569"))
+            pen = QPen(color, 3)
+            pen.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            for start, end in zip(points, points[1:]):
+                painter.drawLine(int(start[0]), int(start[1]), int(end[0]), int(end[1]))
+
+        painter.setPen(QPen(QColor("#db2777"), 2))
+        for student in self.frame.get("students", []):
+            points = [(student["x"], student["y"]), *student.get("path", [])]
+            if len(points) < 2:
+                continue
+            for start, end in zip(points, points[1:]):
+                painter.drawLine(int(start[0]), int(start[1]), int(end[0]), int(end[1]))
 
     def _draw_header(self, painter: QPainter) -> None:
         game_time = self.frame["game_time"]
@@ -87,7 +123,7 @@ class CanvasWidget(QWidget):
         x, y = self.frame["exit"]
         painter.setPen(QPen(QColor("#166534"), 2))
         painter.setBrush(QColor("#dcfce7"))
-        painter.drawRoundedRect(QRectF(x - 36, y - 36, 72, 72), 6, 6)
+        painter.drawRoundedRect(QRectF(x - 58, y - 58, 116, 116), 8, 8)
         painter.setFont(QFont("Microsoft YaHei UI", 11, QFont.Weight.Bold))
         painter.setPen(QColor("#15803d"))
         painter.drawText(QRectF(x - 34, y - 10, 68, 28), Qt.AlignmentFlag.AlignCenter, "出口")
