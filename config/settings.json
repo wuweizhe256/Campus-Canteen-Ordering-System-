@@ -1,0 +1,7 @@
+{
+  "sim_minutes": 30,
+  "time_scale": 6.0,
+  "stall_count": 10,
+  "table_count": 24,
+  "max_active_students": 55
+}
