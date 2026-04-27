@@ -3,5 +3,6 @@
   "time_scale": 6.0,
   "stall_count": 10,
   "table_count": 24,
+  "total_student_count": 120,
   "max_active_students": 55
 }

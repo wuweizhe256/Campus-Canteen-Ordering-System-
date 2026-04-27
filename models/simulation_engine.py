@@ -7,7 +7,7 @@ from typing import Any
 from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
 
 from models.entities import RunSummary, SimulationConfig, Stall, Student, StudentState, Table
-from utils.helpers import distance, manhattan_2d, move_towards, triangle_peak_factor
+from utils.helpers import clamp, distance, manhattan_2d, move_towards
 
 
 class SimulationWorker(QObject):
@@ -33,7 +33,6 @@ class SimulationWorker(QObject):
         self.tables: list[Table] = []
         self.students: dict[int, Student] = {}
         self.game_time = 0.0
-        self.next_spawn_time = 0.0
         self.next_student_id = 1
         self.spawned_students = 0
         self.served_students = 0
@@ -99,7 +98,6 @@ class SimulationWorker(QObject):
         self._build_tables()
         self.students.clear()
         self.game_time = 0.0
-        self.next_spawn_time = 0.0
         self.next_student_id = 1
         self.spawned_students = 0
         self.served_students = 0
@@ -141,19 +139,34 @@ class SimulationWorker(QObject):
             )
 
     def _spawn_due_students(self) -> None:
-        while self.game_time >= self.next_spawn_time:
-            if self._active_student_count() < self.config.max_active_students:
-                self._spawn_batch()
-            self.next_spawn_time += 24.0
+        remaining_total = self.config.total_student_count - self.spawned_students
+        if remaining_total <= 0:
+            return
 
-    def _spawn_batch(self) -> None:
-        peak = triangle_peak_factor(self.game_time, self.config.duration_game_seconds)
-        expected = 0.25 + peak * 2.2
-        count = max(0, round(self.rng.gauss(expected, 0.65)))
-        count = min(count, 3)
-        count = min(count, self.config.max_active_students - self._active_student_count())
-        for _ in range(count):
+        remaining_capacity = self.config.max_active_students - self._active_student_count()
+        if remaining_capacity <= 0:
+            return
+
+        target_spawned = self._target_spawned_students()
+        due_count = min(
+            max(0, target_spawned - self.spawned_students),
+            remaining_total,
+            remaining_capacity,
+        )
+        for _ in range(due_count):
             self._spawn_student()
+
+    def _target_spawned_students(self) -> int:
+        duration = self.config.duration_game_seconds
+        if duration <= 0:
+            return self.config.total_student_count
+
+        progress = clamp(self.game_time / duration, 0.0, 1.0)
+        if progress <= 0.5:
+            distribution = 2.0 * progress * progress
+        else:
+            distribution = 1.0 - 2.0 * (1.0 - progress) * (1.0 - progress)
+        return min(self.config.total_student_count, round(distribution * self.config.total_student_count))
 
     def _spawn_student(self) -> None:
         meat_pref = self.rng.uniform(0.0, 1.0)
