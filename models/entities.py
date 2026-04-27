@@ -22,6 +22,7 @@ class SimulationConfig:
     stall_count: int = 10
     table_count: int = 24
     seed: int | None = None
+    total_student_count: int = 120
     max_active_students: int = 55
 
     @property
