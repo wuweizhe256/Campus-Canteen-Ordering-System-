@@ -1,0 +1,144 @@
+<mxfile host="app.diagrams.net" modified="2026-04-21T00:00:00.000Z" agent="Codex" version="24.7.17" type="device">
+  <diagram id="current-simulation-architecture" name="当前仿真架构图">
+    <mxGraphModel dx="1700" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1900" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <mxCell id="title" value="校园食堂就餐仿真系统：当前 PyQt6 + QThread + 信号槽架构图" style="text;html=1;strokeColor=none;fillColor=none;fontSize=22;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="250" y="20" width="1400" height="44" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="lane_ui" value="UI 主线程：PyQt6 Widgets" style="swimlane;html=1;startSize=30;horizontal=0;fillColor=#F8FAFC;strokeColor=#94A3B8;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="90" width="430" height="1010" as="geometry"/>
+        </mxCell>
+        <mxCell id="lane_controller" value="控制层：MainController / 线程桥接" style="swimlane;html=1;startSize=30;horizontal=0;fillColor=#F0F9FF;strokeColor=#38BDF8;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="500" y="90" width="390" height="1010" as="geometry"/>
+        </mxCell>
+        <mxCell id="lane_worker" value="仿真工作线程：SimulationWorker in QThread" style="swimlane;html=1;startSize=30;horizontal=0;fillColor=#F0FDFA;strokeColor=#2DD4BF;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="920" y="90" width="520" height="1010" as="geometry"/>
+        </mxCell>
+        <mxCell id="lane_domain" value="领域数据与绘制数据" style="swimlane;html=1;startSize=30;horizontal=0;fillColor=#FFF7ED;strokeColor=#FB923C;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1470" y="90" width="390" height="1010" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="main_py" value="main.py&lt;br&gt;&lt;font style=&quot;font-size: 11px;&quot;&gt;QApplication&lt;br&gt;MainWindow&lt;br&gt;MainController&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="95" y="130" width="310" height="88" as="geometry"/>
+        </mxCell>
+        <mxCell id="main_window" value="MainWindow&lt;br&gt;&lt;font style=&quot;font-size: 11px;&quot;&gt;按钮：开始 / 暂停 / 停止&lt;br&gt;滑条：time_scale 1x-24x&lt;br&gt;信号：startRequested、pauseChanged、stopRequested、timeScaleChanged&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#E0F2FE;strokeColor=#0284C7;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="95" y="260" width="310" height="130" as="geometry"/>
+        </mxCell>
+        <mxCell id="config_dialog" value="ConfigDialog&lt;br&gt;&lt;font style=&quot;font-size: 11px;&quot;&gt;用户配置：sim_minutes 30-60&lt;br&gt;stall_count、table_count、seed&lt;br&gt;输出：SimulationConfig&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#DCFCE7;strokeColor=#16A34A;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="95" y="430" width="310" height="110" as="geometry"/>
+        </mxCell>
+        <mxCell id="canvas_widget" value="CanvasWidget&lt;br&gt;&lt;font style=&quot;font-size: 11px;&quot;&gt;绘制 1280x800 逻辑画布&lt;br&gt;等比缩放适配 2560x1600&lt;br&gt;大门、出口、窗口、厨师猪、倒计时条、桌子、学生猪表情&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#FCE7F3;strokeColor=#DB2777;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="95" y="600" width="310" height="145" as="geometry"/>
+        </mxCell>
+        <mxCell id="status_ui" value="UI 状态更新&lt;br&gt;&lt;font style=&quot;font-size: 11px;&quot;&gt;set_status(str)&lt;br&gt;simulation_finished(RunSummary)&lt;br&gt;show_error(Exception)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#F1F5F9;strokeColor=#64748B;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="95" y="800" width="310" height="115" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="controller" value="MainController&lt;br&gt;&lt;font style=&quot;font-size: 11px;&quot;&gt;接收 UI 信号&lt;br&gt;创建 QThread 和 SimulationWorker&lt;br&gt;连接跨线程信号槽&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#DBEAFE;strokeColor=#0284C7;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="545" y="170" width="300" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="thread" value="QThread 生命周期&lt;br&gt;&lt;font style=&quot;font-size: 11px;&quot;&gt;worker.moveToThread(thread)&lt;br&gt;thread.started -&gt; worker.run&lt;br&gt;finished/error -&gt; cleanup&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#E0F2FE;strokeColor=#0284C7;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="545" y="350" width="300" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="direct_controls" value="DirectConnection 控制信号&lt;br&gt;&lt;font style=&quot;font-size: 11px;&quot;&gt;stopWorker -&gt; stop()&lt;br&gt;pauseWorker(bool) -&gt; set_paused(bool)&lt;br&gt;updateTimeScale(float) -&gt; set_time_scale(float)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#FEF3C7;strokeColor=#D97706;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="545" y="535" width="300" height="130" as="geometry"/>
+        </mxCell>
+        <mxCell id="queued_returns" value="QueuedConnection 返回 UI&lt;br&gt;&lt;font style=&quot;font-size: 11px;&quot;&gt;frameReady(dict)&lt;br&gt;statusChanged(str)&lt;br&gt;finished(RunSummary)&lt;br&gt;errorOccurred(Exception)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#DCFCE7;strokeColor=#16A34A;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="545" y="735" width="300" height="135" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="worker" value="SimulationWorker(QObject)&lt;br&gt;&lt;font style=&quot;font-size: 11px;&quot;&gt;运行在 QThread&lt;br&gt;持有：SimulationConfig、RNG、stalls、tables、students&lt;br&gt;状态：game_time、time_scale、paused、stop_requested&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#CCFBF1;strokeColor=#0D9488;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="975" y="135" width="395" height="130" as="geometry"/>
+        </mxCell>
+        <mxCell id="init_layout" value="初始化布局与实体&lt;br&gt;&lt;font style=&quot;font-size: 11px;&quot;&gt;画布：1280x800&lt;br&gt;door=(52,72)、exit=(1228,740)&lt;br&gt;10 个窗口、24 张四人桌&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#DCFCE7;strokeColor=#16A34A;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="975" y="315" width="395" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="loop" value="仿真循环 run()&lt;br&gt;&lt;font style=&quot;font-size: 11px;&quot;&gt;while not stop and game_time &lt; duration&lt;br&gt;暂停时只 sleep，不推进时间&lt;br&gt;game_delta = real_delta * time_scale&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#FEF3C7;strokeColor=#D97706;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="975" y="485" width="395" height="130" as="geometry"/>
+        </mxCell>
+        <mxCell id="rules" value="业务规则推进&lt;br&gt;&lt;font style=&quot;font-size: 11px;&quot;&gt;每 24 游戏秒按三角峰值生成学生&lt;br&gt;学生偏好与窗口荤素向量做曼哈顿距离匹配&lt;br&gt;排队、做饭倒计时、入座、吃饭、从出口离开&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#FFEDD5;strokeColor=#F97316;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="975" y="675" width="395" height="145" as="geometry"/>
+        </mxCell>
+        <mxCell id="path_avoid" value="路径与避障&lt;br&gt;&lt;font style=&quot;font-size: 11px;&quot;&gt;waypoints：窗口过道、桌间过道、出口&lt;br&gt;学生之间最小距离分离&lt;br&gt;窗口和桌面核心矩形软避障&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#E0E7FF;strokeColor=#4F46E5;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="975" y="885" width="395" height="120" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="entities" value="models.entities&lt;br&gt;&lt;font style=&quot;font-size: 11px;&quot;&gt;SimulationConfig&lt;br&gt;Student / StudentState&lt;br&gt;Stall / Table&lt;br&gt;RunSummary&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#DCFCE7;strokeColor=#16A34A;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1515" y="150" width="300" height="130" as="geometry"/>
+        </mxCell>
+        <mxCell id="settings" value="config/settings.json&lt;br&gt;&lt;font style=&quot;font-size: 11px;&quot;&gt;默认配置&lt;br&gt;sim_minutes、time_scale&lt;br&gt;stall_count、table_count、max_active_students&lt;/font&gt;" style="shape=document;whiteSpace=wrap;html=1;boundedLbl=1;fillColor=#E0F2FE;strokeColor=#0284C7;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1515" y="340" width="300" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="frame" value="Frame dict&lt;br&gt;&lt;font style=&quot;font-size: 11px;&quot;&gt;game_time、duration、time_scale&lt;br&gt;door、exit、width、height&lt;br&gt;stalls：queue_count、cook_remaining、cook_progress&lt;br&gt;tables：seats、occupied&lt;br&gt;students：x、y、state、target、stall_id&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#FCE7F3;strokeColor=#DB2777;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1515" y="535" width="300" height="175" as="geometry"/>
+        </mxCell>
+        <mxCell id="helpers" value="utils.helpers&lt;br&gt;&lt;font style=&quot;font-size: 11px;&quot;&gt;distance()&lt;br&gt;move_towards()&lt;br&gt;manhattan_2d()&lt;br&gt;triangle_peak_factor()&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#F1F5F9;strokeColor=#64748B;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1515" y="780" width="300" height="130" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="legend" value="连接说明：蓝色为 UI 发起的配置/控制流；绿色为 worker 返回 UI 的信号槽数据；橙色为仿真内部状态推进；紫色为绘制数据。" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#FFFFFF;strokeColor=#475569;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="500" y="1030" width="940" height="48" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e_main_window" value="创建" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#2563EB;fontSize=11;" edge="1" parent="1" source="main_py" target="main_window">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_config_ui" value="exec() 后返回 SimulationConfig" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#2563EB;fontSize=11;" edge="1" parent="1" source="config_dialog" target="main_window">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_ui_controller" value="startRequested(config)&lt;br&gt;pause/stop/timeScale" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#2563EB;fontSize=11;" edge="1" parent="1" source="main_window" target="controller">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_controller_thread" value="创建 worker + QThread" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#0284C7;fontSize=11;" edge="1" parent="1" source="controller" target="thread">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_thread_worker" value="thread.started -&gt; run()" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#0284C7;fontSize=11;" edge="1" parent="1" source="thread" target="worker">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_direct_worker" value="DirectConnection&lt;br&gt;停止/暂停/倍率实时生效" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#D97706;fontSize=11;" edge="1" parent="1" source="direct_controls" target="worker">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_worker_init" value="初始化" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#F97316;fontSize=11;" edge="1" parent="1" source="worker" target="init_layout">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_init_loop" value="进入循环" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#F97316;fontSize=11;" edge="1" parent="1" source="init_layout" target="loop">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_loop_rules" value="每帧推进" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#F97316;fontSize=11;" edge="1" parent="1" source="loop" target="rules">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_rules_path" value="更新位置 + 避障" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#4F46E5;fontSize=11;" edge="1" parent="1" source="rules" target="path_avoid">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_path_frame" value="_build_frame(): dict" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#DB2777;fontSize=11;" edge="1" parent="1" source="path_avoid" target="frame">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_frame_return" value="frameReady(frame)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#16A34A;fontSize=11;" edge="1" parent="1" source="frame" target="queued_returns">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_return_canvas" value="update_frame(frame)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#16A34A;fontSize=11;" edge="1" parent="1" source="queued_returns" target="canvas_widget">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_return_status" value="status/finished/error" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#16A34A;fontSize=11;" edge="1" parent="1" source="queued_returns" target="status_ui">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_entities_worker" value="dataclass 对象" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#16A34A;fontSize=11;" edge="1" parent="1" source="entities" target="worker">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_settings_config" value="默认值来源" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#0284C7;fontSize=11;" edge="1" parent="1" source="settings" target="config_dialog">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_helpers_worker" value="距离 / 移动 / 匹配 / 峰值" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#64748B;fontSize=11;" edge="1" parent="1" source="helpers" target="rules">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_canvas_main" value="主线程 paintEvent()" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#DB2777;fontSize=11;" edge="1" parent="1" source="canvas_widget" target="main_window">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -1,12 +1,21 @@
-import sys
-from PyQt6.QtWidgets import QApplication, QLabel, QWidget, QVBoxLayout
+from __future__ import annotations
 
-app = QApplication(sys.argv)
-window = QWidget()
-window.setWindowTitle("北京交通大学就餐仿真系统")
-layout = QVBoxLayout()
-layout.addWidget(QLabel("Hello World，开发环境搭建成功"))
-window.setLayout(layout)
-window.resize(420, 180)
-window.show()
-sys.exit(app.exec())
+import sys
+
+from PyQt6.QtWidgets import QApplication
+
+from controllers.main_controller import MainController
+from views.main_window import MainWindow
+
+
+def main() -> int:
+    app = QApplication(sys.argv)
+    window = MainWindow()
+    controller = MainController(window)
+    window.controller = controller
+    window.show()
+    return app.exec()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
