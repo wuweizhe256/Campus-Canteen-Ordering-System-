@@ -8,9 +8,11 @@ class StudentState(str, Enum):
     DECIDING = "deciding"
     MOVING_TO_QUEUE = "moving_to_queue"
     QUEUED = "queued"
+    SEARCHING_SEAT = "searching_seat"
     WAITING_SEAT = "waiting_seat"
-    MOVING_TO_TABLE = "moving_to_table"
+    MOVING_TO_SEAT = "moving_to_seat"
     EATING = "eating"
+    MOVING_TO_TRAY_RETURN = "moving_to_tray_return"
     LEAVING = "leaving"
     DONE = "done"
 
@@ -23,7 +25,7 @@ class SimulationConfig:
     table_count: int = 24
     seed: int | None = None
     total_student_count: int = 120
-    max_active_students: int = 55
+    max_active_students: int = 120
 
     @property
     def duration_game_seconds(self) -> float:
@@ -79,19 +81,35 @@ class Stall:
     next_food_ready_time: float = 0.0
 
 
+class SeatStatus(str, Enum):
+    FREE = "free"
+    RESERVED = "reserved"
+    OCCUPIED = "occupied"
+
+
+@dataclass
+class Seat:
+    status: SeatStatus = SeatStatus.FREE
+    student_id: int | None = None
+
+
 @dataclass
 class Table:
     id: int
     x: float
     y: float
-    seats: list[int | None] = field(default_factory=lambda: [None, None, None, None])
+    seats: list[Seat] = field(default_factory=lambda: [Seat(), Seat(), Seat(), Seat()])
 
     def free_seat_indexes(self) -> list[int]:
-        return [index for index, occupant in enumerate(self.seats) if occupant is None]
+        return [
+            index
+            for index, seat in enumerate(self.seats)
+            if seat.status == SeatStatus.FREE and seat.student_id is None
+        ]
 
     @property
     def occupied_count(self) -> int:
-        return sum(1 for occupant in self.seats if occupant is not None)
+        return sum(1 for seat in self.seats if seat.status == SeatStatus.OCCUPIED)
 
 
 @dataclass(frozen=True)

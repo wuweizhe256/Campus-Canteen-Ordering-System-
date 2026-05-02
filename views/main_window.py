@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
 from models.entities import RunSummary, SimulationConfig
 from views.canvas_widget import CanvasWidget
 from views.config_dialog import ConfigDialog
+from views.stats_panel import StatsPanel
 
 
 class MainWindow(QMainWindow):
@@ -34,6 +35,7 @@ class MainWindow(QMainWindow):
         self._paused = False
 
         self.canvas = CanvasWidget()
+        self.stats_panel = StatsPanel()
         self.start_button = QPushButton("开始仿真")
         self.pause_button = QPushButton("暂停")
         self.pause_button.setEnabled(False)
@@ -66,9 +68,14 @@ class MainWindow(QMainWindow):
         top_bar.addSpacing(18)
         top_bar.addWidget(self.status_label, 1)
 
+        content = QHBoxLayout()
+        content.setSpacing(0)
+        content.addWidget(self.canvas, 1)
+        content.addWidget(self.stats_panel)
+
         root = QVBoxLayout()
         root.addLayout(top_bar)
-        root.addWidget(self.canvas, 1)
+        root.addLayout(content, 1)
 
         container = QWidget()
         container.setLayout(root)
@@ -108,6 +115,7 @@ class MainWindow(QMainWindow):
     @pyqtSlot(object)
     def update_frame(self, frame: dict) -> None:
         self.canvas.set_frame(frame)
+        self.stats_panel.set_frame(frame)
 
     @pyqtSlot(str)
     def set_status(self, status: str) -> None:
