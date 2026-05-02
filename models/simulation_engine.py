@@ -6,6 +6,7 @@ from typing import Any
 
 from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
 
+from models.data_recorder import DataRecorder, EventRecordP0
 from models.entities import RunSummary, SeatStatus, SimulationConfig, Stall, Student, StudentState, Table
 from utils.helpers import clamp, distance, manhattan_2d, move_towards
 
@@ -38,6 +39,7 @@ class SimulationWorker(QObject):
         self.spawned_students = 0
         self.served_students = 0
         self.max_active_students_seen = 0
+        self.data_recorder = DataRecorder()
         self._stop_requested = False
         self._paused = False
 
@@ -109,6 +111,10 @@ class SimulationWorker(QObject):
         self.spawned_students = 0
         self.served_students = 0
         self.max_active_students_seen = 0
+        self.data_recorder = DataRecorder(
+            total_seats=sum(len(table.seats) for table in self.tables),
+            duration=self.config.duration_game_seconds,
+        )
 
     def _build_stalls(self) -> None:
         self.stalls.clear()
@@ -204,6 +210,12 @@ class SimulationWorker(QObject):
         self.students[student.id] = student
         self.next_student_id += 1
         self.spawned_students += 1
+        self._record_student_event(
+            "student_spawned",
+            student,
+            from_state=None,
+            to_state=student.state,
+        )
 
     def _choose_best_stall(self, student: Student) -> int:
         best_stall = min(
@@ -227,8 +239,16 @@ class SimulationWorker(QObject):
                 student = self.students.get(student_id)
                 if student is None or student.state == StudentState.DONE:
                     continue
+                previous_state = student.state
                 student.food_ready_at = ready_at
                 student.state = StudentState.SEARCHING_SEAT
+                self._record_student_event(
+                    "food_ready",
+                    student,
+                    game_time=ready_at,
+                    from_state=previous_state,
+                    to_state=student.state,
+                )
 
     def _update_students(self, game_delta: float) -> None:
         to_remove: list[int] = []
@@ -255,10 +275,24 @@ class SimulationWorker(QObject):
                 arrived = self._move_student(student, game_delta, student.table_walk_speed)
                 if arrived:
                     self._occupy_reserved_seat(student)
+                    previous_state = student.state
                     student.state = StudentState.EATING
                     student.eating_done_at = self.game_time + student.eating_time
+                    self._record_student_event(
+                        "eating_started",
+                        student,
+                        from_state=previous_state,
+                        to_state=student.state,
+                    )
             elif student.state == StudentState.EATING:
                 if student.eating_done_at is not None and self.game_time >= student.eating_done_at:
+                    previous_state = student.state
+                    self._record_student_event(
+                        "eating_finished",
+                        student,
+                        from_state=previous_state,
+                        to_state=StudentState.MOVING_TO_TRAY_RETURN,
+                    )
                     self._release_seat(student)
                     self._set_tray_return_path(student)
                     student.state = StudentState.MOVING_TO_TRAY_RETURN
@@ -271,7 +305,14 @@ class SimulationWorker(QObject):
             elif student.state == StudentState.LEAVING:
                 arrived = self._move_student(student, game_delta, student.walk_speed * 0.95)
                 if arrived or self._is_inside_exit(student):
+                    previous_state = student.state
                     student.state = StudentState.DONE
+                    self._record_student_event(
+                        "student_left",
+                        student,
+                        from_state=previous_state,
+                        to_state=student.state,
+                    )
                     to_remove.append(student.id)
 
         for student_id in to_remove:
@@ -328,7 +369,14 @@ class SimulationWorker(QObject):
         stall.next_food_ready_time = ready_at
         stall.queue.append(student.id)
         stall.ready_times.append((student.id, ready_at))
+        previous_state = student.state
         student.state = StudentState.QUEUED
+        self._record_student_event(
+            "queue_started",
+            student,
+            from_state=previous_state,
+            to_state=student.state,
+        )
 
     def _send_student_to_table(self, student: Student) -> None:
         free: list[tuple[Table, int]] = []
@@ -670,7 +718,34 @@ class SimulationWorker(QObject):
     def _active_student_count(self) -> int:
         return sum(1 for student in self.students.values() if student.state != StudentState.DONE)
 
+    def _record_student_event(
+        self,
+        event_type: str,
+        student: Student,
+        from_state: StudentState | str | None,
+        to_state: StudentState | str | None,
+        game_time: float | None = None,
+    ) -> None:
+        self.data_recorder.record_event(
+            EventRecordP0(
+                event_type=event_type,
+                game_time=self.game_time if game_time is None else game_time,
+                student_id=student.id,
+                stall_id=student.stall_id,
+                table_id=student.table_id,
+                seat_index=student.seat_index,
+                from_state=_state_value(from_state),
+                to_state=_state_value(to_state),
+            )
+        )
+
+    def _record_queue_samples(self) -> None:
+        for stall in self.stalls:
+            self.data_recorder.record_queue_sample(self.game_time, stall.id, len(stall.queue))
+
     def _build_frame(self) -> dict[str, Any]:
+        self._record_queue_samples()
+        stats = self.data_recorder.build_stats(current_time=self.game_time).to_dict()
         return {
             "game_time": min(self.game_time, self.config.duration_game_seconds),
             "duration": self.config.duration_game_seconds,
@@ -693,19 +768,7 @@ class SimulationWorker(QObject):
             ],
             "width": self.width,
             "height": self.height,
-            "stats": {
-                "avg_wait_time": None,
-                "avg_total_time": None,
-                "max_active_students": self.max_active_students_seen,
-                "stall_queue_stats": [
-                    {
-                        "stall_id": stall.id,
-                        "max_queue_length": len(stall.queue),
-                    }
-                    for stall in self.stalls
-                ],
-                "seat_utilization": None,
-            },
+            "stats": stats,
             "walk_paths": self._build_walk_paths(),
             "stalls": [
                 {
@@ -798,3 +861,11 @@ class SimulationWorker(QObject):
                 }
             )
         return paths
+
+
+def _state_value(state: StudentState | str | None) -> str | None:
+    if state is None:
+        return None
+    if isinstance(state, StudentState):
+        return state.value
+    return str(state)
