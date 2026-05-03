@@ -6,8 +6,10 @@ from PyQt6.QtCore import QRectF, Qt
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QFrame,
     QHeaderView,
     QLabel,
+    QScrollArea,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -18,54 +20,125 @@ from PyQt6.QtWidgets import (
 class StatsPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setMinimumWidth(280)
-        self.setMaximumWidth(360)
+        self.setMinimumWidth(330)
+        self.setMaximumWidth(410)
+        self.setObjectName("StatsPanel")
+        self.history: list[dict[str, float | None]] = []
 
         self.title = QLabel("P0 数据统计")
-        self.title.setFont(QFont("Microsoft YaHei UI", 12, QFont.Weight.Bold))
-        self.title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.title.setObjectName("StatsTitle")
+        self.title.setFont(QFont("Microsoft YaHei UI", 13, QFont.Weight.Bold))
+        self.subtitle = QLabel("实时指标、队列热力与趋势概览")
+        self.subtitle.setObjectName("StatsSubtitle")
 
         self.table = QTableWidget(0, 2)
-        self.table.setHorizontalHeaderLabels(["指标", "值"])
+        self.table.setObjectName("StatsTable")
+        self.table.setHorizontalHeaderLabels(["指标", "当前值"])
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.table.setAlternatingRowColors(True)
-        self.table.setMinimumHeight(220)
+        self.table.setShowGrid(False)
+        self.table.setMinimumHeight(260)
 
-        self.chart = StatsChart()
+        table_card = _card()
+        table_layout = QVBoxLayout()
+        table_layout.setContentsMargins(10, 10, 10, 10)
+        table_layout.addWidget(self.table)
+        table_card.setLayout(table_layout)
 
-        layout = QVBoxLayout()
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
-        layout.addWidget(self.title)
-        layout.addWidget(self.table)
-        layout.addWidget(self.chart, 1)
-        self.setLayout(layout)
+        self.gauge_panel = GaugePanel()
+        self.heatmap = QueueHeatmap()
+        self.trend = TrendChart()
+
+        content = QWidget()
+        content.setObjectName("StatsScrollContent")
+        content_layout = QVBoxLayout()
+        content_layout.setContentsMargins(14, 16, 14, 16)
+        content_layout.setSpacing(12)
+        content_layout.addWidget(self.title)
+        content_layout.addWidget(self.subtitle)
+        content_layout.addWidget(self.gauge_panel)
+        content_layout.addWidget(table_card)
+        content_layout.addWidget(self.heatmap)
+        content_layout.addWidget(self.trend)
+        content_layout.addStretch(1)
+        content.setLayout(content_layout)
+
+        self.scroll = QScrollArea()
+        self.scroll.setObjectName("StatsScroll")
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setWidget(content)
+
+        root = QVBoxLayout()
+        root.setContentsMargins(0, 0, 0, 0)
+        root.addWidget(self.scroll)
+        self.setLayout(root)
 
         self.setStyleSheet(
             """
-            StatsPanel {
+            QWidget#StatsPanel {
                 background: #f8fafc;
-                border-left: 1px solid #cbd5e1;
+                border-left: 1px solid #dbe3ed;
             }
-            QTableWidget {
+            QScrollArea#StatsScroll {
+                background: transparent;
+            }
+            QWidget#StatsScrollContent {
+                background: #f8fafc;
+            }
+            QLabel#StatsTitle {
+                color: #0f172a;
+            }
+            QLabel#StatsSubtitle {
+                color: #64748b;
+                font: 9pt "Microsoft YaHei UI";
+                padding-bottom: 2px;
+            }
+            QFrame#StatsCard {
                 background: #ffffff;
-                border: 1px solid #cbd5e1;
-                border-radius: 6px;
-                gridline-color: #e2e8f0;
+                border: 1px solid #e2e8f0;
+                border-radius: 10px;
+            }
+            QTableWidget#StatsTable {
+                background: transparent;
+                alternate-background-color: #f8fafc;
+                border: 0;
+                color: #0f172a;
                 font: 9pt "Microsoft YaHei UI";
             }
             QHeaderView::section {
-                background: #e2e8f0;
+                background: #eaf1f8;
                 border: 0;
-                padding: 5px;
+                border-radius: 6px;
+                color: #334155;
                 font-weight: 700;
+                padding: 7px 8px;
             }
             QTableWidget::item {
-                padding: 5px;
+                border-bottom: 1px solid #eef2f7;
+                padding: 6px 8px;
+            }
+            QScrollBar:vertical {
+                background: transparent;
+                width: 10px;
+                margin: 4px 2px 4px 2px;
+            }
+            QScrollBar::handle:vertical {
+                background: #cbd5e1;
+                border-radius: 4px;
+                min-height: 40px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #94a3b8;
+            }
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical {
+                height: 0;
             }
             """
         )
@@ -76,6 +149,19 @@ class StatsPanel(QWidget):
         stats = frame.get("stats") or {}
         if not isinstance(stats, dict):
             stats = {}
+
+        game_time = _number(frame.get("game_time"), None)
+        avg_wait_time = _number(stats.get("avg_wait_time"), None)
+        max_active = _number(stats.get("max_active_students"), None)
+        if game_time is not None:
+            self.history.append(
+                {
+                    "game_time": game_time,
+                    "avg_wait_time": avg_wait_time,
+                    "max_active_students": max_active,
+                }
+            )
+            self.history = self.history[-160:]
 
         queue_stats = stats.get("stall_queue_stats") or []
         queue_rows = [
@@ -106,10 +192,82 @@ class StatsPanel(QWidget):
             self.table.setItem(row_index, 1, value_item)
         self.table.resizeRowsToContents()
 
-        self.chart.set_stats(stats)
+        self.gauge_panel.set_stats(stats)
+        self.heatmap.set_stats(stats)
+        self.trend.set_history(self.history)
 
 
-class StatsChart(QWidget):
+class GaugePanel(QWidget):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setMinimumHeight(220)
+        self.stats: dict[str, Any] = {}
+
+    def set_stats(self, stats: dict[str, Any]) -> None:
+        self.stats = stats
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
+        painter = _card_painter(self)
+        painter.setPen(QColor("#0f172a"))
+        painter.setFont(QFont("Microsoft YaHei UI", 10, QFont.Weight.Bold))
+        painter.drawText(QRectF(16, 14, self.width() - 32, 20), Qt.AlignmentFlag.AlignLeft, "核心仪表盘")
+
+        gauges = [
+            ("等待", _number(self.stats.get("avg_wait_time"), None), 120.0, "s", QColor("#0ea5e9")),
+            ("总耗时", _number(self.stats.get("avg_total_time"), None), 600.0, "s", QColor("#8b5cf6")),
+            ("座位", _number(self.stats.get("seat_utilization"), None), 1.0, "%", QColor("#14b8a6")),
+            ("人数", _number(self.stats.get("max_active_students"), None), 120.0, "人", QColor("#f59e0b")),
+        ]
+
+        cell_width = (self.width() - 44) / 2
+        for index, (label, value, maximum, unit, color) in enumerate(gauges):
+            col = index % 2
+            row = index // 2
+            rect = QRectF(16 + col * (cell_width + 12), 46 + row * 78, cell_width, 66)
+            self._draw_gauge(painter, rect, label, value, maximum, unit, color)
+
+    def _draw_gauge(
+        self,
+        painter: QPainter,
+        rect: QRectF,
+        label: str,
+        value: float | None,
+        maximum: float,
+        unit: str,
+        color: QColor,
+    ) -> None:
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#f8fafc"))
+        painter.drawRoundedRect(rect, 8, 8)
+
+        center = rect.left() + 36
+        circle = QRectF(center - 22, rect.top() + 11, 44, 44)
+        painter.setPen(QPen(QColor("#e2e8f0"), 7))
+        painter.drawArc(circle, 210 * 16, -240 * 16)
+        if value is not None:
+            ratio = max(0.0, min(1.0, value / maximum if maximum > 0 else 0.0))
+            painter.setPen(QPen(color, 7))
+            painter.drawArc(circle, 210 * 16, int(-240 * ratio * 16))
+
+        painter.setPen(QColor("#64748b"))
+        painter.setFont(QFont("Microsoft YaHei UI", 8))
+        painter.drawText(QRectF(rect.left() + 72, rect.top() + 12, rect.width() - 82, 18), Qt.AlignmentFlag.AlignLeft, label)
+
+        painter.setPen(QColor("#0f172a"))
+        painter.setFont(QFont("Microsoft YaHei UI", 11, QFont.Weight.Bold))
+        if value is None:
+            display = "-"
+        elif unit == "%":
+            display = f"{value * 100:.1f}%"
+        elif unit == "s":
+            display = _format_seconds(value)
+        else:
+            display = f"{int(value)}{unit}"
+        painter.drawText(QRectF(rect.left() + 72, rect.top() + 32, rect.width() - 82, 22), Qt.AlignmentFlag.AlignLeft, display)
+
+
+class QueueHeatmap(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setMinimumHeight(260)
@@ -120,84 +278,181 @@ class StatsChart(QWidget):
         self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.fillRect(self.rect(), QColor("#ffffff"))
-
-        bounds = QRectF(0, 0, self.width() - 1, self.height() - 1)
-        painter.setPen(QPen(QColor("#cbd5e1"), 1))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(bounds.adjusted(0.5, 0.5, -0.5, -0.5), 6, 6)
-
+        painter = _card_painter(self)
         painter.setPen(QColor("#0f172a"))
         painter.setFont(QFont("Microsoft YaHei UI", 10, QFont.Weight.Bold))
-        painter.drawText(QRectF(14, 10, self.width() - 28, 20), Qt.AlignmentFlag.AlignLeft, "窗口最大队列")
+        painter.drawText(QRectF(16, 14, self.width() - 32, 20), Qt.AlignmentFlag.AlignLeft, "窗口队列热力图")
 
         queue_stats = self.stats.get("stall_queue_stats") or []
         values = [
             (
-                f"W{int(_number(item.get('stall_id'), 0)) + 1}",
+                int(_number(item.get("stall_id"), 0)),
                 int(_number(item.get("max_queue_length"), 0)),
             )
             for item in queue_stats
             if isinstance(item, dict)
         ]
-
-        chart_rect = QRectF(18, 44, self.width() - 36, max(90, self.height() - 120))
-        if values:
-            self._draw_queue_bars(painter, chart_rect, values)
-        else:
+        if not values:
             painter.setPen(QColor("#64748b"))
             painter.setFont(QFont("Microsoft YaHei UI", 9))
-            painter.drawText(chart_rect, Qt.AlignmentFlag.AlignCenter, "暂无队列数据")
+            painter.drawText(QRectF(16, 48, self.width() - 32, self.height() - 82), Qt.AlignmentFlag.AlignCenter, "暂无队列数据")
+            self._draw_legend(painter, 16, self.height() - 32, self.width() - 32)
+            return
 
-        self._draw_utilization(painter)
-
-    def _draw_queue_bars(
-        self,
-        painter: QPainter,
-        rect: QRectF,
-        values: list[tuple[str, int]],
-    ) -> None:
         max_value = max(1, max(value for _, value in values))
-        gap = 5.0
-        bar_width = max(8.0, (rect.width() - gap * (len(values) - 1)) / len(values))
-        painter.setPen(QPen(QColor("#e2e8f0"), 1))
-        painter.drawLine(int(rect.left()), int(rect.bottom()), int(rect.right()), int(rect.bottom()))
+        cols = 4
+        gap = 10.0
+        area = QRectF(16, 50, self.width() - 32, self.height() - 96)
+        cell_width = (area.width() - gap * (cols - 1)) / cols
+        rows = (len(values) + cols - 1) // cols
+        cell_height = min(52.0, (area.height() - gap * max(0, rows - 1)) / max(1, rows))
 
-        for index, (label, value) in enumerate(values):
-            left = rect.left() + index * (bar_width + gap)
-            height = 0.0 if value <= 0 else rect.height() * value / max_value
-            bar_rect = QRectF(left, rect.bottom() - height, bar_width, height)
+        for index, (stall_id, value) in enumerate(values):
+            row = index // cols
+            col = index % cols
+            rect = QRectF(
+                area.left() + col * (cell_width + gap),
+                area.top() + row * (cell_height + gap),
+                cell_width,
+                cell_height,
+            )
+            color = _heat_color(value / max_value)
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor("#0ea5e9" if value < max_value else "#f59e0b"))
-            painter.drawRoundedRect(bar_rect, 3, 3)
+            painter.setBrush(color)
+            painter.drawRoundedRect(rect, 8, 8)
+            painter.setPen(QColor("#ffffff" if value / max_value > 0.55 else "#0f172a"))
+            painter.setFont(QFont("Microsoft YaHei UI", 10, QFont.Weight.Bold))
+            painter.drawText(rect.adjusted(8, 6, -8, -24), Qt.AlignmentFlag.AlignLeft, f"W{stall_id + 1}")
+            painter.setFont(QFont("Microsoft YaHei UI", 13, QFont.Weight.Bold))
+            painter.drawText(rect.adjusted(8, 22, -8, -6), Qt.AlignmentFlag.AlignRight, str(value))
 
-            painter.setPen(QColor("#334155"))
-            painter.setFont(QFont("Microsoft YaHei UI", 7))
-            painter.drawText(QRectF(left - 2, rect.bottom() + 4, bar_width + 4, 14), Qt.AlignmentFlag.AlignCenter, label)
-            painter.drawText(QRectF(left - 2, bar_rect.top() - 15, bar_width + 4, 14), Qt.AlignmentFlag.AlignCenter, str(value))
+        self._draw_legend(painter, 16, self.height() - 32, self.width() - 32)
 
-    def _draw_utilization(self, painter: QPainter) -> None:
-        value = _number(self.stats.get("seat_utilization"), None)
-        label = _format_percent(value)
-        left = 18.0
-        top = self.height() - 58.0
-        width = self.width() - 36.0
+    def _draw_legend(self, painter: QPainter, left: float, top: float, width: float) -> None:
+        painter.setFont(QFont("Microsoft YaHei UI", 8))
+        painter.setPen(QColor("#64748b"))
+        painter.drawText(QRectF(left, top - 18, width, 16), Qt.AlignmentFlag.AlignLeft, "低拥堵")
+        painter.drawText(QRectF(left, top - 18, width, 16), Qt.AlignmentFlag.AlignRight, "高拥堵")
+        steps = 24
+        segment = width / steps
+        painter.setPen(Qt.PenStyle.NoPen)
+        for index in range(steps):
+            painter.setBrush(_heat_color(index / max(1, steps - 1)))
+            painter.drawRect(QRectF(left + index * segment, top, segment + 1, 8))
 
+
+class TrendChart(QWidget):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setMinimumHeight(280)
+        self.history: list[dict[str, float | None]] = []
+
+    def set_history(self, history: list[dict[str, float | None]]) -> None:
+        self.history = list(history)
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
+        painter = _card_painter(self)
         painter.setPen(QColor("#0f172a"))
         painter.setFont(QFont("Microsoft YaHei UI", 10, QFont.Weight.Bold))
-        painter.drawText(QRectF(left, top - 24, width, 20), Qt.AlignmentFlag.AlignLeft, f"座位利用率 {label}")
+        painter.drawText(QRectF(16, 14, self.width() - 32, 20), Qt.AlignmentFlag.AlignLeft, "等待时间与场内人数趋势")
 
-        painter.setPen(QPen(QColor("#cbd5e1"), 1))
-        painter.setBrush(QColor("#e2e8f0"))
-        painter.drawRoundedRect(QRectF(left, top, width, 16), 8, 8)
-        if value is None:
+        chart = QRectF(34, 54, self.width() - 58, self.height() - 92)
+        painter.setPen(QPen(QColor("#e2e8f0"), 1))
+        for index in range(4):
+            y = chart.top() + index * chart.height() / 3
+            painter.drawLine(int(chart.left()), int(y), int(chart.right()), int(y))
+
+        if len(self.history) < 2:
+            painter.setPen(QColor("#64748b"))
+            painter.setFont(QFont("Microsoft YaHei UI", 9))
+            painter.drawText(chart, Qt.AlignmentFlag.AlignCenter, "运行后显示趋势")
+            self._draw_legend(painter)
             return
-        fill_width = max(0.0, min(width, width * value))
+
+        wait_values = [item["avg_wait_time"] for item in self.history if item.get("avg_wait_time") is not None]
+        active_values = [item["max_active_students"] for item in self.history if item.get("max_active_students") is not None]
+        max_wait = max(1.0, max(wait_values) if wait_values else 1.0)
+        max_active = max(1.0, max(active_values) if active_values else 1.0)
+
+        self._draw_line(painter, chart, "avg_wait_time", max_wait, QColor("#0ea5e9"))
+        self._draw_line(painter, chart, "max_active_students", max_active, QColor("#f59e0b"))
+        self._draw_legend(painter)
+
+    def _draw_line(
+        self,
+        painter: QPainter,
+        chart: QRectF,
+        key: str,
+        maximum: float,
+        color: QColor,
+    ) -> None:
+        points: list[tuple[float, float]] = []
+        total = max(1, len(self.history) - 1)
+        for index, item in enumerate(self.history):
+            value = item.get(key)
+            if value is None:
+                continue
+            x = chart.left() + chart.width() * index / total
+            y = chart.bottom() - chart.height() * max(0.0, min(1.0, float(value) / maximum))
+            points.append((x, y))
+        if len(points) < 2:
+            return
+
+        painter.setPen(QPen(color, 2.5))
+        for start, end in zip(points, points[1:]):
+            painter.drawLine(int(start[0]), int(start[1]), int(end[0]), int(end[1]))
+
+        painter.setBrush(color)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#14b8a6"))
-        painter.drawRoundedRect(QRectF(left, top, fill_width, 16), 8, 8)
+        for x, y in points[-4:]:
+            painter.drawEllipse(QRectF(x - 3, y - 3, 6, 6))
+
+    def _draw_legend(self, painter: QPainter) -> None:
+        y = self.height() - 28
+        items = [("平均等待时间", QColor("#0ea5e9")), ("场内最大人数", QColor("#f59e0b"))]
+        x = 18
+        painter.setFont(QFont("Microsoft YaHei UI", 8))
+        for label, color in items:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(color)
+            painter.drawRoundedRect(QRectF(x, y + 4, 18, 6), 3, 3)
+            painter.setPen(QColor("#475569"))
+            painter.drawText(QRectF(x + 24, y - 2, 88, 18), Qt.AlignmentFlag.AlignLeft, label)
+            x += 120
+
+
+def _card() -> QFrame:
+    frame = QFrame()
+    frame.setObjectName("StatsCard")
+    return frame
+
+
+def _card_painter(widget: QWidget) -> QPainter:
+    painter = QPainter(widget)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    bounds = QRectF(0, 0, widget.width() - 1, widget.height() - 1)
+    painter.setPen(QPen(QColor("#e2e8f0"), 1))
+    painter.setBrush(QColor("#ffffff"))
+    painter.drawRoundedRect(bounds.adjusted(0.5, 0.5, -0.5, -0.5), 10, 10)
+    return painter
+
+
+def _heat_color(ratio: float) -> QColor:
+    ratio = max(0.0, min(1.0, ratio))
+    if ratio < 0.5:
+        t = ratio / 0.5
+        return QColor(
+            int(20 + (14 - 20) * t),
+            int(184 + (165 - 184) * t),
+            int(166 + (233 - 166) * t),
+        )
+    t = (ratio - 0.5) / 0.5
+    return QColor(
+        int(14 + (239 - 14) * t),
+        int(165 + (68 - 165) * t),
+        int(233 + (68 - 233) * t),
+    )
 
 
 def _format_seconds(value: Any) -> str:
