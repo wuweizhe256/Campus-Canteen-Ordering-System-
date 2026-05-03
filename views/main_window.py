@@ -30,26 +30,37 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("校园食堂就餐仿真系统")
-        self.resize(1280, 800)
+        self.resize(1480, 860)
         self._running = False
         self._paused = False
 
         self.canvas = CanvasWidget()
         self.stats_panel = StatsPanel()
+        self.app_title = QLabel("校园食堂就餐仿真系统")
+        self.app_title.setObjectName("AppTitle")
+        self.app_title.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
         self.start_button = QPushButton("开始仿真")
+        self.start_button.setObjectName("PrimaryButton")
         self.pause_button = QPushButton("暂停")
+        self.pause_button.setObjectName("SecondaryButton")
         self.pause_button.setEnabled(False)
         self.stop_button = QPushButton("停止")
+        self.stop_button.setObjectName("DangerButton")
         self.stop_button.setEnabled(False)
+
         self.status_label = QLabel("就绪")
+        self.status_label.setObjectName("StatusBadge")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self.time_scale_label = QLabel("时间倍率 6x")
+        self.time_scale_label.setObjectName("ToolbarLabel")
         self.time_scale_slider = QSlider(Qt.Orientation.Horizontal)
         self.time_scale_slider.setRange(1, 24)
         self.time_scale_slider.setValue(6)
         self.time_scale_slider.setFixedWidth(180)
         self.time_scale_slider.setToolTip("调整仿真内时间和现实时间的比例")
         self.path_checkbox = QCheckBox("显示路径")
+        self.path_checkbox.setObjectName("PathToggle")
 
         self.start_button.clicked.connect(self._open_config_dialog)
         self.pause_button.clicked.connect(self._toggle_pause)
@@ -58,6 +69,10 @@ class MainWindow(QMainWindow):
         self.path_checkbox.toggled.connect(self.canvas.set_show_paths)
 
         top_bar = QHBoxLayout()
+        top_bar.setContentsMargins(18, 12, 18, 12)
+        top_bar.setSpacing(12)
+        top_bar.addWidget(self.app_title)
+        top_bar.addSpacing(16)
         top_bar.addWidget(self.start_button)
         top_bar.addWidget(self.pause_button)
         top_bar.addWidget(self.stop_button)
@@ -68,18 +83,27 @@ class MainWindow(QMainWindow):
         top_bar.addSpacing(18)
         top_bar.addWidget(self.status_label, 1)
 
+        toolbar = QWidget()
+        toolbar.setObjectName("TopBar")
+        toolbar.setLayout(top_bar)
+
         content = QHBoxLayout()
         content.setSpacing(0)
+        content.setContentsMargins(0, 0, 0, 0)
         content.addWidget(self.canvas, 1)
         content.addWidget(self.stats_panel)
 
         root = QVBoxLayout()
-        root.addLayout(top_bar)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        root.addWidget(toolbar)
         root.addLayout(content, 1)
 
         container = QWidget()
+        container.setObjectName("Root")
         container.setLayout(root)
         self.setCentralWidget(container)
+        self._apply_style()
 
     def _open_config_dialog(self) -> None:
         if self._running:
@@ -142,3 +166,99 @@ class MainWindow(QMainWindow):
         self.pause_button.setEnabled(False)
         self.stop_button.setEnabled(False)
         QMessageBox.critical(self, "仿真错误", str(error))
+
+    def _apply_style(self) -> None:
+        self.setStyleSheet(
+            """
+            QWidget#Root {
+                background: #edf2f7;
+                font-family: "Microsoft YaHei UI";
+            }
+            QWidget#TopBar {
+                background: #ffffff;
+                border-bottom: 1px solid #dbe3ed;
+            }
+            QLabel#AppTitle {
+                color: #0f172a;
+                font: 700 15pt "Microsoft YaHei UI";
+                padding-right: 6px;
+            }
+            QLabel#ToolbarLabel {
+                color: #334155;
+                font: 700 10pt "Microsoft YaHei UI";
+            }
+            QLabel#StatusBadge {
+                color: #0f172a;
+                background: #eaf1f8;
+                border: 1px solid #cbd5e1;
+                border-radius: 12px;
+                padding: 5px 12px;
+                font: 9pt "Microsoft YaHei UI";
+            }
+            QPushButton {
+                border: 0;
+                border-radius: 8px;
+                padding: 8px 18px;
+                min-width: 78px;
+                font: 700 10pt "Microsoft YaHei UI";
+            }
+            QPushButton#PrimaryButton {
+                color: #ffffff;
+                background: #0f766e;
+            }
+            QPushButton#PrimaryButton:hover {
+                background: #0d9488;
+            }
+            QPushButton#SecondaryButton {
+                color: #0f172a;
+                background: #e2e8f0;
+            }
+            QPushButton#SecondaryButton:hover {
+                background: #cbd5e1;
+            }
+            QPushButton#DangerButton {
+                color: #ffffff;
+                background: #dc2626;
+            }
+            QPushButton#DangerButton:hover {
+                background: #ef4444;
+            }
+            QPushButton:disabled {
+                color: #94a3b8;
+                background: #f1f5f9;
+            }
+            QCheckBox#PathToggle {
+                color: #0f172a;
+                font: 10pt "Microsoft YaHei UI";
+                spacing: 8px;
+            }
+            QCheckBox#PathToggle::indicator {
+                width: 18px;
+                height: 18px;
+                border-radius: 5px;
+                border: 1px solid #94a3b8;
+                background: #ffffff;
+            }
+            QCheckBox#PathToggle::indicator:checked {
+                background: #0f766e;
+                border: 1px solid #0f766e;
+            }
+            QSlider::groove:horizontal {
+                height: 6px;
+                border-radius: 3px;
+                background: #cbd5e1;
+            }
+            QSlider::sub-page:horizontal {
+                border-radius: 3px;
+                background: #0f766e;
+            }
+            QSlider::handle:horizontal {
+                width: 18px;
+                height: 18px;
+                margin: -7px 0;
+                border-radius: 9px;
+                background: #ffffff;
+                border: 2px solid #0f766e;
+            }
+            """
+        )

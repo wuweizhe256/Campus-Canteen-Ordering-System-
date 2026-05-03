@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import QWidget
 class CanvasWidget(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setMinimumSize(1024, 640)
+        self.setMinimumSize(900, 620)
         self.frame: dict | None = None
         self.show_paths = False
 
@@ -26,7 +26,7 @@ class CanvasWidget(QWidget):
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.fillRect(self.rect(), QColor("#f7f8f3"))
+        painter.fillRect(self.rect(), QColor("#edf2f7"))
 
         if not self.frame:
             self._draw_empty_scene(painter)
@@ -57,15 +57,15 @@ class CanvasWidget(QWidget):
 
     def _draw_floor(self, painter: QPainter) -> None:
         width, height = self._frame_size()
-        painter.setPen(QPen(QColor("#d7dccd"), 1))
+        painter.setPen(QPen(QColor("#dbe4cf"), 1))
         for x in range(0, int(width) + 1, 56):
             painter.drawLine(x, 0, x, int(height))
         for y in range(0, int(height) + 1, 56):
             painter.drawLine(0, y, int(width), y)
 
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#e9efe0"))
-        painter.drawRoundedRect(QRectF(18, 18, width - 36, height - 36), 8, 8)
+        painter.setPen(QPen(QColor("#cbd8be"), 1.4))
+        painter.setBrush(QColor("#edf4e8"))
+        painter.drawRoundedRect(QRectF(18, 18, width - 36, height - 36), 12, 12)
 
     def _draw_path_debug(self, painter: QPainter) -> None:
         painter.setFont(QFont("Microsoft YaHei UI", 8, QFont.Weight.Bold))
