@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
 )
 
 from models.entities import RunSummary, SimulationConfig
+from utils.fonts import stylesheet_font_family
 from views.canvas_widget import CanvasWidget
 from views.config_dialog import ConfigDialog
 from views.stats_panel import StatsPanel
@@ -168,8 +169,8 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "仿真错误", str(error))
 
     def _apply_style(self) -> None:
-        self.setStyleSheet(
-            """
+        font_family = stylesheet_font_family()
+        style = """
             QWidget#Root {
                 background: #edf2f7;
                 font-family: "Microsoft YaHei UI";
@@ -261,4 +262,4 @@ class MainWindow(QMainWindow):
                 border: 2px solid #0f766e;
             }
             """
-        )
+        self.setStyleSheet(style.replace("Microsoft YaHei UI", font_family))

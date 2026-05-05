@@ -1,8 +1,59 @@
-.idea
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# IDE / editor state
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local assistant / tool state
 .codex
+.claude/settings.local.json
+
+# Python bytecode and caches
 __pycache__/
+**/__pycache__/
 *.pyc
-.env
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.tox/
+.nox/
+
+# Virtual environments and local interpreters
 .venv/
+.venv-*/
 venv/
+venv-*/
+env/
+ENV/
+.local-python/
+
+# Environment and local-only config
+.env
+.env.*
+!.env.example
+
+# Test coverage
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Packaging / build output
+build/
+dist/
+*.egg-info/
+pip-wheel-metadata/
+
+# Runtime logs and temporary files
 *.log
+logs/
+tmp/
+temp/
+*.tmp
