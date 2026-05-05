@@ -7,6 +7,8 @@ from PyQt6.QtCore import QRectF, Qt
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import QWidget
 
+from utils.fonts import ui_font
+
 
 class CanvasWidget(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -52,7 +54,7 @@ class CanvasWidget(QWidget):
 
     def _draw_empty_scene(self, painter: QPainter) -> None:
         painter.setPen(QColor("#475569"))
-        painter.setFont(QFont("Microsoft YaHei UI", 14))
+        painter.setFont(ui_font(14))
         painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "点击开始仿真")
 
     def _draw_floor(self, painter: QPainter) -> None:
@@ -68,7 +70,7 @@ class CanvasWidget(QWidget):
         painter.drawRoundedRect(QRectF(18, 18, width - 36, height - 36), 12, 12)
 
     def _draw_path_debug(self, painter: QPainter) -> None:
-        painter.setFont(QFont("Microsoft YaHei UI", 8, QFont.Weight.Bold))
+        painter.setFont(ui_font(8, QFont.Weight.Bold))
         colors = {
             "queue": QColor("#2563eb"),
             "top": QColor("#0891b2"),
@@ -130,7 +132,7 @@ class CanvasWidget(QWidget):
         total_minutes = int(duration // 60)
 
         painter.setPen(QColor("#0f172a"))
-        painter.setFont(QFont("Microsoft YaHei UI", 12, QFont.Weight.Bold))
+        painter.setFont(ui_font(12, QFont.Weight.Bold))
         text = (
             f"仿真 {minutes:02d}:{seconds:02d} / {total_minutes:02d}:00    "
             f"场内 {self._display_value(self.frame.get('active_students'))}    "
@@ -147,7 +149,7 @@ class CanvasWidget(QWidget):
         painter.setPen(QPen(QColor("#1f2937"), 2))
         painter.setBrush(QColor("#dbeafe"))
         painter.drawRoundedRect(QRectF(x - 36, y - 36, 72, 72), 6, 6)
-        painter.setFont(QFont("Microsoft YaHei UI", 11, QFont.Weight.Bold))
+        painter.setFont(ui_font(11, QFont.Weight.Bold))
         painter.setPen(QColor("#1d4ed8"))
         painter.drawText(QRectF(x - 34, y - 10, 68, 28), Qt.AlignmentFlag.AlignCenter, "大门")
 
@@ -159,12 +161,12 @@ class CanvasWidget(QWidget):
         painter.setPen(QPen(QColor("#166534"), 2))
         painter.setBrush(QColor("#dcfce7"))
         painter.drawRoundedRect(QRectF(x - 58, y - 58, 116, 116), 8, 8)
-        painter.setFont(QFont("Microsoft YaHei UI", 11, QFont.Weight.Bold))
+        painter.setFont(ui_font(11, QFont.Weight.Bold))
         painter.setPen(QColor("#15803d"))
         painter.drawText(QRectF(x - 34, y - 10, 68, 28), Qt.AlignmentFlag.AlignCenter, "出口")
 
     def _draw_stalls(self, painter: QPainter) -> None:
-        painter.setFont(QFont("Microsoft YaHei UI", 8))
+        painter.setFont(ui_font(8))
         for stall in self.frame.get("stalls", []):
             if not isinstance(stall, dict):
                 continue
@@ -207,7 +209,7 @@ class CanvasWidget(QWidget):
             painter.setBrush(QColor("#f59e0b"))
             painter.drawRoundedRect(QRectF(x - 34, y - 42, 68 * progress, 7), 3, 3)
             painter.setPen(QColor("#92400e"))
-            painter.setFont(QFont("Microsoft YaHei UI", 7))
+            painter.setFont(ui_font(7))
             painter.drawText(QRectF(x - 22, y - 58, 44, 14), Qt.AlignmentFlag.AlignCenter, f"{ceil(remaining)}s")
 
     def _draw_chef_pig(self, painter: QPainter, x: float, y: float) -> None:
@@ -286,7 +288,7 @@ class CanvasWidget(QWidget):
         self._draw_student_expression(painter, x, y, state)
 
     def _draw_student_expression(self, painter: QPainter, x: float, y: float, state: str) -> None:
-        painter.setFont(QFont("Microsoft YaHei UI", 8, QFont.Weight.Bold))
+        painter.setFont(ui_font(8, QFont.Weight.Bold))
         if state == "deciding":
             painter.setPen(QColor("#7c3aed"))
             painter.drawText(QRectF(x + 8, y - 24, 16, 16), Qt.AlignmentFlag.AlignCenter, "?")
@@ -325,7 +327,7 @@ class CanvasWidget(QWidget):
             painter.setPen(QPen(QColor("#0f766e" if not congested else "#b45309"), 2))
             painter.setBrush(QColor("#ccfbf1" if not congested else "#fed7aa"))
             painter.drawRoundedRect(QRectF(x - width / 2, y - height / 2, width, height), 8, 8)
-            painter.setFont(QFont("Microsoft YaHei UI", 9, QFont.Weight.Bold))
+            painter.setFont(ui_font(9, QFont.Weight.Bold))
             painter.setPen(QColor("#115e59" if not congested else "#9a3412"))
             painter.drawText(QRectF(x - width / 2, y - 9, width, 20), Qt.AlignmentFlag.AlignCenter, "餐盘回收")
 
@@ -355,11 +357,11 @@ class CanvasWidget(QWidget):
         painter.setBrush(QColor(255, 255, 255, 225))
         painter.drawRoundedRect(QRectF(x, y, panel_width, panel_height), 8, 8)
 
-        painter.setFont(QFont("Microsoft YaHei UI", 10, QFont.Weight.Bold))
+        painter.setFont(ui_font(10, QFont.Weight.Bold))
         painter.setPen(QColor("#0f172a"))
         painter.drawText(QRectF(x + 12, y + 8, panel_width - 24, 20), Qt.AlignmentFlag.AlignLeft, "P0 统计")
 
-        painter.setFont(QFont("Microsoft YaHei UI", 8))
+        painter.setFont(ui_font(8))
         lines = [
             f"avg_wait_time: {self._format_seconds(stats.get('avg_wait_time'))}",
             f"avg_total_time: {self._format_seconds(stats.get('avg_total_time'))}",
