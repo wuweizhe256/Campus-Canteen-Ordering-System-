@@ -16,6 +16,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from utils.fonts import stylesheet_font_family, ui_font
+
 
 class StatsPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -27,7 +29,7 @@ class StatsPanel(QWidget):
 
         self.title = QLabel("P0 数据统计")
         self.title.setObjectName("StatsTitle")
-        self.title.setFont(QFont("Microsoft YaHei UI", 13, QFont.Weight.Bold))
+        self.title.setFont(ui_font(13, QFont.Weight.Bold))
         self.subtitle = QLabel("实时指标、队列热力与趋势概览")
         self.subtitle.setObjectName("StatsSubtitle")
 
@@ -79,8 +81,8 @@ class StatsPanel(QWidget):
         root.addWidget(self.scroll)
         self.setLayout(root)
 
-        self.setStyleSheet(
-            """
+        font_family = stylesheet_font_family()
+        style = """
             QWidget#StatsPanel {
                 background: #f8fafc;
                 border-left: 1px solid #dbe3ed;
@@ -141,7 +143,7 @@ class StatsPanel(QWidget):
                 height: 0;
             }
             """
-        )
+        self.setStyleSheet(style.replace("Microsoft YaHei UI", font_family))
         self.set_frame({})
 
     def set_frame(self, frame: dict | None) -> None:
@@ -210,7 +212,7 @@ class GaugePanel(QWidget):
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
         painter = _card_painter(self)
         painter.setPen(QColor("#0f172a"))
-        painter.setFont(QFont("Microsoft YaHei UI", 10, QFont.Weight.Bold))
+        painter.setFont(ui_font(10, QFont.Weight.Bold))
         painter.drawText(QRectF(16, 14, self.width() - 32, 20), Qt.AlignmentFlag.AlignLeft, "核心仪表盘")
 
         gauges = [
@@ -251,11 +253,11 @@ class GaugePanel(QWidget):
             painter.drawArc(circle, 210 * 16, int(-240 * ratio * 16))
 
         painter.setPen(QColor("#64748b"))
-        painter.setFont(QFont("Microsoft YaHei UI", 8))
+        painter.setFont(ui_font(8))
         painter.drawText(QRectF(rect.left() + 72, rect.top() + 12, rect.width() - 82, 18), Qt.AlignmentFlag.AlignLeft, label)
 
         painter.setPen(QColor("#0f172a"))
-        painter.setFont(QFont("Microsoft YaHei UI", 11, QFont.Weight.Bold))
+        painter.setFont(ui_font(11, QFont.Weight.Bold))
         if value is None:
             display = "-"
         elif unit == "%":
@@ -280,7 +282,7 @@ class QueueHeatmap(QWidget):
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
         painter = _card_painter(self)
         painter.setPen(QColor("#0f172a"))
-        painter.setFont(QFont("Microsoft YaHei UI", 10, QFont.Weight.Bold))
+        painter.setFont(ui_font(10, QFont.Weight.Bold))
         painter.drawText(QRectF(16, 14, self.width() - 32, 20), Qt.AlignmentFlag.AlignLeft, "窗口队列热力图")
 
         queue_stats = self.stats.get("stall_queue_stats") or []
@@ -294,7 +296,7 @@ class QueueHeatmap(QWidget):
         ]
         if not values:
             painter.setPen(QColor("#64748b"))
-            painter.setFont(QFont("Microsoft YaHei UI", 9))
+            painter.setFont(ui_font(9))
             painter.drawText(QRectF(16, 48, self.width() - 32, self.height() - 82), Qt.AlignmentFlag.AlignCenter, "暂无队列数据")
             self._draw_legend(painter, 16, self.height() - 32, self.width() - 32)
             return
@@ -321,15 +323,15 @@ class QueueHeatmap(QWidget):
             painter.setBrush(color)
             painter.drawRoundedRect(rect, 8, 8)
             painter.setPen(QColor("#ffffff" if value / max_value > 0.55 else "#0f172a"))
-            painter.setFont(QFont("Microsoft YaHei UI", 10, QFont.Weight.Bold))
+            painter.setFont(ui_font(10, QFont.Weight.Bold))
             painter.drawText(rect.adjusted(8, 6, -8, -24), Qt.AlignmentFlag.AlignLeft, f"W{stall_id + 1}")
-            painter.setFont(QFont("Microsoft YaHei UI", 13, QFont.Weight.Bold))
+            painter.setFont(ui_font(13, QFont.Weight.Bold))
             painter.drawText(rect.adjusted(8, 22, -8, -6), Qt.AlignmentFlag.AlignRight, str(value))
 
         self._draw_legend(painter, 16, self.height() - 32, self.width() - 32)
 
     def _draw_legend(self, painter: QPainter, left: float, top: float, width: float) -> None:
-        painter.setFont(QFont("Microsoft YaHei UI", 8))
+        painter.setFont(ui_font(8))
         painter.setPen(QColor("#64748b"))
         painter.drawText(QRectF(left, top - 18, width, 16), Qt.AlignmentFlag.AlignLeft, "低拥堵")
         painter.drawText(QRectF(left, top - 18, width, 16), Qt.AlignmentFlag.AlignRight, "高拥堵")
@@ -354,7 +356,7 @@ class TrendChart(QWidget):
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
         painter = _card_painter(self)
         painter.setPen(QColor("#0f172a"))
-        painter.setFont(QFont("Microsoft YaHei UI", 10, QFont.Weight.Bold))
+        painter.setFont(ui_font(10, QFont.Weight.Bold))
         painter.drawText(QRectF(16, 14, self.width() - 32, 20), Qt.AlignmentFlag.AlignLeft, "等待时间与场内人数趋势")
 
         chart = QRectF(34, 54, self.width() - 58, self.height() - 92)
@@ -365,7 +367,7 @@ class TrendChart(QWidget):
 
         if len(self.history) < 2:
             painter.setPen(QColor("#64748b"))
-            painter.setFont(QFont("Microsoft YaHei UI", 9))
+            painter.setFont(ui_font(9))
             painter.drawText(chart, Qt.AlignmentFlag.AlignCenter, "运行后显示趋势")
             self._draw_legend(painter)
             return
@@ -412,7 +414,7 @@ class TrendChart(QWidget):
         y = self.height() - 28
         items = [("平均等待时间", QColor("#0ea5e9")), ("场内最大人数", QColor("#f59e0b"))]
         x = 18
-        painter.setFont(QFont("Microsoft YaHei UI", 8))
+        painter.setFont(ui_font(8))
         for label, color in items:
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(color)
