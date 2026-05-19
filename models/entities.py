@@ -17,6 +17,19 @@ class StudentState(str, Enum):
     DONE = "done"
 
 
+class StallStatus(str, Enum):
+    PENDING = "pending"
+    OPEN = "open"
+    SOLD_OUT = "sold_out"
+
+
+class OrderStatus(str, Enum):
+    QUEUED = "queued"
+    COOKING = "cooking"
+    DONE = "done"
+    CANCELLED = "cancelled"
+
+
 @dataclass(frozen=True)
 class SimulationConfig:
     sim_minutes: int = 30
@@ -54,6 +67,9 @@ class Student:
     stall_id: int | None = None
     table_id: int | None = None
     seat_index: int | None = None
+    preferences: dict[str, float] = field(default_factory=dict)
+    dish_id: int | None = None
+    order_id: int | None = None
     decision_done_at: float = 0.0
     food_ready_at: float | None = None
     eating_done_at: float | None = None
@@ -88,8 +104,43 @@ class Stall:
     veg_ratio: float
     cook_time: float
     queue: list[int] = field(default_factory=list)
-    ready_times: list[tuple[int, float]] = field(default_factory=list)
+    ready_times: list[tuple[int, float, int]] = field(default_factory=list)
     next_food_ready_time: float = 0.0
+    status: StallStatus = StallStatus.PENDING
+    dishes: list["Dish"] = field(default_factory=list)
+    orders: list["Order"] = field(default_factory=list)
+
+    def available_dishes(self) -> list["Dish"]:
+        return [dish for dish in self.dishes if dish.available]
+
+    def refresh_status(self) -> None:
+        self.status = StallStatus.OPEN if self.available_dishes() else StallStatus.SOLD_OUT
+
+
+@dataclass
+class Dish:
+    id: int
+    name: str
+    features: dict[str, float]
+    price: float
+    stock: int
+    cook_time: float
+
+    @property
+    def available(self) -> bool:
+        return self.stock > 0
+
+
+@dataclass
+class Order:
+    id: int
+    student_id: int
+    stall_id: int
+    dish_id: int
+    created_at: float
+    started_at: float | None = None
+    finished_at: float | None = None
+    status: OrderStatus = OrderStatus.QUEUED
 
 
 class SeatStatus(str, Enum):
