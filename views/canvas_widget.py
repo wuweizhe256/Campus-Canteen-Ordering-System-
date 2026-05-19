@@ -25,12 +25,106 @@ class CanvasWidget(QWidget):
         self.setMouseTracking(True)
 
     def set_frame(self, frame: dict) -> None:
-        self.frame = frame
+        self.frame = self._frame_with_p1_fallback(frame)
         self.update()
 
     def set_show_paths(self, show_paths: bool) -> None:
         self.show_paths = show_paths
         self.update()
+
+    def _frame_with_p1_fallback(self, frame: dict) -> dict:
+        if not isinstance(frame, dict):
+            return {}
+        adapted = dict(frame)
+        raw_stalls = frame.get("stalls")
+        if isinstance(raw_stalls, list):
+            adapted["stalls"] = [
+                self._stall_with_p1_fallback(stall)
+                for stall in raw_stalls
+                if isinstance(stall, dict)
+            ]
+        else:
+            adapted["stalls"] = []
+        return adapted
+
+    def _stall_with_p1_fallback(self, stall: dict) -> dict:
+        adapted = dict(stall)
+        dishes = self._p1_dishes_or_mock(adapted)
+        adapted["dishes"] = dishes
+
+        status = str(adapted.get("status") or "")
+        if status not in {"pending", "open", "sold_out"}:
+            status = "sold_out" if dishes and not any(self._dish_available(dish) for dish in dishes) else "open"
+        adapted["status"] = status
+
+        if "is_congested" not in adapted:
+            adapted["is_congested"] = int(self._number(adapted.get("queue_count"), 0)) >= 8
+
+        adapted["orders"] = self._p1_orders_or_mock(adapted, dishes)
+        return adapted
+
+    def _p1_dishes_or_mock(self, stall: dict) -> list[dict[str, Any]]:
+        raw_dishes = stall.get("dishes")
+        if isinstance(raw_dishes, list):
+            dishes = [
+                self._normalize_p1_dish(dish, stall, index)
+                for index, dish in enumerate(raw_dishes)
+                if isinstance(dish, dict)
+            ]
+            if dishes:
+                return dishes
+        return self._mock_stall_dishes(stall)
+
+    def _normalize_p1_dish(self, dish: dict, stall: dict, index: int) -> dict[str, Any]:
+        stall_id = int(self._number(stall.get("id"), 0))
+        normalized = dict(dish)
+        normalized.setdefault("id", stall_id * 100 + index + 1)
+        normalized.setdefault("name", f"菜品{index + 1}")
+        normalized.setdefault(
+            "features",
+            {
+                "meat_ratio": self._number(stall.get("meat_ratio"), 0.5),
+                "veg_ratio": self._number(stall.get("veg_ratio"), 0.5),
+            },
+        )
+        normalized.setdefault("price", 10.0 + stall_id)
+        normalized.setdefault("stock", 0)
+        normalized.setdefault("cook_time", self._number(stall.get("cook_time"), 45.0))
+        if "available" not in normalized:
+            stock = self._number(normalized.get("stock"), None)
+            normalized["available"] = True if stock is None else stock > 0
+        return normalized
+
+    def _p1_orders_or_mock(self, stall: dict, dishes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        raw_orders = stall.get("orders")
+        if isinstance(raw_orders, list):
+            return [
+                self._normalize_p1_order(order, stall, dishes, index)
+                for index, order in enumerate(raw_orders)
+                if isinstance(order, dict)
+            ]
+        return self._mock_stall_orders(stall, dishes)
+
+    def _normalize_p1_order(
+        self,
+        order: dict,
+        stall: dict,
+        dishes: list[dict[str, Any]],
+        index: int,
+    ) -> dict[str, Any]:
+        stall_id = int(self._number(stall.get("id"), 0))
+        dish_id = dishes[index % len(dishes)].get("id") if dishes else None
+        normalized = dict(order)
+        normalized.setdefault("id", stall_id * 1000 + index + 1)
+        normalized.setdefault("student_id", None)
+        normalized.setdefault("stall_id", stall_id)
+        normalized.setdefault("dish_id", dish_id)
+        normalized.setdefault("created_at", None)
+        normalized.setdefault("started_at", None)
+        normalized.setdefault("finished_at", None)
+        status = str(normalized.get("status") or "queued")
+        normalized["status"] = status if status in {"queued", "cooking", "done", "cancelled"} else "queued"
+        return normalized
 
     def set_view_zoom(self, zoom: float) -> None:
         zoom = max(0.6, min(1.8, zoom))
@@ -415,9 +509,7 @@ class CanvasWidget(QWidget):
     def _stall_dishes(self, stall: dict) -> list[dict[str, Any]]:
         raw_dishes = stall.get("dishes")
         if isinstance(raw_dishes, list):
-            dishes = [dish for dish in raw_dishes if isinstance(dish, dict)]
-            if dishes:
-                return dishes
+            return [dish for dish in raw_dishes if isinstance(dish, dict)]
         return self._mock_stall_dishes(stall)
 
     def _mock_stall_dishes(self, stall: dict) -> list[dict[str, Any]]:
@@ -526,12 +618,16 @@ class CanvasWidget(QWidget):
             return [order for order in raw_orders if isinstance(order, dict)]
         return self._mock_stall_orders(stall)
 
-    def _mock_stall_orders(self, stall: dict) -> list[dict[str, Any]]:
+    def _mock_stall_orders(
+        self,
+        stall: dict,
+        dishes: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
         queue_count = int(self._number(stall.get("queue_count"), 0))
         if queue_count <= 0:
             return []
         stall_id = int(self._number(stall.get("id"), 0))
-        dishes = self._stall_dishes(stall)
+        dishes = dishes if dishes is not None else self._stall_dishes(stall)
         dish_id = dishes[0].get("id") if dishes else None
         status_cycle = ["queued", "cooking", "done"]
         return [
