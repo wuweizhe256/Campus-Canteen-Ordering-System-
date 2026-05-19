@@ -50,6 +50,7 @@ class SimulationWorker(QObject):
         self.game_time = 0.0
         self.next_student_id = 1
         self.next_order_id = 1
+        self.next_group_id = 1
         self.spawned_students = 0
         self.served_students = 0
         self.max_active_students_seen = 0
@@ -123,6 +124,7 @@ class SimulationWorker(QObject):
         self.game_time = 0.0
         self.next_student_id = 1
         self.next_order_id = 1
+        self.next_group_id = 1
         self.spawned_students = 0
         self.served_students = 0
         self.max_active_students_seen = 0
@@ -216,8 +218,17 @@ class SimulationWorker(QObject):
             remaining_total,
             remaining_capacity,
         )
-        for _ in range(due_count):
-            self._spawn_student()
+        while due_count > 0:
+            group_size = min(
+                self._choose_group_size(),
+                due_count,
+                remaining_total,
+                remaining_capacity,
+            )
+            self._spawn_group(group_size)
+            due_count -= group_size
+            remaining_total -= group_size
+            remaining_capacity -= group_size
 
     def _target_spawned_students(self) -> int:
         duration = self.config.duration_game_seconds
@@ -231,16 +242,60 @@ class SimulationWorker(QObject):
             distribution = 1.0 - 2.0 * (1.0 - progress) * (1.0 - progress)
         return min(self.config.total_student_count, round(distribution * self.config.total_student_count))
 
-    def _spawn_student(self) -> None:
+    def _choose_group_size(self) -> int:
+        roll = self.rng.random()
+        if roll < self.config.companion_multi_ratio:
+            return self.rng.choice([3, 4])
+        if roll < self.config.companion_multi_ratio + self.config.companion_pair_ratio:
+            return 2
+        return 1
+
+    def _spawn_group(self, group_size: int) -> None:
+        group_id = self.next_group_id if group_size > 1 else None
+        if group_id is not None:
+            self.next_group_id += 1
+
         meat_pref = self.rng.uniform(0.0, 1.0)
         veg_pref = self.rng.uniform(0.0, 1.0)
-        preferences = {
+        shared_preferences = {
             "meat": meat_pref,
             "veg": veg_pref,
             "price_sensitivity": self.rng.uniform(0.2, 1.0),
             "wait_tolerance": self.rng.uniform(0.2, 1.0),
             "spicy": self.rng.uniform(0.0, 1.0),
         }
+        sample_student = self._build_student(
+            meat_pref=meat_pref,
+            veg_pref=veg_pref,
+            preferences=dict(shared_preferences),
+            group_id=group_id,
+            group_size=group_size,
+            member_index=0,
+        )
+        dish_id, stall_id = self._choose_dish_and_stall(sample_student)
+        self._register_student(sample_student, dish_id, stall_id)
+        for member_index in range(1, group_size):
+            member = self._build_student(
+                meat_pref=clamp(meat_pref + self.rng.uniform(-0.08, 0.08), 0.0, 1.0),
+                veg_pref=clamp(veg_pref + self.rng.uniform(-0.08, 0.08), 0.0, 1.0),
+                preferences=dict(shared_preferences),
+                group_id=group_id,
+                group_size=group_size,
+                member_index=member_index,
+            )
+            self._register_student(member, dish_id, stall_id)
+
+    def _build_student(
+        self,
+        meat_pref: float,
+        veg_pref: float,
+        preferences: dict[str, float],
+        group_id: int | None,
+        group_size: int,
+        member_index: int,
+    ) -> Student:
+        spawn_jitter_x = self.rng.uniform(-6.0, 6.0) + member_index * 6.0
+        spawn_jitter_y = self.rng.uniform(-6.0, 6.0) + member_index * 4.0
         student = Student(
             id=self.next_student_id,
             meat_pref=meat_pref,
@@ -250,15 +305,26 @@ class SimulationWorker(QObject):
             hesitation_time=self.rng.uniform(10.0, 28.0),
             table_walk_time=self.rng.uniform(35.0, 70.0),
             spawn_time=self.game_time,
-            x=self.door[0] + self.rng.uniform(-6.0, 6.0),
-            y=self.door[1] + self.rng.uniform(-6.0, 6.0),
+            x=self.door[0] + spawn_jitter_x,
+            y=self.door[1] + spawn_jitter_y,
             target_x=self.door[0] + self.rng.uniform(12.0, 55.0),
             target_y=self.door[1] + self.rng.uniform(5.0, 55.0),
             walk_speed=self.rng.uniform(8.0, 14.0),
             preferences=preferences,
+            group_id=group_id,
+            group_size=group_size,
         )
         student.decision_done_at = self.game_time + student.hesitation_time
-        student.dish_id, student.stall_id = self._choose_dish_and_stall(student)
+        return student
+
+    def _register_student(
+        self,
+        student: Student,
+        dish_id: int | None,
+        stall_id: int | None,
+    ) -> None:
+        student.dish_id = dish_id
+        student.stall_id = stall_id
         self.students[student.id] = student
         self.next_student_id += 1
         self.spawned_students += 1
@@ -1244,6 +1310,8 @@ class SimulationWorker(QObject):
                     "preferences": dict(student.preferences),
                     "dish_id": student.dish_id,
                     "order_id": student.order_id,
+                    "group_id": student.group_id,
+                    "group_size": student.group_size,
                     "stall_id": student.stall_id,
                     "table_id": student.table_id,
                     "seat_index": student.seat_index,
