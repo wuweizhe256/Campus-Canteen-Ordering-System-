@@ -748,13 +748,21 @@ class CanvasWidget(QWidget):
             if point is None:
                 continue
             x, y = point
-            self._draw_shadow(painter, x, y + 28, 86, 24, QColor(71, 85, 105, 40))
-            self._draw_iso_box(painter, x, y, 64, 38, 14, QColor("#fde68a"), QColor("#d97706"), QColor("#92400e"))
-            painter.setPen(QPen(QColor("#92400e"), 1.2))
-            painter.drawLine(int(x - 21), int(y + 18), int(x - 25), int(y + 34))
-            painter.drawLine(int(x + 21), int(y + 18), int(x + 17), int(y + 34))
+            table_type, seat_count = self._table_type_and_seat_count(table)
+            table_width = {2: 52.0, 4: 64.0, 6: 84.0}.get(seat_count, 64.0)
+            table_height = 38.0
 
-            seat_offsets = [(-47, -32), (31, -32), (-47, 24), (31, 24)]
+            self._draw_shadow(painter, x, y + 28, table_width + 22, 24, QColor(71, 85, 105, 40))
+            self._draw_iso_box(painter, x, y, table_width, table_height, 14, QColor("#fde68a"), QColor("#d97706"), QColor("#92400e"))
+            painter.setPen(QPen(QColor("#92400e"), 1.2))
+            painter.drawLine(int(x - table_width * 0.33), int(y + 18), int(x - table_width * 0.39), int(y + 34))
+            painter.drawLine(int(x + table_width * 0.33), int(y + 18), int(x + table_width * 0.27), int(y + 34))
+
+            painter.setPen(QColor("#92400e"))
+            painter.setFont(ui_font(7, QFont.Weight.Bold))
+            painter.drawText(QRectF(x - table_width / 2, y - 8, table_width, 14), Qt.AlignmentFlag.AlignCenter, f"{seat_count}人")
+
+            seat_offsets = self._seat_offsets_for_table(seat_count, table_width)
             seats = table.get("seat_frames") or table.get("seats") or []
             for index, (dx, dy) in enumerate(seat_offsets):
                 seat = seats[index] if index < len(seats) else None
@@ -766,6 +774,31 @@ class CanvasWidget(QWidget):
                 painter.drawRoundedRect(QRectF(x + dx, y + dy, 18, 18), 6, 6)
                 painter.setBrush(color.lighter(112))
                 painter.drawEllipse(QRectF(x + dx + 3, y + dy - 4, 12, 10))
+
+    def _table_type_and_seat_count(self, table: dict) -> tuple[str, int]:
+        table_type = str(table.get("table_type") or "").lower()
+        type_to_count = {"two": 2, "four": 4, "six": 6}
+        seat_count = int(self._number(table.get("seat_count"), type_to_count.get(table_type, 4)))
+        if seat_count not in (2, 4, 6):
+            seat_count = type_to_count.get(table_type, 4)
+        if table_type not in type_to_count:
+            table_type = {2: "two", 4: "four", 6: "six"}.get(seat_count, "four")
+        return table_type, seat_count
+
+    def _seat_offsets_for_table(self, seat_count: int, table_width: float) -> list[tuple[float, float]]:
+        side_x = table_width / 2 + 14
+        if seat_count == 2:
+            return [(-side_x - 4, -8), (side_x - 14, -8)]
+        if seat_count == 6:
+            return [
+                (-side_x - 4, -32),
+                (side_x - 14, -32),
+                (-side_x - 4, -4),
+                (side_x - 14, -4),
+                (-side_x - 4, 24),
+                (side_x - 14, 24),
+            ]
+        return [(-side_x - 4, -32), (side_x - 14, -32), (-side_x - 4, 24), (side_x - 14, 24)]
 
     def _draw_students(self, painter: QPainter) -> None:
         students = [student for student in self.frame.get("students", []) if isinstance(student, dict)]
