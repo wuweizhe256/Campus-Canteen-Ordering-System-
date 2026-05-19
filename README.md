@@ -41,7 +41,7 @@ git pull origin 自己的分支
 
 # 提交代码
 git add . 或 git add 要提交的额文件路径
-git commit -m "type(scope): 中文说明修改内容"
+git commit -m "type(scope): 中文说明修改内容(精确到具体添加/修改/删除的功能)"
 ```
 
 提交信息需要符合 Conventional Commit 规范，格式如下：
