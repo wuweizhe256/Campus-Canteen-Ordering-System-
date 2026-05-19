@@ -813,6 +813,27 @@ class CanvasWidget(QWidget):
         painter.drawPoint(int(head_x - 5 + eye_offset), int(head_y - 4))
         painter.drawPoint(int(head_x + 5 + eye_offset), int(head_y - 4))
         self._draw_student_expression(painter, head_x, head_y, state)
+        self._draw_group_badge(painter, student, head_x, head_y)
+
+    def _draw_group_badge(self, painter: QPainter, student: dict, x: float, y: float) -> None:
+        group_id = student.get("group_id")
+        if group_id is None:
+            return
+        group_text = self._display_value(group_id)
+        group_size = self._number(student.get("group_size"), None)
+        color = self._group_color(group_id)
+        badge_x = x - 22
+        badge_y = y - 30
+
+        painter.setPen(QPen(color.darker(135), 1))
+        painter.setBrush(color.lighter(155))
+        painter.drawEllipse(QRectF(badge_x, badge_y, 12, 12))
+
+        painter.setPen(color.darker(150))
+        painter.setFont(ui_font(6, QFont.Weight.Bold))
+        painter.drawText(QRectF(badge_x + 13, badge_y - 1, 34, 14), Qt.AlignmentFlag.AlignLeft, f"G{group_text}")
+        if group_size is not None and group_size > 1:
+            painter.drawText(QRectF(badge_x + 13, badge_y + 9, 24, 12), Qt.AlignmentFlag.AlignLeft, f"x{int(group_size)}")
 
     def _draw_student_expression(self, painter: QPainter, x: float, y: float, state: str) -> None:
         painter.setFont(ui_font(8, QFont.Weight.Bold))
@@ -984,6 +1005,23 @@ class CanvasWidget(QWidget):
             "done": QColor("#bbf7d0"),
         }
         return colors.get(state, QColor("#f9a8d4"))
+
+    def _group_color(self, group_id: Any) -> QColor:
+        palette = [
+            QColor("#38bdf8"),
+            QColor("#a78bfa"),
+            QColor("#34d399"),
+            QColor("#fbbf24"),
+            QColor("#fb7185"),
+            QColor("#2dd4bf"),
+            QColor("#f97316"),
+            QColor("#818cf8"),
+        ]
+        try:
+            index = int(group_id)
+        except (TypeError, ValueError):
+            index = sum(ord(char) for char in str(group_id))
+        return palette[index % len(palette)]
 
     def _format_seconds(self, value: Any) -> str:
         if value is None:
