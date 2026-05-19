@@ -60,7 +60,7 @@ class MainWindow(QMainWindow):
         self.time_scale_slider.setValue(6)
         self.time_scale_slider.setFixedWidth(180)
         self.time_scale_slider.setToolTip("调整仿真内时间和现实时间的比例")
-        self.path_checkbox = QCheckBox("显示路径")
+        self.path_checkbox = QCheckBox("显示调试层")
         self.path_checkbox.setObjectName("PathToggle")
 
         self.start_button.clicked.connect(self._open_config_dialog)
@@ -172,12 +172,12 @@ class MainWindow(QMainWindow):
         font_family = stylesheet_font_family()
         style = """
             QWidget#Root {
-                background: #edf2f7;
+                background: #e7efe2;
                 font-family: "Microsoft YaHei UI";
             }
             QWidget#TopBar {
-                background: #ffffff;
-                border-bottom: 1px solid #dbe3ed;
+                background: #fff7ed;
+                border-bottom: 1px solid #d6c2a8;
             }
             QLabel#AppTitle {
                 color: #0f172a;

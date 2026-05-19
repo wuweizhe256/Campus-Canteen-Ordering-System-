@@ -27,10 +27,10 @@ class StatsPanel(QWidget):
         self.setObjectName("StatsPanel")
         self.history: list[dict[str, float | None]] = []
 
-        self.title = QLabel("P0 数据统计")
+        self.title = QLabel("实时运营看板")
         self.title.setObjectName("StatsTitle")
         self.title.setFont(ui_font(13, QFont.Weight.Bold))
-        self.subtitle = QLabel("实时指标、队列热力与趋势概览")
+        self.subtitle = QLabel("拥堵、队列、座位与通行效率实时概览")
         self.subtitle.setObjectName("StatsSubtitle")
 
         self.table = QTableWidget(0, 2)
@@ -84,14 +84,14 @@ class StatsPanel(QWidget):
         font_family = stylesheet_font_family()
         style = """
             QWidget#StatsPanel {
-                background: #f8fafc;
-                border-left: 1px solid #dbe3ed;
+                background: #fff7ed;
+                border-left: 1px solid #d6c2a8;
             }
             QScrollArea#StatsScroll {
                 background: transparent;
             }
             QWidget#StatsScrollContent {
-                background: #f8fafc;
+                background: #fff7ed;
             }
             QLabel#StatsTitle {
                 color: #0f172a;
@@ -103,8 +103,8 @@ class StatsPanel(QWidget):
             }
             QFrame#StatsCard {
                 background: #ffffff;
-                border: 1px solid #e2e8f0;
-                border-radius: 10px;
+                border: 1px solid #ead7bf;
+                border-radius: 12px;
             }
             QTableWidget#StatsTable {
                 background: transparent;
@@ -155,12 +155,18 @@ class StatsPanel(QWidget):
         game_time = _number(frame.get("game_time"), None)
         avg_wait_time = _number(stats.get("avg_wait_time"), None)
         max_active = _number(stats.get("max_active_students"), None)
+        congestion_index = _number(stats.get("congestion_index"), None)
+        stuck_student_count = _number(stats.get("stuck_student_count"), None)
+        avg_queue_length = _number(stats.get("avg_queue_length"), None)
         if game_time is not None:
             self.history.append(
                 {
                     "game_time": game_time,
                     "avg_wait_time": avg_wait_time,
                     "max_active_students": max_active,
+                    "congestion_index": congestion_index,
+                    "stuck_student_count": stuck_student_count,
+                    "avg_queue_length": avg_queue_length,
                 }
             )
             self.history = self.history[-160:]
@@ -180,6 +186,12 @@ class StatsPanel(QWidget):
             ("平均就餐总耗时", _format_seconds(stats.get("avg_total_time"))),
             ("场内最大人数", _display_value(stats.get("max_active_students"))),
             ("座位利用率", _format_percent(stats.get("seat_utilization"))),
+            ("平均移动速度", _format_speed(stats.get("avg_move_speed"))),
+            ("拥堵指数", _format_percent(stats.get("congestion_index"))),
+            ("当前卡住人数", _display_value(stats.get("stuck_student_count"))),
+            ("累计重规划", _display_value(stats.get("reroute_count"))),
+            ("平均队列长度", _format_decimal(stats.get("avg_queue_length"))),
+            ("回收口等待", _display_value(stats.get("tray_return_queue_length"))),
             *queue_rows,
         ]
         if not queue_rows:
@@ -202,7 +214,7 @@ class StatsPanel(QWidget):
 class GaugePanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setMinimumHeight(220)
+        self.setMinimumHeight(300)
         self.stats: dict[str, Any] = {}
 
     def set_stats(self, stats: dict[str, Any]) -> None:
@@ -220,6 +232,8 @@ class GaugePanel(QWidget):
             ("总耗时", _number(self.stats.get("avg_total_time"), None), 600.0, "s", QColor("#8b5cf6")),
             ("座位", _number(self.stats.get("seat_utilization"), None), 1.0, "%", QColor("#14b8a6")),
             ("人数", _number(self.stats.get("max_active_students"), None), 120.0, "人", QColor("#f59e0b")),
+            ("拥堵", _number(self.stats.get("congestion_index"), None), 1.0, "%", QColor("#ef4444")),
+            ("卡住", _number(self.stats.get("stuck_student_count"), None), 20.0, "人", QColor("#f97316")),
         ]
 
         cell_width = (self.width() - 44) / 2
@@ -357,7 +371,7 @@ class TrendChart(QWidget):
         painter = _card_painter(self)
         painter.setPen(QColor("#0f172a"))
         painter.setFont(ui_font(10, QFont.Weight.Bold))
-        painter.drawText(QRectF(16, 14, self.width() - 32, 20), Qt.AlignmentFlag.AlignLeft, "等待时间与场内人数趋势")
+        painter.drawText(QRectF(16, 14, self.width() - 32, 20), Qt.AlignmentFlag.AlignLeft, "等待、人数与拥堵趋势")
 
         chart = QRectF(34, 54, self.width() - 58, self.height() - 92)
         painter.setPen(QPen(QColor("#e2e8f0"), 1))
@@ -374,11 +388,17 @@ class TrendChart(QWidget):
 
         wait_values = [item["avg_wait_time"] for item in self.history if item.get("avg_wait_time") is not None]
         active_values = [item["max_active_students"] for item in self.history if item.get("max_active_students") is not None]
+        congestion_values = [item["congestion_index"] for item in self.history if item.get("congestion_index") is not None]
+        stuck_values = [item["stuck_student_count"] for item in self.history if item.get("stuck_student_count") is not None]
         max_wait = max(1.0, max(wait_values) if wait_values else 1.0)
         max_active = max(1.0, max(active_values) if active_values else 1.0)
+        max_congestion = max(0.15, max(congestion_values) if congestion_values else 0.15)
+        max_stuck = max(1.0, max(stuck_values) if stuck_values else 1.0)
 
         self._draw_line(painter, chart, "avg_wait_time", max_wait, QColor("#0ea5e9"))
         self._draw_line(painter, chart, "max_active_students", max_active, QColor("#f59e0b"))
+        self._draw_line(painter, chart, "congestion_index", max_congestion, QColor("#ef4444"))
+        self._draw_line(painter, chart, "stuck_student_count", max_stuck, QColor("#f97316"))
         self._draw_legend(painter)
 
     def _draw_line(
@@ -412,7 +432,12 @@ class TrendChart(QWidget):
 
     def _draw_legend(self, painter: QPainter) -> None:
         y = self.height() - 28
-        items = [("平均等待时间", QColor("#0ea5e9")), ("场内最大人数", QColor("#f59e0b"))]
+        items = [
+            ("等待", QColor("#0ea5e9")),
+            ("人数", QColor("#f59e0b")),
+            ("拥堵", QColor("#ef4444")),
+            ("卡住", QColor("#f97316")),
+        ]
         x = 18
         painter.setFont(ui_font(8))
         for label, color in items:
@@ -420,8 +445,8 @@ class TrendChart(QWidget):
             painter.setBrush(color)
             painter.drawRoundedRect(QRectF(x, y + 4, 18, 6), 3, 3)
             painter.setPen(QColor("#475569"))
-            painter.drawText(QRectF(x + 24, y - 2, 88, 18), Qt.AlignmentFlag.AlignLeft, label)
-            x += 120
+            painter.drawText(QRectF(x + 24, y - 2, 44, 18), Qt.AlignmentFlag.AlignLeft, label)
+            x += 72
 
 
 def _card() -> QFrame:
@@ -477,6 +502,24 @@ def _format_percent(value: Any) -> str:
     if number is None:
         return "-"
     return f"{number * 100:.1f}%"
+
+
+def _format_speed(value: Any) -> str:
+    if value is None:
+        return "-"
+    number = _number(value, None)
+    if number is None:
+        return "-"
+    return f"{number:.1f} px/s"
+
+
+def _format_decimal(value: Any) -> str:
+    if value is None:
+        return "-"
+    number = _number(value, None)
+    if number is None:
+        return "-"
+    return f"{number:.1f}"
 
 
 def _display_value(value: Any) -> str:
