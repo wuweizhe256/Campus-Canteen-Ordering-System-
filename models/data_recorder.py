@@ -59,6 +59,12 @@ class StatsFrameP0:
     max_active_students: int
     stall_queue_stats: list[StallQueueStats]
     seat_utilization: float | None
+    avg_move_speed: float | None
+    congestion_index: float
+    stuck_student_count: int
+    reroute_count: int
+    avg_queue_length: float | None
+    tray_return_queue_length: int
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -67,7 +73,24 @@ class StatsFrameP0:
             "max_active_students": self.max_active_students,
             "stall_queue_stats": [item.to_dict() for item in self.stall_queue_stats],
             "seat_utilization": self.seat_utilization,
+            "avg_move_speed": self.avg_move_speed,
+            "congestion_index": self.congestion_index,
+            "stuck_student_count": self.stuck_student_count,
+            "reroute_count": self.reroute_count,
+            "avg_queue_length": self.avg_queue_length,
+            "tray_return_queue_length": self.tray_return_queue_length,
         }
+
+
+@dataclass(frozen=True)
+class RuntimeStatsSample:
+    game_time: float
+    avg_move_speed: float | None
+    congestion_index: float
+    stuck_student_count: int
+    reroute_count: int
+    avg_queue_length: float | None
+    tray_return_queue_length: int
 
 
 @dataclass(frozen=True)
@@ -86,6 +109,7 @@ class DataRecorder:
         self.events_by_stall: dict[int, list[EventRecordP0]] = defaultdict(list)
         self.events_by_seat: dict[tuple[int, int], list[EventRecordP0]] = defaultdict(list)
         self.queue_samples: list[QueueLengthSample] = []
+        self.runtime_samples: list[RuntimeStatsSample] = []
         self.issues: list[str] = []
 
     def record_event(self, event: EventRecordP0 | dict[str, Any]) -> None:
@@ -117,6 +141,48 @@ class DataRecorder:
     def feed_queue_sample(self, game_time: float, stall_id: int, queue_length: int) -> None:
         self.record_queue_sample(game_time, stall_id, queue_length)
 
+    def record_runtime_sample(
+        self,
+        game_time: float,
+        avg_move_speed: float | None,
+        congestion_index: float,
+        stuck_student_count: int,
+        reroute_count: int,
+        avg_queue_length: float | None,
+        tray_return_queue_length: int,
+    ) -> None:
+        self.runtime_samples.append(
+            RuntimeStatsSample(
+                game_time=float(game_time),
+                avg_move_speed=avg_move_speed,
+                congestion_index=max(0.0, float(congestion_index)),
+                stuck_student_count=max(0, int(stuck_student_count)),
+                reroute_count=max(0, int(reroute_count)),
+                avg_queue_length=avg_queue_length,
+                tray_return_queue_length=max(0, int(tray_return_queue_length)),
+            )
+        )
+
+    def feed_runtime_sample(
+        self,
+        game_time: float,
+        avg_move_speed: float | None,
+        congestion_index: float,
+        stuck_student_count: int,
+        reroute_count: int,
+        avg_queue_length: float | None,
+        tray_return_queue_length: int,
+    ) -> None:
+        self.record_runtime_sample(
+            game_time,
+            avg_move_speed,
+            congestion_index,
+            stuck_student_count,
+            reroute_count,
+            avg_queue_length,
+            tray_return_queue_length,
+        )
+
     def student_events(self, student_id: int) -> list[EventRecordP0]:
         return sorted(self.events_by_student.get(student_id, []), key=_event_sort_key)
 
@@ -127,12 +193,19 @@ class DataRecorder:
         max_active_students = self._max_active_students(events)
         stall_queue_stats = self._stall_queue_stats(events)
         seat_utilization = self._seat_utilization(current_time)
+        runtime = self.runtime_samples[-1] if self.runtime_samples else None
         return StatsFrameP0(
             avg_wait_time=avg_wait_time,
             avg_total_time=avg_total_time,
             max_active_students=max_active_students,
             stall_queue_stats=stall_queue_stats,
             seat_utilization=seat_utilization,
+            avg_move_speed=runtime.avg_move_speed if runtime else None,
+            congestion_index=runtime.congestion_index if runtime else 0.0,
+            stuck_student_count=runtime.stuck_student_count if runtime else 0,
+            reroute_count=runtime.reroute_count if runtime else 0,
+            avg_queue_length=runtime.avg_queue_length if runtime else None,
+            tray_return_queue_length=runtime.tray_return_queue_length if runtime else 0,
         )
 
     def _average_duration_by_student(self, start_type: str, end_type: str) -> float | None:
