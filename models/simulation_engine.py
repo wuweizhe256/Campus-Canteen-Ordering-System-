@@ -8,7 +8,19 @@ from typing import Any
 from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
 
 from models.data_recorder import DataRecorder, EventRecordP0
-from models.entities import RunSummary, SeatStatus, SimulationConfig, Stall, Student, StudentState, Table
+from models.entities import (
+    Dish,
+    Order,
+    OrderStatus,
+    RunSummary,
+    SeatStatus,
+    SimulationConfig,
+    Stall,
+    StallStatus,
+    Student,
+    StudentState,
+    Table,
+)
 from utils.helpers import clamp, distance, manhattan_2d, move_towards
 
 
@@ -37,6 +49,7 @@ class SimulationWorker(QObject):
         self.students: dict[int, Student] = {}
         self.game_time = 0.0
         self.next_student_id = 1
+        self.next_order_id = 1
         self.spawned_students = 0
         self.served_students = 0
         self.max_active_students_seen = 0
@@ -109,6 +122,7 @@ class SimulationWorker(QObject):
         self.students.clear()
         self.game_time = 0.0
         self.next_student_id = 1
+        self.next_order_id = 1
         self.spawned_students = 0
         self.served_students = 0
         self.max_active_students_seen = 0
@@ -124,6 +138,8 @@ class SimulationWorker(QObject):
         right = self.width - 170.0
         gap = 0.0 if count == 1 else (right - left) / (count - 1)
         for index in range(count):
+            dishes = self._build_stall_dishes(index)
+            status = StallStatus.OPEN if dishes else StallStatus.SOLD_OUT
             self.stalls.append(
                 Stall(
                     id=index,
@@ -132,8 +148,34 @@ class SimulationWorker(QObject):
                     meat_ratio=self.rng.uniform(0.0, 1.0),
                     veg_ratio=self.rng.uniform(0.0, 1.0),
                     cook_time=self.rng.uniform(12.0, 28.0),
+                    status=status,
+                    dishes=dishes,
                 )
             )
+
+    def _build_stall_dishes(self, stall_index: int) -> list[Dish]:
+        menu = [
+            (1, "Braised Chicken Rice", {"meat": 0.88, "veg": 0.22, "spicy": 0.35}, 13.0, 22.0),
+            (2, "Tomato Egg Noodles", {"meat": 0.18, "veg": 0.72, "spicy": 0.05}, 9.5, 16.0),
+            (3, "Beef Noodles", {"meat": 0.78, "veg": 0.34, "spicy": 0.42}, 15.0, 24.0),
+            (4, "Vegetable Set Meal", {"meat": 0.08, "veg": 0.92, "spicy": 0.12}, 10.0, 18.0),
+            (5, "Spicy Pork Rice", {"meat": 0.72, "veg": 0.38, "spicy": 0.82}, 12.0, 20.0),
+            (6, "Mushroom Chicken Soup", {"meat": 0.56, "veg": 0.66, "spicy": 0.02}, 11.5, 19.0),
+        ]
+        dishes: list[Dish] = []
+        for offset in range(3):
+            dish_id, name, features, price, cook_time = menu[(stall_index + offset * 2) % len(menu)]
+            dishes.append(
+                Dish(
+                    id=dish_id,
+                    name=name,
+                    features=dict(features),
+                    price=price + self.rng.uniform(-0.5, 0.8),
+                    stock=self.rng.randint(10, 24),
+                    cook_time=cook_time + self.rng.uniform(-2.0, 3.0),
+                )
+            )
+        return dishes
 
     def _build_tables(self) -> None:
         self.tables.clear()
@@ -192,6 +234,13 @@ class SimulationWorker(QObject):
     def _spawn_student(self) -> None:
         meat_pref = self.rng.uniform(0.0, 1.0)
         veg_pref = self.rng.uniform(0.0, 1.0)
+        preferences = {
+            "meat": meat_pref,
+            "veg": veg_pref,
+            "price_sensitivity": self.rng.uniform(0.2, 1.0),
+            "wait_tolerance": self.rng.uniform(0.2, 1.0),
+            "spicy": self.rng.uniform(0.0, 1.0),
+        }
         student = Student(
             id=self.next_student_id,
             meat_pref=meat_pref,
@@ -206,9 +255,10 @@ class SimulationWorker(QObject):
             target_x=self.door[0] + self.rng.uniform(12.0, 55.0),
             target_y=self.door[1] + self.rng.uniform(5.0, 55.0),
             walk_speed=self.rng.uniform(8.0, 14.0),
+            preferences=preferences,
         )
         student.decision_done_at = self.game_time + student.hesitation_time
-        student.stall_id = self._choose_best_stall(student)
+        student.dish_id, student.stall_id = self._choose_dish_and_stall(student)
         self.students[student.id] = student
         self.next_student_id += 1
         self.spawned_students += 1
@@ -220,20 +270,101 @@ class SimulationWorker(QObject):
         )
 
     def _choose_best_stall(self, student: Student) -> int:
-        def score(stall: Stall) -> float:
-            taste_cost = manhattan_2d(student.meat_pref, student.veg_pref, stall.meat_ratio, stall.veg_ratio) * 90.0
-            queue_cost = len(stall.queue) * 32.0
-            travel_cost = distance(student.x, student.y, stall.x, self.queue_walkway_y) * 0.18
-            congestion_cost = self._density_near(stall.x, stall.y + 110.0, 105.0) * 22.0
-            ready_bonus = self._stall_cook_progress(stall) * 16.0 if stall.ready_times else 0.0
-            return taste_cost + queue_cost + travel_cost + congestion_cost - ready_bonus
+        _, stall_id = self._choose_dish_and_stall(student)
+        if stall_id is not None:
+            return stall_id
+        return min(self.stalls, key=lambda stall: len(stall.queue)).id
 
-        return min(self.stalls, key=score).id
+    def _choose_dish_and_stall(self, student: Student) -> tuple[int | None, int | None]:
+        best_dish_id: int | None = None
+        best_dish_score: float | None = None
+        seen_dishes: set[int] = set()
+        for stall in self.stalls:
+            for dish in stall.dishes:
+                if dish.id in seen_dishes or not self._dish_has_order_capacity(stall, dish):
+                    continue
+                seen_dishes.add(dish.id)
+                score = self._dish_preference_cost(student, dish)
+                if best_dish_score is None or score < best_dish_score:
+                    best_dish_score = score
+                    best_dish_id = dish.id
+
+        if best_dish_id is None:
+            return None, None
+
+        candidates = [
+            (stall, self._dish_by_id(stall, best_dish_id))
+            for stall in self.stalls
+            if self._dish_by_id(stall, best_dish_id) is not None
+        ]
+        available = [
+            (stall, dish)
+            for stall, dish in candidates
+            if dish is not None and self._dish_has_order_capacity(stall, dish)
+        ]
+        if not available:
+            return self._choose_dish_and_stall_without(student, excluded_dish_id=best_dish_id)
+
+        best_stall = min(
+            available,
+            key=lambda item: self._stall_choice_cost(student, item[0], item[1]),
+        )[0]
+        return best_dish_id, best_stall.id
+
+    def _choose_dish_and_stall_without(
+        self,
+        student: Student,
+        excluded_dish_id: int,
+    ) -> tuple[int | None, int | None]:
+        best: tuple[float, int, int] | None = None
+        for stall in self.stalls:
+            for dish in stall.dishes:
+                if dish.id == excluded_dish_id or not self._dish_has_order_capacity(stall, dish):
+                    continue
+                score = self._dish_preference_cost(student, dish) + self._stall_choice_cost(student, stall, dish)
+                if best is None or score < best[0]:
+                    best = (score, dish.id, stall.id)
+        if best is None:
+            return None, None
+        return best[1], best[2]
+
+    def _dish_preference_cost(self, student: Student, dish: Dish) -> float:
+        preferences = student.preferences or {"meat": student.meat_pref, "veg": student.veg_pref}
+        taste_cost = 0.0
+        for key in ("meat", "veg", "spicy"):
+            taste_cost += abs(preferences.get(key, 0.0) - dish.features.get(key, 0.0))
+        price_cost = dish.price * preferences.get("price_sensitivity", 0.5) * 0.08
+        return taste_cost + price_cost + self.rng.uniform(0.0, 0.08)
+
+    def _stall_choice_cost(self, student: Student, stall: Stall, dish: Dish) -> float:
+        wait_tolerance = max(0.1, student.preferences.get("wait_tolerance", 0.5))
+        queue_cost = len(stall.queue) * (1.1 - wait_tolerance) * 0.75
+        travel_cost = distance(student.x, student.y, stall.x, self.queue_walkway_y) * 0.004
+        congestion_cost = self._density_near(stall.x, stall.y + 110.0, 105.0) * 0.35
+        cook_cost = dish.cook_time * 0.015
+        price_cost = dish.price * student.preferences.get("price_sensitivity", 0.5) * 0.04
+        return queue_cost + travel_cost + congestion_cost + cook_cost + price_cost + self.rng.uniform(0.0, 0.12)
+
+    def _dish_by_id(self, stall: Stall, dish_id: int | None) -> Dish | None:
+        if dish_id is None:
+            return None
+        for dish in stall.dishes:
+            if dish.id == dish_id:
+                return dish
+        return None
+
+    def _dish_has_order_capacity(self, stall: Stall, dish: Dish) -> bool:
+        pending_count = sum(
+            1
+            for order in stall.orders
+            if order.dish_id == dish.id and order.status in (OrderStatus.QUEUED, OrderStatus.COOKING)
+        )
+        return dish.stock - pending_count > 0
 
     def _complete_ready_food(self) -> None:
         for stall in self.stalls:
             while stall.ready_times and stall.ready_times[0][1] <= self.game_time:
-                student_id, ready_at = stall.ready_times.pop(0)
+                student_id, ready_at, order_id = stall.ready_times.pop(0)
                 if stall.queue and stall.queue[0] == student_id:
                     stall.queue.pop(0)
                 elif student_id in stall.queue:
@@ -242,6 +373,14 @@ class SimulationWorker(QObject):
                 student = self.students.get(student_id)
                 if student is None or student.state == StudentState.DONE:
                     continue
+                order = self._order_by_id(stall, order_id)
+                if order is not None:
+                    order.status = OrderStatus.DONE
+                    order.finished_at = ready_at
+                dish = self._dish_by_id(stall, student.dish_id)
+                if dish is not None and dish.stock > 0:
+                    dish.stock -= 1
+                stall.refresh_status()
                 previous_state = student.state
                 student.food_ready_at = ready_at
                 student.state = StudentState.SEARCHING_SEAT
@@ -364,15 +503,40 @@ class SimulationWorker(QObject):
 
     def _join_stall_queue(self, student: Student) -> None:
         if student.stall_id is None:
+            student.dish_id, student.stall_id = self._choose_dish_and_stall(student)
+        if student.stall_id is None:
             return
         stall = self.stalls[student.stall_id]
+        dish = self._dish_by_id(stall, student.dish_id)
+        if dish is None or not self._dish_has_order_capacity(stall, dish):
+            student.dish_id, student.stall_id = self._choose_dish_and_stall(student)
+            if student.stall_id is None:
+                return
+            stall = self.stalls[student.stall_id]
+            dish = self._dish_by_id(stall, student.dish_id)
+            if dish is None or not self._dish_has_order_capacity(stall, dish):
+                return
         if student.id in stall.queue:
             student.state = StudentState.QUEUED
             return
-        ready_at = max(self.game_time, stall.next_food_ready_time) + stall.cook_time
+        started_at = max(self.game_time, stall.next_food_ready_time)
+        ready_at = started_at + dish.cook_time
+        order = Order(
+            id=self.next_order_id,
+            student_id=student.id,
+            stall_id=stall.id,
+            dish_id=dish.id,
+            created_at=self.game_time,
+            started_at=started_at,
+            finished_at=ready_at,
+            status=OrderStatus.COOKING if started_at <= self.game_time else OrderStatus.QUEUED,
+        )
+        self.next_order_id += 1
+        stall.orders.append(order)
         stall.next_food_ready_time = ready_at
         stall.queue.append(student.id)
-        stall.ready_times.append((student.id, ready_at))
+        stall.ready_times.append((student.id, ready_at, order.id))
+        student.order_id = order.id
         previous_state = student.state
         student.state = StudentState.QUEUED
         self._record_student_event(
@@ -381,6 +545,21 @@ class SimulationWorker(QObject):
             from_state=previous_state,
             to_state=student.state,
         )
+
+    def _order_by_id(self, stall: Stall, order_id: int) -> Order | None:
+        for order in stall.orders:
+            if order.id == order_id:
+                return order
+        return None
+
+    def _refresh_orders_and_stalls(self) -> None:
+        for stall in self.stalls:
+            for order in stall.orders:
+                if order.status != OrderStatus.QUEUED:
+                    continue
+                if order.started_at is not None and self.game_time >= order.started_at:
+                    order.status = OrderStatus.COOKING
+            stall.refresh_status()
 
     def _send_student_to_table(self, student: Student) -> None:
         free: list[tuple[Table, int]] = []
@@ -986,6 +1165,7 @@ class SimulationWorker(QObject):
         )
 
     def _build_frame(self) -> dict[str, Any]:
+        self._refresh_orders_and_stalls()
         self._record_queue_samples()
         self._record_runtime_sample()
         stats = self.data_recorder.build_stats(current_time=self.game_time).to_dict()
@@ -1025,6 +1205,10 @@ class SimulationWorker(QObject):
                     "cook_remaining": self._stall_cook_remaining(stall),
                     "cook_progress": self._stall_cook_progress(stall),
                     "queue_count": len(stall.queue),
+                    "status": stall.status.value,
+                    "is_congested": len(stall.queue) >= 8,
+                    "dishes": [self._dish_frame(dish) for dish in stall.dishes],
+                    "orders": [self._order_frame(order) for order in stall.orders],
                 }
                 for stall in self.stalls
             ],
@@ -1057,6 +1241,9 @@ class SimulationWorker(QObject):
                     "state": student.state.value,
                     "meat_pref": student.meat_pref,
                     "veg_pref": student.veg_pref,
+                    "preferences": dict(student.preferences),
+                    "dish_id": student.dish_id,
+                    "order_id": student.order_id,
                     "stall_id": student.stall_id,
                     "table_id": student.table_id,
                     "seat_index": student.seat_index,
@@ -1071,16 +1258,45 @@ class SimulationWorker(QObject):
             ],
         }
 
+    def _dish_frame(self, dish: Dish) -> dict[str, Any]:
+        return {
+            "id": dish.id,
+            "name": dish.name,
+            "features": dict(dish.features),
+            "price": round(dish.price, 2),
+            "stock": dish.stock,
+            "cook_time": dish.cook_time,
+            "available": dish.available,
+        }
+
+    def _order_frame(self, order: Order) -> dict[str, Any]:
+        return {
+            "id": order.id,
+            "student_id": order.student_id,
+            "stall_id": order.stall_id,
+            "dish_id": order.dish_id,
+            "created_at": order.created_at,
+            "started_at": order.started_at,
+            "finished_at": order.finished_at if order.status == OrderStatus.DONE else None,
+            "status": order.status.value,
+        }
+
     def _stall_cook_remaining(self, stall: Stall) -> float:
         if not stall.ready_times:
             return 0.0
         return max(0.0, stall.ready_times[0][1] - self.game_time)
 
     def _stall_cook_progress(self, stall: Stall) -> float:
-        if not stall.ready_times or stall.cook_time <= 0:
+        if not stall.ready_times:
+            return 0.0
+        _, _, order_id = stall.ready_times[0]
+        order = self._order_by_id(stall, order_id)
+        dish = self._dish_by_id(stall, order.dish_id) if order is not None else None
+        cook_time = dish.cook_time if dish is not None else stall.cook_time
+        if cook_time <= 0:
             return 0.0
         remaining = self._stall_cook_remaining(stall)
-        return max(0.0, min(1.0, 1.0 - remaining / stall.cook_time))
+        return max(0.0, min(1.0, 1.0 - remaining / cook_time))
 
     def _build_collision_boxes(self) -> list[dict[str, float]]:
         boxes: list[dict[str, float]] = []

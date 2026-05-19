@@ -25,6 +25,7 @@ class Metrics:
 
 class FrameDrivenRecorder:
     def __init__(self, table_count: int, seats_per_table: int = 4) -> None:
+        self.last_frame: dict[str, Any] | None = None
         self.last_game_time = 0.0
         self.max_active_students = 0
         self.stall_max_queue: dict[int, int] = {}
@@ -52,6 +53,7 @@ class FrameDrivenRecorder:
         self.total_seats = table_count * seats_per_table
 
     def feed(self, frame: dict[str, Any]) -> None:
+        self.last_frame = frame
         game_time = float(frame["game_time"])
         delta = max(0.0, game_time - self.last_game_time)
         self.last_game_time = game_time
@@ -138,13 +140,13 @@ class FrameDrivenRecorder:
 
 def run_self_test() -> None:
     config = SimulationConfig(
-        sim_minutes=30,
-        time_scale=12.0,
-        stall_count=10,
-        table_count=24,
+        sim_minutes=3,
+        time_scale=120.0,
+        stall_count=6,
+        table_count=12,
         seed=12345,
-        total_student_count=120,
-        max_active_students=120,
+        total_student_count=40,
+        max_active_students=40,
     )
     worker = SimulationWorker(config)
     recorder = FrameDrivenRecorder(table_count=config.table_count)
@@ -161,7 +163,49 @@ def run_self_test() -> None:
     print(f"stall_max_queue: {metrics.stall_max_queue}")
     print(f"seat_utilization: {metrics.seat_utilization}")
     print(f"event_counts: {metrics.event_counts}")
+    print_p1_snapshot(recorder.last_frame)
 
+
+def print_p1_snapshot(frame: dict[str, Any] | None) -> None:
+    if frame is None:
+        print("p1_snapshot: no frame captured")
+        return
+
+    print("=== P1 Dish / Order Snapshot ===")
+    sold_out_stalls = []
+    total_orders = 0
+    for stall in frame.get("stalls", []):
+        dishes = stall.get("dishes", [])
+        orders = stall.get("orders", [])
+        total_orders += len(orders)
+        if stall.get("status") == "sold_out":
+            sold_out_stalls.append(stall.get("id"))
+        stock_text = ", ".join(
+            f"{dish.get('name')}#{dish.get('id')} stock={dish.get('stock')} available={dish.get('available')}"
+            for dish in dishes[:2]
+        )
+        order_counts: dict[str, int] = {}
+        for order in orders:
+            status = str(order.get("status"))
+            order_counts[status] = order_counts.get(status, 0) + 1
+        print(
+            f"stall {stall.get('id')} status={stall.get('status')} "
+            f"queue={stall.get('queue_count')} orders={order_counts} dishes=[{stock_text}]"
+        )
+
+    student_choices = [
+        {
+            "id": student.get("id"),
+            "dish_id": student.get("dish_id"),
+            "order_id": student.get("order_id"),
+            "stall_id": student.get("stall_id"),
+            "state": student.get("state"),
+        }
+        for student in frame.get("students", [])[:8]
+    ]
+    print(f"total_orders: {total_orders}")
+    print(f"sold_out_stalls: {sold_out_stalls}")
+    print(f"student_choices_sample: {student_choices}")
 
 if __name__ == "__main__":
     run_self_test()
