@@ -39,6 +39,8 @@ class SimulationConfig:
     seed: int | None = None
     total_student_count: int = 120
     max_active_students: int = 120
+    companion_pair_ratio: float = 0.18
+    companion_multi_ratio: float = 0.08
 
     @property
     def duration_game_seconds(self) -> float:
@@ -70,6 +72,8 @@ class Student:
     preferences: dict[str, float] = field(default_factory=dict)
     dish_id: int | None = None
     order_id: int | None = None
+    group_id: int | None = None
+    group_size: int | None = None
     decision_done_at: float = 0.0
     food_ready_at: float | None = None
     eating_done_at: float | None = None

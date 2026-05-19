@@ -147,6 +147,8 @@ def run_self_test() -> None:
         seed=12345,
         total_student_count=40,
         max_active_students=40,
+        companion_pair_ratio=0.35,
+        companion_multi_ratio=0.2,
     )
     worker = SimulationWorker(config)
     recorder = FrameDrivenRecorder(table_count=config.table_count)
@@ -164,6 +166,7 @@ def run_self_test() -> None:
     print(f"seat_utilization: {metrics.seat_utilization}")
     print(f"event_counts: {metrics.event_counts}")
     print_p1_snapshot(recorder.last_frame)
+    print_p2_group_snapshot(recorder.last_frame)
 
 
 def print_p1_snapshot(frame: dict[str, Any] | None) -> None:
@@ -206,6 +209,35 @@ def print_p1_snapshot(frame: dict[str, Any] | None) -> None:
     print(f"total_orders: {total_orders}")
     print(f"sold_out_stalls: {sold_out_stalls}")
     print(f"student_choices_sample: {student_choices}")
+
+
+def print_p2_group_snapshot(frame: dict[str, Any] | None) -> None:
+    if frame is None:
+        print("p2_group_snapshot: no frame captured")
+        return
+
+    groups: dict[int, list[dict[str, Any]]] = {}
+    solo_count = 0
+    for student in frame.get("students", []):
+        group_id = student.get("group_id")
+        if group_id is None:
+            solo_count += 1
+            continue
+        groups.setdefault(int(group_id), []).append(student)
+
+    print("=== P2 Group Snapshot ===")
+    print(f"solo_students_in_frame: {solo_count}")
+    print(f"active_group_count: {len(groups)}")
+    for group_id, members in sorted(groups.items())[:8]:
+        dish_ids = sorted({member.get("dish_id") for member in members})
+        stall_ids = sorted({member.get("stall_id") for member in members})
+        states = sorted({member.get("state") for member in members})
+        declared_sizes = sorted({member.get("group_size") for member in members})
+        print(
+            f"group {group_id}: members={len(members)} declared_sizes={declared_sizes} "
+            f"dishes={dish_ids} stalls={stall_ids} states={states}"
+        )
+
 
 if __name__ == "__main__":
     run_self_test()
