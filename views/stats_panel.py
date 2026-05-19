@@ -52,6 +52,7 @@ class StatsPanel(QWidget):
         table_card.setLayout(table_layout)
 
         self.gauge_panel = GaugePanel()
+        self.table_type_panel = TableTypeUtilizationPanel()
         self.heatmap = QueueHeatmap()
         self.trend = TrendChart()
 
@@ -63,6 +64,7 @@ class StatsPanel(QWidget):
         content_layout.addWidget(self.title)
         content_layout.addWidget(self.subtitle)
         content_layout.addWidget(self.gauge_panel)
+        content_layout.addWidget(self.table_type_panel)
         content_layout.addWidget(table_card)
         content_layout.addWidget(self.heatmap)
         content_layout.addWidget(self.trend)
@@ -207,6 +209,7 @@ class StatsPanel(QWidget):
         self.table.resizeRowsToContents()
 
         self.gauge_panel.set_stats(stats)
+        self.table_type_panel.set_data(_table_type_utilization(frame, stats))
         self.heatmap.set_stats(stats)
         self.trend.set_history(self.history)
 
@@ -281,6 +284,57 @@ class GaugePanel(QWidget):
         else:
             display = f"{int(value)}{unit}"
         painter.drawText(QRectF(rect.left() + 72, rect.top() + 32, rect.width() - 82, 22), Qt.AlignmentFlag.AlignLeft, display)
+
+
+class TableTypeUtilizationPanel(QWidget):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setMinimumHeight(176)
+        self.rows: list[tuple[str, float | None, int | None, int | None]] = []
+
+    def set_data(self, rows: list[tuple[str, float | None, int | None, int | None]]) -> None:
+        self.rows = rows
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
+        painter = _card_painter(self)
+        painter.setPen(QColor("#0f172a"))
+        painter.setFont(ui_font(10, QFont.Weight.Bold))
+        painter.drawText(QRectF(16, 14, self.width() - 32, 20), Qt.AlignmentFlag.AlignLeft, "桌型利用率")
+
+        rows = self.rows or [("2人桌", None, None, None), ("4人桌", None, None, None), ("6人桌", None, None, None)]
+        top = 48.0
+        bar_left = 76.0
+        bar_width = max(80.0, self.width() - bar_left - 60.0)
+        colors = {
+            "2人桌": QColor("#0ea5e9"),
+            "4人桌": QColor("#14b8a6"),
+            "6人桌": QColor("#f59e0b"),
+        }
+        for index, (label, ratio, used, total) in enumerate(rows):
+            y = top + index * 36.0
+            color = colors.get(label, QColor("#64748b"))
+            painter.setPen(QColor("#334155"))
+            painter.setFont(ui_font(8, QFont.Weight.Bold))
+            painter.drawText(QRectF(16, y - 2, 54, 18), Qt.AlignmentFlag.AlignLeft, label)
+
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("#f1f5f9"))
+            painter.drawRoundedRect(QRectF(bar_left, y, bar_width, 12), 6, 6)
+            if ratio is not None:
+                ratio = max(0.0, min(1.0, ratio))
+                painter.setBrush(color)
+                painter.drawRoundedRect(QRectF(bar_left, y, bar_width * ratio, 12), 6, 6)
+
+            painter.setPen(QColor("#0f172a"))
+            painter.setFont(ui_font(8, QFont.Weight.Bold))
+            percent = "-" if ratio is None else f"{ratio * 100:.1f}%"
+            painter.drawText(QRectF(bar_left + bar_width + 8, y - 3, 44, 18), Qt.AlignmentFlag.AlignRight, percent)
+
+            painter.setPen(QColor("#64748b"))
+            painter.setFont(ui_font(7))
+            detail = "-" if used is None or total is None else f"{used}/{total} 座"
+            painter.drawText(QRectF(bar_left, y + 14, bar_width, 14), Qt.AlignmentFlag.AlignLeft, detail)
 
 
 class QueueHeatmap(QWidget):
@@ -480,6 +534,92 @@ def _heat_color(ratio: float) -> QColor:
         int(165 + (68 - 165) * t),
         int(233 + (68 - 233) * t),
     )
+
+
+def _table_type_utilization(
+    frame: dict,
+    stats: dict[str, Any],
+) -> list[tuple[str, float | None, int | None, int | None]]:
+    labels = [("two", "2人桌"), ("four", "4人桌"), ("six", "6人桌")]
+    raw = stats.get("table_type_utilization")
+    if isinstance(raw, dict):
+        rows: list[tuple[str, float | None, int | None, int | None]] = []
+        for key, label in labels:
+            value = raw.get(key)
+            ratio, used, total = _parse_table_type_utilization_value(value)
+            rows.append((label, ratio, used, total))
+        if any(ratio is not None for _, ratio, _, _ in rows):
+            return rows
+    return _table_type_utilization_from_tables(frame.get("tables") or [])
+
+
+def _parse_table_type_utilization_value(value: Any) -> tuple[float | None, int | None, int | None]:
+    if isinstance(value, dict):
+        ratio = _number(
+            value.get("utilization", value.get("ratio", value.get("value"))),
+            None,
+        )
+        used = _int_or_none(value.get("used", value.get("occupied", value.get("occupied_seats"))))
+        total = _int_or_none(value.get("total", value.get("seat_count", value.get("total_seats"))))
+        if ratio is None and used is not None and total:
+            ratio = used / total
+        return ratio, used, total
+    return _number(value, None), None, None
+
+
+def _table_type_utilization_from_tables(tables: Any) -> list[tuple[str, float | None, int | None, int | None]]:
+    buckets = {
+        "two": {"used": 0, "total": 0},
+        "four": {"used": 0, "total": 0},
+        "six": {"used": 0, "total": 0},
+    }
+    if isinstance(tables, list):
+        for table in tables:
+            if not isinstance(table, dict):
+                continue
+            table_type, seat_count = _table_type_and_seat_count(table)
+            seats = table.get("seat_frames") or table.get("seats") or []
+            used = sum(1 for seat in seats[:seat_count] if _seat_is_used(seat))
+            buckets[table_type]["used"] += used
+            buckets[table_type]["total"] += seat_count
+
+    labels = [("two", "2人桌"), ("four", "4人桌"), ("six", "6人桌")]
+    rows: list[tuple[str, float | None, int | None, int | None]] = []
+    for key, label in labels:
+        used = buckets[key]["used"]
+        total = buckets[key]["total"]
+        ratio = used / total if total else None
+        rows.append((label, ratio, used if total else None, total if total else None))
+    return rows
+
+
+def _table_type_and_seat_count(table: dict) -> tuple[str, int]:
+    table_type = str(table.get("table_type") or "").lower()
+    type_to_count = {"two": 2, "four": 4, "six": 6}
+    seat_count = int(_number(table.get("seat_count"), type_to_count.get(table_type, 4)))
+    if seat_count not in (2, 4, 6):
+        seat_count = type_to_count.get(table_type, 4)
+    if table_type not in type_to_count:
+        table_type = {2: "two", 4: "four", 6: "six"}.get(seat_count, "four")
+    return table_type, seat_count
+
+
+def _seat_is_used(seat: Any) -> bool:
+    if isinstance(seat, dict):
+        status = str(seat.get("status") or "")
+        if status in {"reserved", "occupied"}:
+            return True
+        if status == "free":
+            return False
+        return seat.get("student_id") is not None
+    return seat is not None
+
+
+def _int_or_none(value: Any) -> int | None:
+    number = _number(value, None)
+    if number is None:
+        return None
+    return int(number)
 
 
 def _format_seconds(value: Any) -> str:
