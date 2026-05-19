@@ -60,6 +60,12 @@ def test_stats_frame_p0_from_events() -> None:
         "max_active_students",
         "stall_queue_stats",
         "seat_utilization",
+        "avg_move_speed",
+        "congestion_index",
+        "stuck_student_count",
+        "reroute_count",
+        "avg_queue_length",
+        "tray_return_queue_length",
     }
     assert_close(stats["avg_wait_time"], 11.0)
     assert_close(stats["avg_total_time"], 69.5)
