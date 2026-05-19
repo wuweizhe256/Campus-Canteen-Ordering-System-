@@ -774,6 +774,7 @@ class CanvasWidget(QWidget):
                 painter.drawRoundedRect(QRectF(x + dx, y + dy, 18, 18), 6, 6)
                 painter.setBrush(color.lighter(112))
                 painter.drawEllipse(QRectF(x + dx + 3, y + dy - 4, 12, 10))
+                self._draw_seat_status_marker(painter, x + dx, y + dy, status, seat)
 
     def _table_type_and_seat_count(self, table: dict) -> tuple[str, int]:
         table_type = str(table.get("table_type") or "").lower()
@@ -799,6 +800,25 @@ class CanvasWidget(QWidget):
                 (side_x - 14, 24),
             ]
         return [(-side_x - 4, -32), (side_x - 14, -32), (-side_x - 4, 24), (side_x - 14, 24)]
+
+    def _draw_seat_status_marker(self, painter: QPainter, x: float, y: float, status: str, seat: Any) -> None:
+        if status == "free":
+            return
+        label = "预" if status == "reserved" else "占"
+        color = QColor("#92400e") if status == "reserved" else QColor("#9f1239")
+
+        painter.setPen(QPen(QColor("#ffffff"), 1))
+        painter.setBrush(color)
+        painter.drawEllipse(QRectF(x + 9, y - 8, 12, 12))
+        painter.setPen(QColor("#ffffff"))
+        painter.setFont(ui_font(6, QFont.Weight.Bold))
+        painter.drawText(QRectF(x + 9, y - 8, 12, 12), Qt.AlignmentFlag.AlignCenter, label)
+
+        student_id = self._seat_student_id(seat)
+        if student_id is not None:
+            painter.setPen(color.darker(125))
+            painter.setFont(ui_font(6, QFont.Weight.Bold))
+            painter.drawText(QRectF(x - 4, y + 17, 30, 10), Qt.AlignmentFlag.AlignCenter, f"S{student_id}")
 
     def _draw_students(self, painter: QPainter) -> None:
         students = [student for student in self.frame.get("students", []) if isinstance(student, dict)]
@@ -1015,6 +1035,11 @@ class CanvasWidget(QWidget):
                 return str(status)
             return "occupied" if seat.get("student_id") is not None else "free"
         return "occupied" if seat is not None else "free"
+
+    def _seat_student_id(self, seat: Any) -> Any:
+        if isinstance(seat, dict):
+            return seat.get("student_id")
+        return seat
 
     def _seat_color(self, status: str) -> QColor:
         if status == "reserved":
