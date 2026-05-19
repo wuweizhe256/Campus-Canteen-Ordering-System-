@@ -23,6 +23,10 @@ class SimulationConfig:
     time_scale: float = 6.0
     stall_count: int = 10
     table_count: int = 24
+    companion_ratio: float = 0.25
+    two_seat_table_count: int = 6
+    four_seat_table_count: int = 14
+    six_seat_table_count: int = 4
     seed: int | None = None
     total_student_count: int = 120
     max_active_students: int = 120
