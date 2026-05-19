@@ -20,10 +20,10 @@ python main.py
 
 | 分支 | 负责人 | 职责 |
 | --- | --- | --- |
-| `wuweizhe` | wuweizhe | 前端界面与可视化 |
-| `TianZhiJiu-state-flow` | TianZhiJiu | 后端仿真模型与业务逻辑 |
-| `thunder` | thunder | 数据处理、文档编写、项目总览 |
-| `dev` | thunder | 联调测试、分支整合 |
+| `wuweizhe` | 杨溢鑫 | 前端界面与可视化 |
+| `TianZhiJiu-state-flow` | 郝欣冉 | 后端仿真模型与业务逻辑 |
+| `thunder` | 汪振龙 | 数据处理、文档编写、项目总览 |
+| `dev` | 汪振龙 | 联调测试、分支整合 |
 | `main` | — | 最终稳定版本，禁止直接开发 |
 
 ### 工作流程
