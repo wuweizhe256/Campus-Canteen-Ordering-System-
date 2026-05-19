@@ -62,6 +62,17 @@ class Student:
     path: list[tuple[float, float]] = field(default_factory=list)
     congestion_time: float = 0.0
     detour_until: float = 0.0
+    actual_speed: float = 0.0
+    stuck_time: float = 0.0
+    reroute_count: int = 0
+    facing_x: float = 1.0
+    facing_y: float = 0.0
+    last_x: float = field(init=False)
+    last_y: float = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.last_x = self.x
+        self.last_y = self.y
 
     @property
     def eating_time(self) -> float:
