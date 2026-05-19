@@ -348,43 +348,44 @@ class CanvasWidget(QWidget):
         if not dishes:
             return
 
-        panel_width = 142.0
-        row_height = 20.0
-        visible_dishes = dishes[:3]
-        panel_height = 22.0 + len(visible_dishes) * row_height
-        left = x + 48.0
-        top = y - 48.0
+        panel_width = 104.0
+        row_height = 16.0
+        visible_dishes = dishes[:2]
+        panel_height = 18.0 + len(visible_dishes) * row_height
+        left = x - panel_width / 2
+        top = y - 82.0
 
         painter.setPen(QPen(QColor(234, 179, 8, 135), 1))
         painter.setBrush(QColor(255, 251, 235, 232))
-        painter.drawRoundedRect(QRectF(left, top, panel_width, panel_height), 7, 7)
+        painter.drawRoundedRect(QRectF(left, top, panel_width, panel_height), 6, 6)
 
         painter.setPen(QColor("#854d0e"))
         painter.setFont(ui_font(7, QFont.Weight.Bold))
-        painter.drawText(QRectF(left + 8, top + 4, panel_width - 16, 14), Qt.AlignmentFlag.AlignLeft, "菜品 / 价格 / 库存")
+        suffix = f" +{len(dishes) - len(visible_dishes)}" if len(dishes) > len(visible_dishes) else ""
+        painter.drawText(QRectF(left + 6, top + 3, panel_width - 12, 12), Qt.AlignmentFlag.AlignLeft, f"菜品{suffix}")
 
         painter.setFont(ui_font(7))
         for index, dish in enumerate(visible_dishes):
-            row_top = top + 22.0 + index * row_height
+            row_top = top + 18.0 + index * row_height
             available = self._dish_available(dish)
             name = str(dish.get("name") or f"菜品{index + 1}")
-            name = painter.fontMetrics().elidedText(name, Qt.TextElideMode.ElideRight, 50)
+            name = painter.fontMetrics().elidedText(name, Qt.TextElideMode.ElideRight, 38)
             price = self._format_price(dish.get("price"))
             stock = self._display_value(dish.get("stock"))
 
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor("#dcfce7" if available else "#fee2e2"))
-            painter.drawRoundedRect(QRectF(left + 7, row_top + 2, 32, 14), 5, 5)
+            painter.drawRoundedRect(QRectF(left + 6, row_top + 2, 24, 12), 5, 5)
 
             painter.setPen(QColor("#166534" if available else "#991b1b"))
             painter.setFont(ui_font(7, QFont.Weight.Bold))
-            painter.drawText(QRectF(left + 8, row_top + 1, 30, 15), Qt.AlignmentFlag.AlignCenter, "可售" if available else "售罄")
+            painter.drawText(QRectF(left + 7, row_top + 1, 22, 13), Qt.AlignmentFlag.AlignCenter, "售" if available else "罄")
 
             painter.setPen(QColor("#334155"))
             painter.setFont(ui_font(7))
-            painter.drawText(QRectF(left + 43, row_top + 1, 52, 16), Qt.AlignmentFlag.AlignLeft, name)
-            painter.drawText(QRectF(left + 92, row_top + 1, 30, 16), Qt.AlignmentFlag.AlignRight, price)
-            painter.drawText(QRectF(left + 124, row_top + 1, 12, 16), Qt.AlignmentFlag.AlignRight, stock)
+            painter.drawText(QRectF(left + 33, row_top + 1, 40, 14), Qt.AlignmentFlag.AlignLeft, name)
+            painter.drawText(QRectF(left + 71, row_top + 1, 20, 14), Qt.AlignmentFlag.AlignRight, price)
+            painter.drawText(QRectF(left + 93, row_top + 1, 8, 14), Qt.AlignmentFlag.AlignRight, stock)
 
     def _stall_dishes(self, stall: dict) -> list[dict[str, Any]]:
         raw_dishes = stall.get("dishes")
