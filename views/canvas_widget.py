@@ -21,6 +21,8 @@ class CanvasWidget(QWidget):
         self.view_zoom = 1.0
         self._pan_offset = QPointF(0.0, 0.0)
         self._drag_start: QPointF | None = None
+        self._hover_scene_pos: tuple[float, float] | None = None
+        self.setMouseTracking(True)
 
     def set_frame(self, frame: dict) -> None:
         self.frame = frame
@@ -62,6 +64,8 @@ class CanvasWidget(QWidget):
         y_offset = (self.height() - frame_height * scale) / 2 + self._pan_offset.y()
         painter.translate(x_offset, y_offset)
         painter.scale(scale, scale)
+        self._scene_origin = QPointF(x_offset, y_offset)
+        self._scene_scale = scale
 
         self._draw_floor(painter)
         if self.show_paths:
@@ -98,9 +102,12 @@ class CanvasWidget(QWidget):
             delta = current - self._drag_start
             self._drag_start = current
             self._pan_offset = self._pan_offset + delta
+            self._update_hover_scene_pos(current)
             self.update()
             event.accept()
             return
+        self._update_hover_scene_pos(event.position())
+        self.update()
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt override
@@ -117,6 +124,22 @@ class CanvasWidget(QWidget):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802 - Qt override
+        self._hover_scene_pos = None
+        self.update()
+        super().leaveEvent(event)
+
+    def _update_hover_scene_pos(self, widget_pos: QPointF) -> None:
+        origin = getattr(self, "_scene_origin", QPointF(0.0, 0.0))
+        scale = getattr(self, "_scene_scale", 1.0)
+        if scale <= 0:
+            self._hover_scene_pos = None
+            return
+        self._hover_scene_pos = (
+            (widget_pos.x() - origin.x()) / scale,
+            (widget_pos.y() - origin.y()) / scale,
+        )
 
     def _draw_empty_scene(self, painter: QPainter) -> None:
         painter.setPen(QColor("#475569"))
@@ -331,6 +354,7 @@ class CanvasWidget(QWidget):
             painter.setPen(QColor("#7c2d12"))
             painter.drawText(QRectF(x - 30, y + 11, 60, 18), Qt.AlignmentFlag.AlignCenter, f"{queue_count} 人")
             self._draw_stall_dishes(painter, stall, x, y)
+            self._draw_stall_status(painter, stall, x, y)
 
             painter.setPen(QPen(QColor(148, 163, 184, 120), 1))
             painter.setBrush(QColor(255, 247, 237, 95))
@@ -342,6 +366,7 @@ class CanvasWidget(QWidget):
                 queue_y = y + 76 + index * 24
                 self._draw_shadow(painter, queue_x, queue_y + 5, 18, 7, QColor(51, 65, 85, 42))
                 painter.drawEllipse(QRectF(queue_x - 6, queue_y - 6, 12, 12))
+            self._draw_stall_orders(painter, stall, x, y)
 
     def _draw_stall_dishes(self, painter: QPainter, stall: dict, x: float, y: float) -> None:
         dishes = self._stall_dishes(stall)
@@ -429,6 +454,159 @@ class CanvasWidget(QWidget):
         if stock is None:
             return True
         return stock > 0
+
+    def _draw_stall_status(self, painter: QPainter, stall: dict, x: float, y: float) -> None:
+        status = self._stall_status(stall)
+        label, text_color, fill_color = {
+            "pending": ("待营业", QColor("#92400e"), QColor("#fef3c7")),
+            "open": ("营业中", QColor("#166534"), QColor("#dcfce7")),
+            "sold_out": ("已售罄", QColor("#991b1b"), QColor("#fee2e2")),
+        }.get(status, ("营业中", QColor("#166534"), QColor("#dcfce7")))
+
+        rect = QRectF(x - 28, y + 31, 56, 15)
+        painter.setPen(QPen(text_color.lighter(125), 1))
+        painter.setBrush(fill_color)
+        painter.drawRoundedRect(rect, 5, 5)
+        painter.setPen(text_color)
+        painter.setFont(ui_font(7, QFont.Weight.Bold))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, label)
+
+    def _draw_stall_orders(self, painter: QPainter, stall: dict, x: float, y: float) -> None:
+        orders = self._stall_orders(stall)
+        if not orders:
+            return
+
+        visible_orders = orders[:2]
+        panel_width = 78.0
+        row_height = 16.0
+        panel_height = 18.0 + len(visible_orders) * row_height
+        left = x + 22.0
+        top = y + 58.0
+
+        painter.setPen(QPen(QColor(148, 163, 184, 135), 1))
+        painter.setBrush(QColor(248, 250, 252, 232))
+        painter.drawRoundedRect(QRectF(left, top, panel_width, panel_height), 6, 6)
+
+        suffix = f" +{len(orders) - len(visible_orders)}" if len(orders) > len(visible_orders) else ""
+        painter.setPen(QColor("#334155"))
+        painter.setFont(ui_font(7, QFont.Weight.Bold))
+        painter.drawText(QRectF(left + 6, top + 3, panel_width - 12, 12), Qt.AlignmentFlag.AlignLeft, f"订单{suffix}")
+
+        for index, order in enumerate(visible_orders):
+            row_top = top + 18.0 + index * row_height
+            status = str(order.get("status") or "queued")
+            status_label, status_color = self._order_status_display(status)
+            order_id = self._display_value(order.get("id"))
+            row_rect = QRectF(left + 5, row_top + 1, panel_width - 10, 14)
+            hovered = self._is_hovered(row_rect)
+
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(status_color.lighter(180))
+            painter.drawRoundedRect(QRectF(left + 5, row_top + 2, 18, 12), 5, 5)
+            painter.setPen(status_color.darker(130))
+            painter.setFont(ui_font(7, QFont.Weight.Bold))
+            painter.drawText(QRectF(left + 6, row_top + 1, 16, 13), Qt.AlignmentFlag.AlignCenter, status_label)
+
+            painter.setPen(QColor("#334155"))
+            painter.setFont(ui_font(7))
+            painter.drawText(QRectF(left + 26, row_top + 1, 46, 14), Qt.AlignmentFlag.AlignLeft, f"#{order_id}")
+            if hovered:
+                self._draw_order_tooltip(painter, order, status, status_color, left + panel_width + 4, row_top - 6)
+
+    def _stall_status(self, stall: dict) -> str:
+        status = stall.get("status")
+        if status:
+            return str(status)
+        dishes = self._stall_dishes(stall)
+        return "sold_out" if dishes and not any(self._dish_available(dish) for dish in dishes) else "open"
+
+    def _stall_orders(self, stall: dict) -> list[dict[str, Any]]:
+        raw_orders = stall.get("orders")
+        if isinstance(raw_orders, list):
+            return [order for order in raw_orders if isinstance(order, dict)]
+        return self._mock_stall_orders(stall)
+
+    def _mock_stall_orders(self, stall: dict) -> list[dict[str, Any]]:
+        queue_count = int(self._number(stall.get("queue_count"), 0))
+        if queue_count <= 0:
+            return []
+        stall_id = int(self._number(stall.get("id"), 0))
+        dishes = self._stall_dishes(stall)
+        dish_id = dishes[0].get("id") if dishes else None
+        status_cycle = ["queued", "cooking", "done"]
+        return [
+            {
+                "id": stall_id * 1000 + index + 1,
+                "student_id": stall_id * 100 + index + 1,
+                "stall_id": stall_id,
+                "dish_id": dish_id,
+                "created_at": None,
+                "started_at": None,
+                "finished_at": None,
+                "status": status_cycle[min(index, len(status_cycle) - 1)],
+            }
+            for index in range(min(queue_count, 3))
+        ]
+
+    def _order_status_display(self, status: str) -> tuple[str, QColor]:
+        displays = {
+            "queued": ("排", QColor("#2563eb")),
+            "cooking": ("做", QColor("#ea580c")),
+            "done": ("完", QColor("#16a34a")),
+            "cancelled": ("取", QColor("#64748b")),
+        }
+        return displays.get(status, ("排", QColor("#2563eb")))
+
+    def _draw_order_tooltip(
+        self,
+        painter: QPainter,
+        order: dict,
+        status: str,
+        status_color: QColor,
+        left: float,
+        top: float,
+    ) -> None:
+        width = 126.0
+        height = 72.0
+        frame_width, frame_height = self._frame_size()
+        left = min(left, frame_width - width - 12)
+        top = min(max(24.0, top), frame_height - height - 24)
+        rect = QRectF(left, top, width, height)
+
+        painter.setPen(QPen(QColor(71, 85, 105, 160), 1))
+        painter.setBrush(QColor(255, 255, 255, 242))
+        painter.drawRoundedRect(rect, 7, 7)
+
+        status_name = self._order_status_name(status)
+        painter.setPen(status_color.darker(125))
+        painter.setFont(ui_font(8, QFont.Weight.Bold))
+        painter.drawText(QRectF(left + 8, top + 6, width - 16, 14), Qt.AlignmentFlag.AlignLeft, f"订单 {self._display_value(order.get('id'))}")
+        painter.drawText(QRectF(left + 8, top + 22, width - 16, 14), Qt.AlignmentFlag.AlignLeft, f"状态：{status_name}")
+
+        painter.setPen(QColor("#334155"))
+        painter.setFont(ui_font(7))
+        lines = [
+            f"学生：{self._display_value(order.get('student_id'))}",
+            f"菜品：{self._display_value(order.get('dish_id'))}",
+            f"窗口：{self._display_value(order.get('stall_id'))}",
+        ]
+        for index, line in enumerate(lines):
+            painter.drawText(QRectF(left + 8, top + 38 + index * 11, width - 16, 11), Qt.AlignmentFlag.AlignLeft, line)
+
+    def _is_hovered(self, rect: QRectF) -> bool:
+        if self._hover_scene_pos is None:
+            return False
+        x, y = self._hover_scene_pos
+        return rect.contains(QPointF(x, y))
+
+    def _order_status_name(self, status: str) -> str:
+        names = {
+            "queued": "排队等待",
+            "cooking": "出餐中",
+            "done": "已完成",
+            "cancelled": "已取消",
+        }
+        return names.get(status, status or "-")
 
     def _draw_cook_timer(self, painter: QPainter, stall: dict) -> None:
         point = self._point((stall.get("x"), stall.get("y")))
