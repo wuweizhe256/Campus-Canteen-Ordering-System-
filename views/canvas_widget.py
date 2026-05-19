@@ -3,8 +3,8 @@ from __future__ import annotations
 from math import ceil
 from typing import Any
 
-from PyQt6.QtCore import QRectF, Qt
-from PyQt6.QtGui import QColor, QFont, QPainter, QPen
+from PyQt6.QtCore import QPointF, QRectF, Qt
+from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPolygonF
 from PyQt6.QtWidgets import QWidget
 
 from utils.fonts import ui_font
@@ -57,17 +57,76 @@ class CanvasWidget(QWidget):
         painter.setFont(ui_font(14))
         painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "点击开始仿真")
 
+    def _draw_shadow(self, painter: QPainter, x: float, y: float, width: float, height: float, color: QColor) -> None:
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+        painter.drawEllipse(QRectF(x - width / 2, y - height / 2, width, height))
+
+    def _draw_iso_box(
+        self,
+        painter: QPainter,
+        x: float,
+        y: float,
+        width: float,
+        height: float,
+        depth: float,
+        top_color: QColor,
+        side_color: QColor,
+        edge_color: QColor,
+    ) -> None:
+        left = x - width / 2
+        right = x + width / 2
+        top = y - height / 2
+        bottom = y + height / 2
+        top_poly = QPolygonF([
+            QPointF(left, top),
+            QPointF(right, top),
+            QPointF(right, bottom),
+            QPointF(left, bottom),
+        ])
+        front_poly = QPolygonF([
+            QPointF(left, bottom),
+            QPointF(right, bottom),
+            QPointF(right - depth * 0.55, bottom + depth),
+            QPointF(left - depth * 0.55, bottom + depth),
+        ])
+        right_poly = QPolygonF([
+            QPointF(right, top),
+            QPointF(right, bottom),
+            QPointF(right - depth * 0.55, bottom + depth),
+            QPointF(right - depth * 0.55, top + depth),
+        ])
+        painter.setPen(QPen(edge_color.darker(115), 1.1))
+        painter.setBrush(side_color.darker(108))
+        painter.drawPolygon(front_poly)
+        painter.setBrush(side_color)
+        painter.drawPolygon(right_poly)
+        painter.setBrush(top_color)
+        painter.drawPolygon(top_poly)
+
     def _draw_floor(self, painter: QPainter) -> None:
         width, height = self._frame_size()
-        painter.setPen(QPen(QColor("#dbe4cf"), 1))
-        for x in range(0, int(width) + 1, 56):
-            painter.drawLine(x, 0, x, int(height))
-        for y in range(0, int(height) + 1, 56):
-            painter.drawLine(0, y, int(width), y)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#e7efe2"))
+        painter.drawRoundedRect(QRectF(18, 18, width - 36, height - 36), 18, 18)
 
-        painter.setPen(QPen(QColor("#cbd8be"), 1.4))
-        painter.setBrush(QColor("#edf4e8"))
-        painter.drawRoundedRect(QRectF(18, 18, width - 36, height - 36), 12, 12)
+        painter.setPen(QPen(QColor("#d2dfc9"), 1))
+        for x in range(48, int(width) - 24, 56):
+            painter.drawLine(x, 28, x - 92, int(height) - 34)
+            painter.drawLine(x, 28, x + 92, int(height) - 34)
+        painter.setPen(QPen(QColor("#c7d6bd"), 2))
+        painter.drawRoundedRect(QRectF(18, 18, width - 36, height - 36), 18, 18)
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#d6c8b8"))
+        painter.drawRoundedRect(QRectF(34, 34, width - 68, 84), 12, 12)
+        painter.setBrush(QColor("#d8e5ce"))
+        painter.drawRoundedRect(QRectF(60, self._number(self.frame.get("height"), 800.0) - 96, width - 120, 48), 14, 14)
+        painter.setPen(QPen(QColor("#a98f78"), 3))
+        painter.drawLine(50, 118, int(width - 50), 118)
+        painter.setPen(QColor("#6b4f3d"))
+        painter.setFont(ui_font(10, QFont.Weight.Bold))
+        painter.drawText(QRectF(70, 48, width - 140, 24), Qt.AlignmentFlag.AlignCenter, "靠墙出餐窗口区")
 
     def _draw_path_debug(self, painter: QPainter) -> None:
         painter.setFont(ui_font(8, QFont.Weight.Bold))
@@ -77,6 +136,7 @@ class CanvasWidget(QWidget):
             "bottom": QColor("#16a34a"),
             "aisle": QColor("#64748b"),
             "door": QColor("#1d4ed8"),
+            "tray": QColor("#0f766e"),
             "exit": QColor("#15803d"),
         }
         for path in self.frame.get("walk_paths", []):
@@ -101,16 +161,30 @@ class CanvasWidget(QWidget):
                     int(end_point[1]),
                 )
 
-        painter.setPen(QPen(QColor("#db2777"), 2))
+        painter.setPen(QPen(QColor(220, 38, 38, 145), 1.6))
+        painter.setBrush(QColor(248, 113, 113, 35))
+        for box in self.frame.get("collision_boxes", []):
+            rect = self._rect_frame(box, default_width=1.0, default_height=1.0)
+            if rect is None:
+                continue
+            x, y, width, height, _ = rect
+            painter.drawRoundedRect(QRectF(x - width / 2, y - height / 2, width, height), 5, 5)
+
         for student in self.frame.get("students", []):
             if not isinstance(student, dict):
                 continue
             student_point = self._point((student.get("x"), student.get("y")))
             if student_point is None:
                 continue
+            stuck_time = self._number(student.get("stuck_time"), 0.0)
+            if stuck_time > 1.2:
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor(239, 68, 68, 70))
+                painter.drawEllipse(QRectF(student_point[0] - 22, student_point[1] - 16, 44, 32))
             points = [student_point, *(student.get("path") or [])]
             if len(points) < 2:
                 continue
+            painter.setPen(QPen(QColor("#db2777"), 2))
             for start, end in zip(points, points[1:]):
                 start_point = self._point(start)
                 end_point = self._point(end)
@@ -122,6 +196,11 @@ class CanvasWidget(QWidget):
                     int(end_point[0]),
                     int(end_point[1]),
                 )
+            target = self._point(points[-1])
+            if target is not None:
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor("#db2777"))
+                painter.drawEllipse(QRectF(target[0] - 4, target[1] - 4, 8, 8))
 
     def _draw_header(self, painter: QPainter) -> None:
         frame_width, frame_height = self._frame_size()
@@ -146,24 +225,22 @@ class CanvasWidget(QWidget):
         if point is None:
             return
         x, y = point
-        painter.setPen(QPen(QColor("#1f2937"), 2))
-        painter.setBrush(QColor("#dbeafe"))
-        painter.drawRoundedRect(QRectF(x - 36, y - 36, 72, 72), 6, 6)
+        self._draw_shadow(painter, x, y + 22, 84, 28, QColor(30, 64, 175, 45))
+        self._draw_iso_box(painter, x, y, 82, 54, 18, QColor("#bfdbfe"), QColor("#60a5fa"), QColor("#1d4ed8"))
         painter.setFont(ui_font(11, QFont.Weight.Bold))
-        painter.setPen(QColor("#1d4ed8"))
-        painter.drawText(QRectF(x - 34, y - 10, 68, 28), Qt.AlignmentFlag.AlignCenter, "大门")
+        painter.setPen(QColor("#1e3a8a"))
+        painter.drawText(QRectF(x - 34, y - 12, 68, 28), Qt.AlignmentFlag.AlignCenter, "入口")
 
     def _draw_exit(self, painter: QPainter) -> None:
         point = self._point(self.frame.get("exit"))
         if point is None:
             return
         x, y = point
-        painter.setPen(QPen(QColor("#166534"), 2))
-        painter.setBrush(QColor("#dcfce7"))
-        painter.drawRoundedRect(QRectF(x - 58, y - 58, 116, 116), 8, 8)
+        self._draw_shadow(painter, x, y + 26, 118, 36, QColor(22, 101, 52, 45))
+        self._draw_iso_box(painter, x, y, 116, 70, 20, QColor("#bbf7d0"), QColor("#86efac"), QColor("#15803d"))
         painter.setFont(ui_font(11, QFont.Weight.Bold))
-        painter.setPen(QColor("#15803d"))
-        painter.drawText(QRectF(x - 34, y - 10, 68, 28), Qt.AlignmentFlag.AlignCenter, "出口")
+        painter.setPen(QColor("#166534"))
+        painter.drawText(QRectF(x - 34, y - 12, 68, 28), Qt.AlignmentFlag.AlignCenter, "出口")
 
     def _draw_stalls(self, painter: QPainter) -> None:
         painter.setFont(ui_font(8))
@@ -175,23 +252,28 @@ class CanvasWidget(QWidget):
                 continue
             x, y = point
             self._draw_cook_timer(painter, stall)
-            painter.setPen(QPen(QColor("#334155"), 1.5))
-            painter.setBrush(QColor("#fff7ed"))
-            painter.drawRoundedRect(QRectF(x - 38, y - 26, 76, 48), 6, 6)
+            self._draw_shadow(painter, x, y + 34, 96, 24, QColor(120, 53, 15, 45))
+            self._draw_iso_box(painter, x, y + 2, 88, 46, 16, QColor("#fed7aa"), QColor("#fb923c"), QColor("#9a3412"))
 
             stall_id = int(self._number(stall.get("id"), 0))
             painter.setPen(QColor("#7c2d12"))
-            painter.drawText(QRectF(x - 32, y - 22, 64, 16), Qt.AlignmentFlag.AlignCenter, f"W{stall_id + 1}")
-            self._draw_chef_pig(painter, x, y + 2)
+            painter.setFont(ui_font(8, QFont.Weight.Bold))
+            painter.drawText(QRectF(x - 34, y - 23, 68, 16), Qt.AlignmentFlag.AlignCenter, f"窗口 {stall_id + 1}")
+            self._draw_chef_pig(painter, x, y + 3)
 
             queue_count = int(self._number(stall.get("queue_count"), 0))
-            painter.setPen(QColor("#475569"))
-            painter.drawText(QRectF(x - 28, y + 4, 56, 18), Qt.AlignmentFlag.AlignCenter, f"排队 {queue_count}")
+            painter.setPen(QColor("#7c2d12"))
+            painter.drawText(QRectF(x - 30, y + 11, 60, 18), Qt.AlignmentFlag.AlignCenter, f"{queue_count} 人")
 
+            painter.setPen(QPen(QColor(148, 163, 184, 120), 1))
+            painter.setBrush(QColor(255, 247, 237, 95))
+            painter.drawRoundedRect(QRectF(x - 16, y + 58, 32, 222), 10, 10)
             painter.setPen(QPen(QColor("#cbd5e1"), 1))
+            painter.setBrush(QColor("#fbbf24"))
             queue_x = x
             for index in range(min(queue_count, 9)):
                 queue_y = y + 76 + index * 24
+                self._draw_shadow(painter, queue_x, queue_y + 5, 18, 7, QColor(51, 65, 85, 42))
                 painter.drawEllipse(QRectF(queue_x - 6, queue_y - 6, 12, 12))
 
     def _draw_cook_timer(self, painter: QPainter, stall: dict) -> None:
@@ -238,23 +320,29 @@ class CanvasWidget(QWidget):
             if point is None:
                 continue
             x, y = point
-            painter.setPen(QPen(QColor("#475569"), 1.2))
-            painter.setBrush(QColor("#fef3c7"))
-            painter.drawRoundedRect(QRectF(x - 25, y - 17, 50, 34), 5, 5)
+            self._draw_shadow(painter, x, y + 28, 86, 24, QColor(71, 85, 105, 40))
+            self._draw_iso_box(painter, x, y, 64, 38, 14, QColor("#fde68a"), QColor("#d97706"), QColor("#92400e"))
+            painter.setPen(QPen(QColor("#92400e"), 1.2))
+            painter.drawLine(int(x - 21), int(y + 18), int(x - 25), int(y + 34))
+            painter.drawLine(int(x + 21), int(y + 18), int(x + 17), int(y + 34))
 
-            seat_offsets = [(-34, -28), (26, -28), (-34, 20), (26, 20)]
+            seat_offsets = [(-47, -32), (31, -32), (-47, 24), (31, 24)]
             seats = table.get("seat_frames") or table.get("seats") or []
             for index, (dx, dy) in enumerate(seat_offsets):
                 seat = seats[index] if index < len(seats) else None
                 status = self._seat_status(seat)
-                painter.setBrush(self._seat_color(status))
-                painter.setPen(QPen(QColor("#64748b"), 1))
-                painter.drawEllipse(QRectF(x + dx, y + dy, 16, 16))
+                color = self._seat_color(status)
+                self._draw_shadow(painter, x + dx + 8, y + dy + 13, 22, 9, QColor(51, 65, 85, 38))
+                painter.setBrush(color)
+                painter.setPen(QPen(color.darker(130), 1))
+                painter.drawRoundedRect(QRectF(x + dx, y + dy, 18, 18), 6, 6)
+                painter.setBrush(color.lighter(112))
+                painter.drawEllipse(QRectF(x + dx + 3, y + dy - 4, 12, 10))
 
     def _draw_students(self, painter: QPainter) -> None:
-        for student in self.frame.get("students", []):
-            if not isinstance(student, dict):
-                continue
+        students = [student for student in self.frame.get("students", []) if isinstance(student, dict)]
+        students.sort(key=lambda item: self._number(item.get("y"), 0.0))
+        for student in students:
             self._draw_pig(painter, student)
 
     def _draw_pig(self, painter: QPainter, student: dict) -> None:
@@ -263,29 +351,40 @@ class CanvasWidget(QWidget):
             return
         x, y = point
         state = str(student.get("state") or "unknown")
-        outline = QColor("#be185d")
         fill = self._student_fill_color(state)
+        facing_x = max(-1.0, min(1.0, self._number(student.get("facing_x"), 1.0)))
+        lean = 4.0 if facing_x >= 0 else -4.0
 
-        painter.setPen(QPen(outline, 1.4))
+        self._draw_shadow(painter, x, y + 14, 30, 11, QColor(51, 65, 85, 55))
+        painter.setPen(QPen(fill.darker(145), 1.1))
+        painter.setBrush(fill.darker(108))
+        painter.drawRoundedRect(QRectF(x - 8, y + 2, 18, 18), 7, 7)
+        painter.setPen(QPen(QColor("#475569"), 1.0))
+        painter.drawLine(int(x - 3), int(y + 18), int(x - 8), int(y + 25))
+        painter.drawLine(int(x + 7), int(y + 18), int(x + 13), int(y + 24))
+
+        head_x = x + lean
+        head_y = y - 8
+        painter.setPen(QPen(QColor("#be185d"), 1.4))
         painter.setBrush(fill)
-        painter.drawEllipse(QRectF(x - 12, y - 10, 24, 22))
-
-        painter.setBrush(fill.lighter(105))
-        painter.drawEllipse(QRectF(x - 15, y - 13, 8, 8))
-        painter.drawEllipse(QRectF(x + 7, y - 13, 8, 8))
-
+        painter.drawEllipse(QRectF(head_x - 14, head_y - 12, 28, 25))
+        painter.setBrush(fill.lighter(112))
+        painter.drawEllipse(QRectF(head_x - 16, head_y - 15, 9, 9))
+        painter.drawEllipse(QRectF(head_x + 7, head_y - 15, 9, 9))
         painter.setBrush(QColor("#fecdd3"))
-        painter.drawEllipse(QRectF(x - 7, y - 2, 14, 9))
-
-        painter.setBrush(QColor("#9f1239"))
+        painter.drawEllipse(QRectF(head_x - 8, head_y - 1, 16, 10))
+        painter.setBrush(QColor(255, 255, 255, 120))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(QRectF(x - 4, y + 1, 2.5, 2.5))
-        painter.drawEllipse(QRectF(x + 2, y + 1, 2.5, 2.5))
+        painter.drawEllipse(QRectF(head_x - 8, head_y - 9, 8, 5))
+        painter.setBrush(QColor("#9f1239"))
+        painter.drawEllipse(QRectF(head_x - 4, head_y + 2, 2.5, 2.5))
+        painter.drawEllipse(QRectF(head_x + 2, head_y + 2, 2.5, 2.5))
 
         painter.setPen(QPen(QColor("#831843"), 1.2))
-        painter.drawPoint(int(x - 5), int(y - 4))
-        painter.drawPoint(int(x + 5), int(y - 4))
-        self._draw_student_expression(painter, x, y, state)
+        eye_offset = 2.0 if facing_x >= 0 else -2.0
+        painter.drawPoint(int(head_x - 5 + eye_offset), int(head_y - 4))
+        painter.drawPoint(int(head_x + 5 + eye_offset), int(head_y - 4))
+        self._draw_student_expression(painter, head_x, head_y, state)
 
     def _draw_student_expression(self, painter: QPainter, x: float, y: float, state: str) -> None:
         painter.setFont(ui_font(8, QFont.Weight.Bold))
@@ -324,12 +423,20 @@ class CanvasWidget(QWidget):
             if rect is None:
                 continue
             x, y, width, height, congested = rect
-            painter.setPen(QPen(QColor("#0f766e" if not congested else "#b45309"), 2))
-            painter.setBrush(QColor("#ccfbf1" if not congested else "#fed7aa"))
-            painter.drawRoundedRect(QRectF(x - width / 2, y - height / 2, width, height), 8, 8)
+            edge = QColor("#0f766e" if not congested else "#b45309")
+            top = QColor("#99f6e4" if not congested else "#fed7aa")
+            side = QColor("#14b8a6" if not congested else "#fb923c")
+            self._draw_shadow(painter, x, y + height * 0.34, width * 0.9, 30, QColor(15, 118, 110, 48))
+            self._draw_iso_box(painter, x, y, width, height * 0.58, 24, top, side, edge)
+            painter.setPen(QPen(edge.darker(125), 2))
+            painter.setBrush(QColor("#0f172a"))
+            painter.drawRoundedRect(QRectF(x - width * 0.22, y - 3, width * 0.44, 12), 5, 5)
             painter.setFont(ui_font(9, QFont.Weight.Bold))
             painter.setPen(QColor("#115e59" if not congested else "#9a3412"))
-            painter.drawText(QRectF(x - width / 2, y - 9, width, 20), Qt.AlignmentFlag.AlignCenter, "餐盘回收")
+            painter.drawText(QRectF(x - width / 2, y - height * 0.42, width, 20), Qt.AlignmentFlag.AlignCenter, "碗筷回收")
+            painter.setPen(QPen(QColor("#475569"), 1.2))
+            for index in range(3):
+                painter.drawRoundedRect(QRectF(x + width * 0.25, y - 4 + index * 7, 24, 6), 3, 3)
 
     def _draw_stats_panel(self, painter: QPainter) -> None:
         stats = self.frame.get("stats") or {}
