@@ -344,14 +344,7 @@ class CanvasWidget(QWidget):
                     int(end_point[1]),
                 )
 
-        painter.setPen(QPen(QColor(220, 38, 38, 145), 1.6))
-        painter.setBrush(QColor(248, 113, 113, 35))
-        for box in self.frame.get("collision_boxes", []):
-            rect = self._rect_frame(box, default_width=1.0, default_height=1.0)
-            if rect is None:
-                continue
-            x, y, width, height, _ = rect
-            painter.drawRoundedRect(QRectF(x - width / 2, y - height / 2, width, height), 5, 5)
+        self._draw_obstacles_debug(painter)
 
         for student in self.frame.get("students", []):
             if not isinstance(student, dict):
@@ -442,16 +435,97 @@ class CanvasWidget(QWidget):
             }
         ]
 
-    def _draw_exit(self, painter: QPainter) -> None:
-        point = self._point(self.frame.get("exit"))
+    def _exit_frames(self) -> list[dict[str, Any]]:
+        exits = self.frame.get("exits") if self.frame else None
+        if isinstance(exits, list):
+            frames = [exit_frame for exit_frame in exits if isinstance(exit_frame, dict)]
+            if frames:
+                return frames
+        point = self._point(self.frame.get("exit") if self.frame else None)
         if point is None:
+            return []
+        return [
+            {
+                "id": 0,
+                "x": point[0],
+                "y": point[1],
+                "width": 116.0,
+                "height": 70.0,
+                "is_congested": False,
+            }
+        ]
+
+    def _draw_obstacles_debug(self, painter: QPainter) -> None:
+        obstacle_rects = self._obstacle_rects()
+        if not obstacle_rects:
             return
-        x, y = point
-        self._draw_shadow(painter, x, y + 26, 118, 36, QColor(22, 101, 52, 45))
-        self._draw_iso_box(painter, x, y, 116, 70, 20, QColor("#bbf7d0"), QColor("#86efac"), QColor("#15803d"))
-        painter.setFont(ui_font(11, QFont.Weight.Bold))
-        painter.setPen(QColor("#166534"))
-        painter.drawText(QRectF(x - 34, y - 12, 68, 28), Qt.AlignmentFlag.AlignCenter, "出口")
+        for left, top, right, bottom, kind in obstacle_rects:
+            color = self._obstacle_color(kind)
+            rect = QRectF(left, top, max(1.0, right - left), max(1.0, bottom - top))
+            painter.setPen(QPen(color.darker(130), 1.6))
+            painter.setBrush(QColor(color.red(), color.green(), color.blue(), 42))
+            painter.drawRoundedRect(rect, 5, 5)
+            if kind:
+                painter.setPen(color.darker(150))
+                painter.setFont(ui_font(7, QFont.Weight.Bold))
+                painter.drawText(rect.adjusted(4, 2, -4, -2), Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft, kind)
+
+    def _obstacle_rects(self) -> list[tuple[float, float, float, float, str]]:
+        obstacles = self.frame.get("obstacles") if self.frame else None
+        rects: list[tuple[float, float, float, float, str]] = []
+        if isinstance(obstacles, list):
+            for obstacle in obstacles:
+                if not isinstance(obstacle, dict):
+                    continue
+                left = self._number(obstacle.get("left"), None)
+                top = self._number(obstacle.get("top"), None)
+                right = self._number(obstacle.get("right"), None)
+                bottom = self._number(obstacle.get("bottom"), None)
+                if None in (left, top, right, bottom):
+                    continue
+                rects.append((left, top, right, bottom, str(obstacle.get("kind") or "obstacle")))
+            if rects:
+                return rects
+
+        for box in self.frame.get("collision_boxes", []) if self.frame else []:
+            rect = self._rect_frame(box, default_width=1.0, default_height=1.0)
+            if rect is None:
+                continue
+            x, y, width, height, _ = rect
+            rects.append((x - width / 2, y - height / 2, x + width / 2, y + height / 2, "collision"))
+        return rects
+
+    def _obstacle_color(self, kind: str) -> QColor:
+        colors = {
+            "wall": QColor("#64748b"),
+            "table": QColor("#d97706"),
+            "stall": QColor("#dc2626"),
+            "window": QColor("#dc2626"),
+            "collision": QColor("#ef4444"),
+        }
+        return colors.get(kind, QColor("#ef4444"))
+
+    def _draw_exit(self, painter: QPainter) -> None:
+        exits = self._exit_frames()
+        for exit_frame in exits:
+            rect = self._rect_frame(exit_frame, default_width=116.0, default_height=70.0)
+            if rect is None:
+                continue
+            x, y, width, height, congested = rect
+            exit_id = int(self._number(exit_frame.get("id") if isinstance(exit_frame, dict) else 0, 0))
+            edge = QColor("#b45309" if congested else "#15803d")
+            top = QColor("#fed7aa" if congested else "#bbf7d0")
+            side = QColor("#fb923c" if congested else "#86efac")
+
+            self._draw_shadow(painter, x, y + height * 0.37, width, 36, QColor(22, 101, 52, 45))
+            self._draw_iso_box(painter, x, y, width, height, 20, top, side, edge)
+            painter.setFont(ui_font(10, QFont.Weight.Bold))
+            painter.setPen(edge.darker(115))
+            label = "出口" if len(exits) == 1 else f"出口 {exit_id + 1}"
+            painter.drawText(QRectF(x - width / 2, y - 12, width, 24), Qt.AlignmentFlag.AlignCenter, label)
+            if congested:
+                painter.setFont(ui_font(7, QFont.Weight.Bold))
+                painter.drawText(QRectF(x - width / 2, y + height * 0.2, width, 16), Qt.AlignmentFlag.AlignCenter, "拥堵")
 
     def _draw_stalls(self, painter: QPainter) -> None:
         painter.setFont(ui_font(8))
