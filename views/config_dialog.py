@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -78,6 +79,19 @@ class ConfigDialog(QDialog):
         for spin in (self.two_tables_spin, self.four_tables_spin, self.six_tables_spin):
             spin.valueChanged.connect(self._update_table_count)
 
+        self.entrance_count_spin = QSpinBox()
+        self.entrance_count_spin.setRange(1, 8)
+        self.entrance_count_spin.setValue(1)
+        self.entrance_count_spin.setSuffix(" \u4e2a")
+
+        self.exit_count_spin = QSpinBox()
+        self.exit_count_spin.setRange(1, 8)
+        self.exit_count_spin.setValue(1)
+        self.exit_count_spin.setSuffix(" \u4e2a")
+
+        self.show_path_debug_checkbox = QCheckBox("\u9ed8\u8ba4\u663e\u793a\u8def\u5f84\u8c03\u8bd5\u5c42")
+        self.show_obstacle_layer_checkbox = QCheckBox("\u9ed8\u8ba4\u663e\u793a\u969c\u788d\u7269\u5c42")
+
         self.total_students_spin = QSpinBox()
         self.total_students_spin.setRange(10, 100000)
         self.total_students_spin.setValue(120)
@@ -114,6 +128,14 @@ class ConfigDialog(QDialog):
         p2_group = QGroupBox("P2 \u540c\u884c\u7ec4 / \u591a\u684c\u578b")
         p2_group.setLayout(p2_form)
 
+        p3_form = QFormLayout()
+        p3_form.addRow("\u5165\u53e3\u6570\u91cf", self.entrance_count_spin)
+        p3_form.addRow("\u51fa\u53e3\u6570\u91cf", self.exit_count_spin)
+        p3_form.addRow(self.show_path_debug_checkbox)
+        p3_form.addRow(self.show_obstacle_layer_checkbox)
+        p3_group = QGroupBox("P3 \u7a7a\u95f4 / \u8def\u5f84\u8c03\u8bd5")
+        p3_group.setLayout(p3_form)
+
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -124,10 +146,11 @@ class ConfigDialog(QDialog):
         layout.addLayout(form)
         layout.addWidget(p1_group)
         layout.addWidget(p2_group)
+        layout.addWidget(p3_group)
         layout.addWidget(buttons)
         self.setLayout(layout)
         self._update_table_count()
-        self.resize(500, 430)
+        self.resize(520, 560)
 
     def _update_table_count(self) -> None:
         self.tables_spin.setValue(
@@ -151,6 +174,10 @@ class ConfigDialog(QDialog):
             two_seat_table_count=self.two_tables_spin.value(),
             four_seat_table_count=self.four_tables_spin.value(),
             six_seat_table_count=self.six_tables_spin.value(),
+            entrance_count=self.entrance_count_spin.value(),
+            exit_count=self.exit_count_spin.value(),
+            show_path_debug_layer=self.show_path_debug_checkbox.isChecked(),
+            show_obstacle_layer=self.show_obstacle_layer_checkbox.isChecked(),
             seed=None if seed == 0 else seed,
             total_student_count=total_students,
             max_active_students=max(55, total_students),
