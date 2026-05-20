@@ -404,15 +404,43 @@ class CanvasWidget(QWidget):
         painter.drawText(QRectF(28, frame_height - 38, frame_width - 56, 30), Qt.AlignmentFlag.AlignLeft, text)
 
     def _draw_door(self, painter: QPainter) -> None:
-        point = self._point(self.frame.get("door"))
+        entrances = self._entrance_frames()
+        for entrance in entrances:
+            rect = self._rect_frame(entrance, default_width=82.0, default_height=54.0)
+            if rect is None:
+                continue
+            x, y, width, height, _ = rect
+            weight = self._number(entrance.get("weight") if isinstance(entrance, dict) else None, 1.0)
+            entrance_id = int(self._number(entrance.get("id") if isinstance(entrance, dict) else 0, 0))
+
+            self._draw_shadow(painter, x, y + height * 0.42, width, 28, QColor(30, 64, 175, 45))
+            self._draw_iso_box(painter, x, y, width, height, 18, QColor("#bfdbfe"), QColor("#60a5fa"), QColor("#1d4ed8"))
+            painter.setFont(ui_font(10, QFont.Weight.Bold))
+            painter.setPen(QColor("#1e3a8a"))
+            label = "入口" if len(entrances) == 1 else f"入口 {entrance_id + 1}"
+            painter.drawText(QRectF(x - width / 2, y - 12, width, 24), Qt.AlignmentFlag.AlignCenter, label)
+            painter.setFont(ui_font(7, QFont.Weight.Bold))
+            painter.drawText(QRectF(x - width / 2, y + height * 0.2, width, 16), Qt.AlignmentFlag.AlignCenter, f"权重 {weight:g}")
+
+    def _entrance_frames(self) -> list[dict[str, Any]]:
+        entrances = self.frame.get("entrances") if self.frame else None
+        if isinstance(entrances, list):
+            frames = [entrance for entrance in entrances if isinstance(entrance, dict)]
+            if frames:
+                return frames
+        point = self._point(self.frame.get("door") if self.frame else None)
         if point is None:
-            return
-        x, y = point
-        self._draw_shadow(painter, x, y + 22, 84, 28, QColor(30, 64, 175, 45))
-        self._draw_iso_box(painter, x, y, 82, 54, 18, QColor("#bfdbfe"), QColor("#60a5fa"), QColor("#1d4ed8"))
-        painter.setFont(ui_font(11, QFont.Weight.Bold))
-        painter.setPen(QColor("#1e3a8a"))
-        painter.drawText(QRectF(x - 34, y - 12, 68, 28), Qt.AlignmentFlag.AlignCenter, "入口")
+            return []
+        return [
+            {
+                "id": 0,
+                "x": point[0],
+                "y": point[1],
+                "width": 82.0,
+                "height": 54.0,
+                "weight": 1.0,
+            }
+        ]
 
     def _draw_exit(self, painter: QPainter) -> None:
         point = self._point(self.frame.get("exit"))
