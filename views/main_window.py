@@ -62,6 +62,8 @@ class MainWindow(QMainWindow):
         self.time_scale_slider.setToolTip("调整仿真内时间和现实时间的比例")
         self.path_checkbox = QCheckBox("显示调试层")
         self.path_checkbox.setObjectName("PathToggle")
+        self.obstacle_checkbox = QCheckBox("障碍物层")
+        self.obstacle_checkbox.setObjectName("PathToggle")
         self.zoom_label = QLabel("画布缩放 100%")
         self.zoom_label.setObjectName("ToolbarLabel")
         self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
@@ -77,6 +79,7 @@ class MainWindow(QMainWindow):
         self.stop_button.clicked.connect(self.stopRequested.emit)
         self.time_scale_slider.valueChanged.connect(self._time_scale_slider_changed)
         self.path_checkbox.toggled.connect(self.canvas.set_show_paths)
+        self.obstacle_checkbox.toggled.connect(self.canvas.set_show_obstacles)
         self.zoom_slider.valueChanged.connect(self._zoom_slider_changed)
         self.canvas.zoomChanged.connect(self._canvas_zoom_changed)
         self.reset_view_button.clicked.connect(self.canvas.reset_view)
@@ -93,6 +96,7 @@ class MainWindow(QMainWindow):
         top_bar.addWidget(self.time_scale_label)
         top_bar.addWidget(self.time_scale_slider)
         top_bar.addWidget(self.path_checkbox)
+        top_bar.addWidget(self.obstacle_checkbox)
         top_bar.addWidget(self.zoom_label)
         top_bar.addWidget(self.zoom_slider)
         top_bar.addWidget(self.reset_view_button)
@@ -130,6 +134,8 @@ class MainWindow(QMainWindow):
 
     def start_simulation(self, config: SimulationConfig) -> None:
         config = replace(config, time_scale=float(self.time_scale_slider.value()))
+        self.path_checkbox.setChecked(config.show_path_debug_layer)
+        self.obstacle_checkbox.setChecked(config.show_obstacle_layer)
         self._running = True
         self._paused = False
         self.start_button.setEnabled(False)

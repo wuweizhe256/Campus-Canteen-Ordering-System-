@@ -18,6 +18,7 @@ class CanvasWidget(QWidget):
         self.setMinimumSize(900, 620)
         self.frame: dict | None = None
         self.show_paths = False
+        self.show_obstacles = False
         self.view_zoom = 1.0
         self._pan_offset = QPointF(0.0, 0.0)
         self._drag_start: QPointF | None = None
@@ -30,6 +31,10 @@ class CanvasWidget(QWidget):
 
     def set_show_paths(self, show_paths: bool) -> None:
         self.show_paths = show_paths
+        self.update()
+
+    def set_show_obstacles(self, show_obstacles: bool) -> None:
+        self.show_obstacles = show_obstacles
         self.update()
 
     def _frame_with_p1_fallback(self, frame: dict) -> dict:
@@ -164,6 +169,8 @@ class CanvasWidget(QWidget):
         self._draw_floor(painter)
         if self.show_paths:
             self._draw_path_debug(painter)
+        if self.show_obstacles:
+            self._draw_obstacles_debug(painter)
         self._draw_door(painter)
         self._draw_exit(painter)
         self._draw_tray_return_points(painter)
@@ -344,8 +351,6 @@ class CanvasWidget(QWidget):
                     int(end_point[1]),
                 )
 
-        self._draw_obstacles_debug(painter)
-
         for student in self.frame.get("students", []):
             if not isinstance(student, dict):
                 continue
@@ -377,6 +382,9 @@ class CanvasWidget(QWidget):
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(QColor("#db2777"))
                 painter.drawEllipse(QRectF(target[0] - 4, target[1] - 4, 8, 8))
+                painter.setPen(QColor("#9d174d"))
+                painter.setFont(ui_font(7, QFont.Weight.Bold))
+                painter.drawText(QRectF(target[0] + 5, target[1] - 8, 34, 14), Qt.AlignmentFlag.AlignLeft, f"S{self._display_value(student.get('id'))}")
 
     def _draw_header(self, painter: QPainter) -> None:
         frame_width, frame_height = self._frame_size()

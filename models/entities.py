@@ -31,6 +31,10 @@ class SimulationConfig:
     two_seat_table_count: int = 6
     four_seat_table_count: int = 14
     six_seat_table_count: int = 4
+    entrance_count: int = 1
+    exit_count: int = 1
+    show_path_debug_layer: bool = False
+    show_obstacle_layer: bool = False
     seed: int | None = None
     total_student_count: int = 120
     max_active_students: int = 120
