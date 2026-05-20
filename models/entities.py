@@ -23,6 +23,10 @@ class SimulationConfig:
     time_scale: float = 6.0
     stall_count: int = 10
     table_count: int = 24
+    dish_preference_weight: float = 0.4
+    price_weight: float = 0.2
+    default_dish_stock: int = 24
+    low_stock_threshold: int = 3
     companion_ratio: float = 0.25
     two_seat_table_count: int = 6
     four_seat_table_count: int = 14

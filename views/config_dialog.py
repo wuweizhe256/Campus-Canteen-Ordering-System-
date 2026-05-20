@@ -36,6 +36,26 @@ class ConfigDialog(QDialog):
         self.tables_spin.setSuffix(" \u5f20")
         self.tables_spin.setEnabled(False)
 
+        self.dish_preference_weight_spin = QSpinBox()
+        self.dish_preference_weight_spin.setRange(0, 100)
+        self.dish_preference_weight_spin.setValue(40)
+        self.dish_preference_weight_spin.setSuffix(" %")
+
+        self.price_weight_spin = QSpinBox()
+        self.price_weight_spin.setRange(0, 100)
+        self.price_weight_spin.setValue(20)
+        self.price_weight_spin.setSuffix(" %")
+
+        self.default_dish_stock_spin = QSpinBox()
+        self.default_dish_stock_spin.setRange(0, 9999)
+        self.default_dish_stock_spin.setValue(24)
+        self.default_dish_stock_spin.setSuffix(" \u4efd")
+
+        self.low_stock_threshold_spin = QSpinBox()
+        self.low_stock_threshold_spin.setRange(0, 999)
+        self.low_stock_threshold_spin.setValue(3)
+        self.low_stock_threshold_spin.setSuffix(" \u4efd")
+
         self.companion_ratio_spin = QSpinBox()
         self.companion_ratio_spin.setRange(0, 100)
         self.companion_ratio_spin.setValue(25)
@@ -76,6 +96,14 @@ class ConfigDialog(QDialog):
         form.addRow("\u751f\u6210\u5b66\u751f\u603b\u6570", self.total_students_spin)
         form.addRow("\u968f\u673a\u79cd\u5b50", self.seed_spin)
 
+        p1_form = QFormLayout()
+        p1_form.addRow("\u83dc\u54c1\u504f\u597d\u6743\u91cd", self.dish_preference_weight_spin)
+        p1_form.addRow("\u4ef7\u683c\u6743\u91cd", self.price_weight_spin)
+        p1_form.addRow("\u9ed8\u8ba4\u83dc\u54c1\u5e93\u5b58", self.default_dish_stock_spin)
+        p1_form.addRow("\u4f4e\u5e93\u5b58\u9608\u503c", self.low_stock_threshold_spin)
+        p1_group = QGroupBox("P1 \u83dc\u54c1 / \u8ba2\u5355 / \u5e93\u5b58")
+        p1_group.setLayout(p1_form)
+
         p2_form = QFormLayout()
         p2_form.addRow("\u540c\u884c\u6bd4\u4f8b", self.companion_ratio_spin)
         table_type_row = QHBoxLayout()
@@ -94,11 +122,12 @@ class ConfigDialog(QDialog):
 
         layout = QVBoxLayout()
         layout.addLayout(form)
+        layout.addWidget(p1_group)
         layout.addWidget(p2_group)
         layout.addWidget(buttons)
         self.setLayout(layout)
         self._update_table_count()
-        self.resize(460, 320)
+        self.resize(500, 430)
 
     def _update_table_count(self) -> None:
         self.tables_spin.setValue(
@@ -114,6 +143,10 @@ class ConfigDialog(QDialog):
             sim_minutes=self.minutes_spin.value(),
             stall_count=self.stalls_spin.value(),
             table_count=self.tables_spin.value(),
+            dish_preference_weight=self.dish_preference_weight_spin.value() / 100.0,
+            price_weight=self.price_weight_spin.value() / 100.0,
+            default_dish_stock=self.default_dish_stock_spin.value(),
+            low_stock_threshold=self.low_stock_threshold_spin.value(),
             companion_ratio=self.companion_ratio_spin.value() / 100.0,
             two_seat_table_count=self.two_tables_spin.value(),
             four_seat_table_count=self.four_tables_spin.value(),
