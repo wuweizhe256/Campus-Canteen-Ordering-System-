@@ -32,6 +32,8 @@ class FrameDrivenRecorder:
         self.order_status_history: dict[int, list[str]] = {}
         self.order_dish_by_id: dict[int, int] = {}
         self.student_choice_history: dict[int, list[tuple[int | None, int | None]]] = {}
+        self.entrance_by_student: dict[int, int] = {}
+        self.exit_by_student: dict[int, int] = {}
         self.last_game_time = 0.0
         self.max_active_students = 0
         self.stall_max_queue: dict[int, int] = {}
@@ -104,6 +106,12 @@ class FrameDrivenRecorder:
             choice_history = self.student_choice_history.setdefault(sid, [])
             if not choice_history or choice_history[-1] != choice:
                 choice_history.append(choice)
+            entrance_id = student.get("entrance_id")
+            if entrance_id is not None:
+                self.entrance_by_student.setdefault(sid, int(entrance_id))
+            exit_id = student.get("exit_id")
+            if exit_id is not None:
+                self.exit_by_student[sid] = int(exit_id)
 
             if sid not in self.spawn_time:
                 self.spawn_time[sid] = game_time
@@ -194,8 +202,8 @@ def run_self_test() -> None:
     print_p1_flow_snapshot(recorder)
     print_p2_group_snapshot(recorder.last_frame)
     print_p2_table_snapshot(recorder.last_frame)
-    print_p3_entrance_snapshot(recorder.last_frame)
-    print_p3_exit_snapshot(recorder.last_frame)
+    print_p3_entrance_snapshot(recorder.last_frame, recorder)
+    print_p3_exit_snapshot(recorder.last_frame, recorder)
     print_p3_obstacle_snapshot(recorder.last_frame)
     run_p1_sold_out_self_test()
 
@@ -240,11 +248,6 @@ def print_p1_snapshot(frame: dict[str, Any] | None) -> None:
     print(f"total_orders: {total_orders}")
     print(f"sold_out_stalls: {sold_out_stalls}")
     print(f"student_choices_sample: {student_choices}")
-    if frame.get("stats") is not None:
-        stats = frame["stats"]
-        print(f"dish_sales: {stats.get('dish_sales', [])}")
-        print(f"sold_out_counts: {stats.get('sold_out_counts', [])}")
-        print(f"avg_order_wait_time: {stats.get('avg_order_wait_time')}")
 
 
 def print_p1_flow_snapshot(recorder: FrameDrivenRecorder) -> None:
@@ -381,15 +384,17 @@ def print_p2_table_snapshot(frame: dict[str, Any] | None) -> None:
         seat_counts[table_type] = seat_counts.get(table_type, 0) + int(table.get("seat_count") or 0)
         occupied_counts[table_type] = occupied_counts.get(table_type, 0) + int(table.get("occupied") or 0)
 
-    stats = frame.get("stats") if isinstance(frame.get("stats"), dict) else {}
     print(f"table_counts: {dict(sorted(table_counts.items()))}")
     print(f"seat_counts: {dict(sorted(seat_counts.items()))}")
     print(f"occupied_counts: {dict(sorted(occupied_counts.items()))}")
-    print(f"table_type_utilization: {stats.get('table_type_utilization', {})}")
-    print(f"group_same_table_rate: {stats.get('group_same_table_rate')}")
+    utilization = {
+        table_type: occupied_counts.get(table_type, 0) / seat_count if seat_count else None
+        for table_type, seat_count in sorted(seat_counts.items())
+    }
+    print(f"table_type_utilization_from_frame: {utilization}")
 
 
-def print_p3_entrance_snapshot(frame: dict[str, Any] | None) -> None:
+def print_p3_entrance_snapshot(frame: dict[str, Any] | None, recorder: FrameDrivenRecorder) -> None:
     if frame is None:
         print("p3_entrance_snapshot: no frame captured")
         return
@@ -411,13 +416,15 @@ def print_p3_entrance_snapshot(frame: dict[str, Any] | None) -> None:
             continue
         entrance_key = int(entrance_id)
         students_by_entrance[entrance_key] = students_by_entrance.get(entrance_key, 0) + 1
-    stats = frame.get("stats") if isinstance(frame.get("stats"), dict) else {}
+    total_flow: dict[int, int] = {}
+    for entrance_id in recorder.entrance_by_student.values():
+        total_flow[entrance_id] = total_flow.get(entrance_id, 0) + 1
     print(f"entrances: {entrances}")
     print(f"active_students_by_entrance: {dict(sorted(students_by_entrance.items()))}")
-    print(f"entrance_flow: {stats.get('entrance_flow', [])}")
+    print(f"entrance_flow_from_seen_students: {dict(sorted(total_flow.items()))}")
 
 
-def print_p3_exit_snapshot(frame: dict[str, Any] | None) -> None:
+def print_p3_exit_snapshot(frame: dict[str, Any] | None, recorder: FrameDrivenRecorder) -> None:
     if frame is None:
         print("p3_exit_snapshot: no frame captured")
         return
@@ -439,10 +446,12 @@ def print_p3_exit_snapshot(frame: dict[str, Any] | None) -> None:
             continue
         exit_key = int(exit_id)
         leaving_by_exit[exit_key] = leaving_by_exit.get(exit_key, 0) + 1
-    stats = frame.get("stats") if isinstance(frame.get("stats"), dict) else {}
+    total_flow: dict[int, int] = {}
+    for exit_id in recorder.exit_by_student.values():
+        total_flow[exit_id] = total_flow.get(exit_id, 0) + 1
     print(f"exits: {exits}")
     print(f"active_students_by_exit: {dict(sorted(leaving_by_exit.items()))}")
-    print(f"exit_flow: {stats.get('exit_flow', [])}")
+    print(f"exit_flow_from_seen_students: {dict(sorted(total_flow.items()))}")
 
 
 def print_p3_obstacle_snapshot(frame: dict[str, Any] | None) -> None:

@@ -13,10 +13,6 @@ P0_EVENT_TYPES = {
     "eating_finished",
     "student_left",
 }
-P1_EVENT_TYPES = {
-    "order_created",
-    "dish_sold_out",
-}
 
 
 @dataclass(frozen=True)
@@ -27,8 +23,6 @@ class EventRecordP0:
     stall_id: int | None = None
     table_id: int | None = None
     seat_index: int | None = None
-    dish_id: int | None = None
-    order_id: int | None = None
     from_state: str | None = None
     to_state: str | None = None
 
@@ -41,8 +35,6 @@ class EventRecordP0:
             stall_id=_optional_int(value.get("stall_id")),
             table_id=_optional_int(value.get("table_id")),
             seat_index=_optional_int(value.get("seat_index")),
-            dish_id=_optional_int(value.get("dish_id")),
-            order_id=_optional_int(value.get("order_id")),
             from_state=_optional_str(value.get("from_state")),
             to_state=_optional_str(value.get("to_state")),
         )
@@ -61,24 +53,6 @@ class StallQueueStats:
 
 
 @dataclass(frozen=True)
-class DishSalesStats:
-    dish_id: int
-    sales_count: int
-
-    def to_dict(self) -> dict[str, int]:
-        return asdict(self)
-
-
-@dataclass(frozen=True)
-class DishSoldOutStats:
-    dish_id: int
-    sold_out_count: int
-
-    def to_dict(self) -> dict[str, int]:
-        return asdict(self)
-
-
-@dataclass(frozen=True)
 class StatsFrameP0:
     avg_wait_time: float | None
     avg_total_time: float | None
@@ -91,9 +65,6 @@ class StatsFrameP0:
     reroute_count: int
     avg_queue_length: float | None
     tray_return_queue_length: int
-    dish_sales: list[DishSalesStats]
-    sold_out_counts: list[DishSoldOutStats]
-    avg_order_wait_time: float | None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -108,9 +79,6 @@ class StatsFrameP0:
             "reroute_count": self.reroute_count,
             "avg_queue_length": self.avg_queue_length,
             "tray_return_queue_length": self.tray_return_queue_length,
-            "dish_sales": [item.to_dict() for item in self.dish_sales],
-            "sold_out_counts": [item.to_dict() for item in self.sold_out_counts],
-            "avg_order_wait_time": self.avg_order_wait_time,
         }
 
 
@@ -140,14 +108,13 @@ class DataRecorder:
         self.events_by_student: dict[int, list[EventRecordP0]] = defaultdict(list)
         self.events_by_stall: dict[int, list[EventRecordP0]] = defaultdict(list)
         self.events_by_seat: dict[tuple[int, int], list[EventRecordP0]] = defaultdict(list)
-        self.events_by_order: dict[int, list[EventRecordP0]] = defaultdict(list)
         self.queue_samples: list[QueueLengthSample] = []
         self.runtime_samples: list[RuntimeStatsSample] = []
         self.issues: list[str] = []
 
     def record_event(self, event: EventRecordP0 | dict[str, Any]) -> None:
         record = EventRecordP0.from_mapping(event) if isinstance(event, dict) else event
-        if record.event_type not in P0_EVENT_TYPES and record.event_type not in P1_EVENT_TYPES:
+        if record.event_type not in P0_EVENT_TYPES:
             self.issues.append(f"unknown event_type: {record.event_type}")
             return
 
@@ -158,8 +125,6 @@ class DataRecorder:
             self.events_by_stall[record.stall_id].append(record)
         if record.table_id is not None and record.seat_index is not None:
             self.events_by_seat[(record.table_id, record.seat_index)].append(record)
-        if record.order_id is not None:
-            self.events_by_order[record.order_id].append(record)
 
     def feed_event(self, event: EventRecordP0 | dict[str, Any]) -> None:
         self.record_event(event)
@@ -225,7 +190,6 @@ class DataRecorder:
         events = sorted(self.events, key=_event_sort_key)
         avg_wait_time = self._average_duration_by_student("queue_started", "food_ready")
         avg_total_time = self._average_duration_by_student("student_spawned", "student_left")
-        avg_order_wait_time = self._average_duration_by_order("order_created", "food_ready")
         max_active_students = self._max_active_students(events)
         stall_queue_stats = self._stall_queue_stats(events)
         seat_utilization = self._seat_utilization(current_time)
@@ -242,9 +206,6 @@ class DataRecorder:
             reroute_count=runtime.reroute_count if runtime else 0,
             avg_queue_length=runtime.avg_queue_length if runtime else None,
             tray_return_queue_length=runtime.tray_return_queue_length if runtime else 0,
-            dish_sales=self._dish_sales_stats(),
-            sold_out_counts=self._sold_out_stats(),
-            avg_order_wait_time=avg_order_wait_time,
         )
 
     def _average_duration_by_student(self, start_type: str, end_type: str) -> float | None:
@@ -271,45 +232,6 @@ class DataRecorder:
                 continue
             samples.append(duration)
         return _average(samples)
-
-    def _average_duration_by_order(self, start_type: str, end_type: str) -> float | None:
-        samples: list[float] = []
-        for order_id, order_events in self.events_by_order.items():
-            start = _first_event(order_events, start_type)
-            if start is None:
-                continue
-            end = _first_event(order_events, end_type, min_time=start.game_time)
-            if end is None:
-                continue
-
-            duration = end.game_time - start.game_time
-            if duration < 0:
-                self.issues.append(
-                    f"negative duration for order {order_id}: {start_type}->{end_type}"
-                )
-                continue
-            samples.append(duration)
-        return _average(samples)
-
-    def _dish_sales_stats(self) -> list[DishSalesStats]:
-        counts: dict[int, int] = defaultdict(int)
-        for event in self.events:
-            if event.event_type == "food_ready" and event.dish_id is not None:
-                counts[event.dish_id] += 1
-        return [
-            DishSalesStats(dish_id=dish_id, sales_count=count)
-            for dish_id, count in sorted(counts.items())
-        ]
-
-    def _sold_out_stats(self) -> list[DishSoldOutStats]:
-        counts: dict[int, int] = defaultdict(int)
-        for event in self.events:
-            if event.event_type == "dish_sold_out" and event.dish_id is not None:
-                counts[event.dish_id] += 1
-        return [
-            DishSoldOutStats(dish_id=dish_id, sold_out_count=count)
-            for dish_id, count in sorted(counts.items())
-        ]
 
     def _max_active_students(self, events: Iterable[EventRecordP0]) -> int:
         active = 0
