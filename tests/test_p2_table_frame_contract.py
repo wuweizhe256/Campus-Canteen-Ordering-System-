@@ -38,6 +38,12 @@ class P2TableFrameContractTest(unittest.TestCase):
         self.assertEqual(counts_by_type, {"two": 2, "four": 3, "six": 1})
         self.assertEqual(seats_by_type, {"two": 2, "four": 4, "six": 6})
 
+        self.assertEqual(
+            frame["stats"]["table_type_utilization"],
+            {"two": 0.0, "four": 0.0, "six": 0.0},
+        )
+        self.assertIsNone(frame["stats"]["group_same_table_rate"])
+
 
 if __name__ == "__main__":
     unittest.main()
