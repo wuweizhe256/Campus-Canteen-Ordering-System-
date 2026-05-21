@@ -1281,24 +1281,7 @@ class SimulationWorker(QObject):
             "stats": stats,
             "walk_paths": self._build_walk_paths(),
             "collision_boxes": self._build_collision_boxes(),
-            "stalls": [
-                {
-                    "id": stall.id,
-                    "x": stall.x,
-                    "y": stall.y,
-                    "meat_ratio": stall.meat_ratio,
-                    "veg_ratio": stall.veg_ratio,
-                    "cook_time": stall.cook_time,
-                    "cook_remaining": self._stall_cook_remaining(stall),
-                    "cook_progress": self._stall_cook_progress(stall),
-                    "queue_count": len(stall.queue),
-                    "status": stall.status.value,
-                    "is_congested": len(stall.queue) >= 8,
-                    "dishes": [self._dish_frame(dish) for dish in stall.dishes],
-                    "orders": [self._order_frame(order) for order in stall.orders],
-                }
-                for stall in self.stalls
-            ],
+            "stalls": [self._stall_frame(stall) for stall in self.stalls],
             "tables": [
                 {
                     "id": table.id,
@@ -1318,56 +1301,80 @@ class SimulationWorker(QObject):
                 for table in self.tables
             ],
             "students": [
-                {
-                    "id": student.id,
-                    "x": student.x,
-                    "y": student.y,
-                    "target_x": student.target_x,
-                    "target_y": student.target_y,
-                    "path": list(student.path),
-                    "state": student.state.value,
-                    "meat_pref": student.meat_pref,
-                    "veg_pref": student.veg_pref,
-                    "preferences": dict(student.preferences),
-                    "dish_id": student.dish_id,
-                    "order_id": student.order_id,
-                    "group_id": student.group_id,
-                    "group_size": student.group_size,
-                    "stall_id": student.stall_id,
-                    "table_id": student.table_id,
-                    "seat_index": student.seat_index,
-                    "actual_speed": student.actual_speed,
-                    "stuck_time": student.stuck_time,
-                    "reroute_count": student.reroute_count,
-                    "facing_x": student.facing_x,
-                    "facing_y": student.facing_y,
-                }
+                self._student_frame(student)
                 for student in self.students.values()
                 if student.state != StudentState.DONE
             ],
         }
 
+    def _stall_frame(self, stall: Stall) -> dict[str, Any]:
+        dishes = stall.dishes or []
+        orders = stall.orders or []
+        queue_count = len(stall.queue or [])
+        return {
+            "id": stall.id,
+            "x": stall.x,
+            "y": stall.y,
+            "meat_ratio": stall.meat_ratio,
+            "veg_ratio": stall.veg_ratio,
+            "cook_time": stall.cook_time,
+            "cook_remaining": self._stall_cook_remaining(stall),
+            "cook_progress": self._stall_cook_progress(stall),
+            "queue_count": queue_count,
+            "status": stall.status.value if isinstance(stall.status, StallStatus) else str(stall.status),
+            "is_congested": queue_count >= 8,
+            "dishes": [self._dish_frame(dish) for dish in dishes],
+            "orders": [self._order_frame(order) for order in orders],
+        }
+
     def _dish_frame(self, dish: Dish) -> dict[str, Any]:
         return {
             "id": dish.id,
-            "name": dish.name,
-            "features": dict(dish.features),
-            "price": round(dish.price, 2),
-            "stock": dish.stock,
-            "cook_time": dish.cook_time,
-            "available": dish.available,
+            "name": dish.name or "",
+            "features": dict(dish.features or {}),
+            "price": round(float(dish.price), 2),
+            "stock": max(0, int(dish.stock)),
+            "cook_time": float(dish.cook_time),
+            "available": bool(dish.available),
         }
 
     def _order_frame(self, order: Order) -> dict[str, Any]:
+        status = order.status.value if isinstance(order.status, OrderStatus) else str(order.status)
         return {
             "id": order.id,
             "student_id": order.student_id,
             "stall_id": order.stall_id,
             "dish_id": order.dish_id,
-            "created_at": order.created_at,
+            "created_at": float(order.created_at),
             "started_at": order.started_at,
-            "finished_at": order.finished_at if order.status == OrderStatus.DONE else None,
-            "status": order.status.value,
+            "finished_at": order.finished_at if status == OrderStatus.DONE.value else None,
+            "status": status,
+        }
+
+    def _student_frame(self, student: Student) -> dict[str, Any]:
+        return {
+            "id": student.id,
+            "x": student.x,
+            "y": student.y,
+            "target_x": student.target_x,
+            "target_y": student.target_y,
+            "path": list(student.path or []),
+            "state": student.state.value if isinstance(student.state, StudentState) else str(student.state),
+            "meat_pref": student.meat_pref,
+            "veg_pref": student.veg_pref,
+            "preferences": dict(student.preferences or {}),
+            "dish_id": student.dish_id,
+            "order_id": student.order_id,
+            "group_id": student.group_id,
+            "group_size": student.group_size,
+            "stall_id": student.stall_id,
+            "table_id": student.table_id,
+            "seat_index": student.seat_index,
+            "actual_speed": student.actual_speed,
+            "stuck_time": student.stuck_time,
+            "reroute_count": student.reroute_count,
+            "facing_x": student.facing_x,
+            "facing_y": student.facing_y,
         }
 
     def _stall_cook_remaining(self, stall: Stall) -> float:
