@@ -11,6 +11,7 @@ from models.data_recorder import DataRecorder, EventRecordP0
 from models.entities import (
     Dish,
     Entrance,
+    Exit,
     Order,
     OrderStatus,
     RunSummary,
@@ -46,6 +47,8 @@ class SimulationWorker(QObject):
         self.exit = (1224.0, 710.0)
         self.entrances: list[Entrance] = []
         self.entrance_flow_counts: dict[int, int] = {}
+        self.exits: list[Exit] = []
+        self.exit_flow_counts: dict[int, int] = {}
         self.tray_return_points: list[tuple[float, float, float, float]] = []
         self.stalls: list[Stall] = []
         self.tables: list[Table] = []
@@ -121,6 +124,7 @@ class SimulationWorker(QObject):
 
     def _initialize(self) -> None:
         self._build_entrances()
+        self._build_exits()
         self._build_stalls()
         self._build_tables()
         self._build_tray_return_points()
@@ -133,6 +137,7 @@ class SimulationWorker(QObject):
         self.served_students = 0
         self.max_active_students_seen = 0
         self.entrance_flow_counts = {entrance.id: 0 for entrance in self.entrances}
+        self.exit_flow_counts = {exit_area.id: 0 for exit_area in self.exits}
         self.data_recorder = DataRecorder(
             total_seats=sum(len(table.seats) for table in self.tables),
             duration=self.config.duration_game_seconds,
@@ -162,6 +167,14 @@ class SimulationWorker(QObject):
         if not self.entrances or all(entrance.weight <= 0 for entrance in self.entrances):
             self.entrances = [Entrance(0, self.door[0], self.door[1], 96.0, 104.0, 1.0)]
         self.door = (self.entrances[0].x, self.entrances[0].y)
+
+    def _build_exits(self) -> None:
+        self.exits = [
+            Exit(0, 1224.0, 710.0, 116.0, 116.0),
+            Exit(1, 1224.0, 430.0, 116.0, 116.0),
+            Exit(2, 1224.0, 180.0, 116.0, 116.0),
+        ]
+        self.exit = (self.exits[0].x, self.exits[0].y)
 
     def _build_stalls(self) -> None:
         self.stalls.clear()
@@ -587,6 +600,10 @@ class SimulationWorker(QObject):
                 if arrived or self._is_inside_exit(student):
                     previous_state = student.state
                     student.state = StudentState.DONE
+                    if student.exit_id is not None:
+                        self.exit_flow_counts[student.exit_id] = (
+                            self.exit_flow_counts.get(student.exit_id, 0) + 1
+                        )
                     self._record_student_event(
                         "student_left",
                         student,
@@ -866,6 +883,9 @@ class SimulationWorker(QObject):
         return self._compact_path(points)
 
     def _set_exit_path(self, student: Student) -> None:
+        exit_area = self._choose_exit(student)
+        student.exit_id = exit_area.id
+        exit_point = (exit_area.x, exit_area.y)
         if student.table_id is None or student.seat_index is None:
             staging_x = self.width - 155.0
             self._set_path(
@@ -874,8 +894,8 @@ class SimulationWorker(QObject):
                     [
                         (staging_x, student.y),
                         (staging_x, self.bottom_walkway_y),
-                        (self.exit[0], self.bottom_walkway_y),
-                        self.exit,
+                        (exit_point[0], self.bottom_walkway_y),
+                        exit_point,
                     ]
                 ),
             )
@@ -893,11 +913,32 @@ class SimulationWorker(QObject):
                     (aisle_x, access_y),
                     (aisle_x, main_walkway_y),
                     (self.width - 155.0, main_walkway_y),
-                    (self.width - 155.0, self.bottom_walkway_y),
-                    (self.exit[0], self.bottom_walkway_y),
-                    self.exit,
+                    (self.width - 155.0, exit_point[1]),
+                    exit_point,
                 ]
             ),
+        )
+
+    def _choose_exit(self, student: Student) -> Exit:
+        if student.exit_id is not None:
+            for exit_area in self.exits:
+                if exit_area.id == student.exit_id:
+                    return exit_area
+        return min(
+            self.exits,
+            key=lambda exit_area: (
+                distance(student.x, student.y, exit_area.x, exit_area.y)
+                + self._exit_density(exit_area) * 90.0
+            ),
+        )
+
+    def _exit_density(self, exit_area: Exit) -> int:
+        return sum(
+            1
+            for student in self.students.values()
+            if student.state == StudentState.LEAVING
+            and student.exit_id == exit_area.id
+            and distance(student.x, student.y, exit_area.x, exit_area.y) <= 140.0
         )
 
     def _set_tray_return_path(self, student: Student) -> None:
@@ -1275,7 +1316,8 @@ class SimulationWorker(QObject):
         return True
 
     def _is_inside_exit(self, student: Student) -> bool:
-        left, top, right, bottom = self._exit_rect()
+        exit_area = self._choose_exit(student)
+        left, top, right, bottom = self._exit_rect(exit_area)
         foot_x, foot_y = self._student_foot_point(student)
         return left <= foot_x <= right and top <= foot_y <= bottom
 
@@ -1290,9 +1332,15 @@ class SimulationWorker(QObject):
                 return True
         return False
 
-    def _exit_rect(self) -> tuple[float, float, float, float]:
-        x, y = self.exit
-        return x - 58.0, y - 58.0, x + 58.0, y + 58.0
+    def _exit_rect(self, exit_area: Exit) -> tuple[float, float, float, float]:
+        half_width = exit_area.width / 2.0
+        half_height = exit_area.height / 2.0
+        return (
+            exit_area.x - half_width,
+            exit_area.y - half_height,
+            exit_area.x + half_width,
+            exit_area.y + half_height,
+        )
 
     def _active_student_count(self) -> int:
         return sum(1 for student in self.students.values() if student.state != StudentState.DONE)
@@ -1391,6 +1439,7 @@ class SimulationWorker(QObject):
             "door": self.door,
             "exit": self.exit,
             "entrances": [self._entrance_frame(entrance) for entrance in self.entrances],
+            "exits": [self._exit_frame(exit_area) for exit_area in self.exits],
             "tray_return_points": [
                 {
                     "id": index,
@@ -1448,6 +1497,13 @@ class SimulationWorker(QObject):
                 }
                 for entrance in self.entrances
             ],
+            "exit_flow": [
+                {
+                    "exit_id": exit_area.id,
+                    "count": self.exit_flow_counts.get(exit_area.id, 0),
+                }
+                for exit_area in self.exits
+            ],
         }
 
     def _entrance_frame(self, entrance: Entrance) -> dict[str, Any]:
@@ -1458,6 +1514,16 @@ class SimulationWorker(QObject):
             "width": entrance.width,
             "height": entrance.height,
             "weight": entrance.weight,
+        }
+
+    def _exit_frame(self, exit_area: Exit) -> dict[str, Any]:
+        return {
+            "id": exit_area.id,
+            "x": exit_area.x,
+            "y": exit_area.y,
+            "width": exit_area.width,
+            "height": exit_area.height,
+            "is_congested": self._exit_density(exit_area) >= 4,
         }
 
     def _table_type_utilization(self, frame: dict[str, Any]) -> dict[str, float | None]:
@@ -1564,6 +1630,7 @@ class SimulationWorker(QObject):
             "group_id": student.group_id,
             "group_size": student.group_size,
             "entrance_id": student.entrance_id,
+            "exit_id": student.exit_id,
             "stall_id": student.stall_id,
             "table_id": student.table_id,
             "seat_index": student.seat_index,
@@ -1624,8 +1691,17 @@ class SimulationWorker(QObject):
             {"kind": "bottom", "points": [(left, self.bottom_walkway_y), (right, self.bottom_walkway_y)]},
             {"kind": "door", "points": [self.door, (self.door[0] + 90.0, self.queue_walkway_y)]},
             {"kind": "tray", "points": [(self.width - 155.0, self.top_walkway_y), (self.width - 155.0, tray_point[1]), tray_point]},
-            {"kind": "exit", "points": [(self.width - 155.0, self.bottom_walkway_y), (self.exit[0], self.bottom_walkway_y), self.exit]},
         ]
+        for exit_area in self.exits:
+            paths.append(
+                {
+                    "kind": "exit",
+                    "points": [
+                        (self.width - 155.0, exit_area.y),
+                        (exit_area.x, exit_area.y),
+                    ],
+                }
+            )
         for aisle_x in aisle_xs:
             paths.append(
                 {
