@@ -446,6 +446,15 @@ class SimulationWorker(QObject):
                 dish = self._dish_by_id(stall, student.dish_id)
                 if dish is not None and dish.stock > 0:
                     dish.stock -= 1
+                    if dish.stock == 0:
+                        self.data_recorder.record_event(
+                            EventRecordP0(
+                                event_type="dish_sold_out",
+                                game_time=ready_at,
+                                stall_id=stall.id,
+                                dish_id=dish.id,
+                            )
+                        )
                 stall.refresh_status()
                 previous_state = student.state
                 student.food_ready_at = ready_at
@@ -603,6 +612,16 @@ class SimulationWorker(QObject):
         stall.queue.append(student.id)
         stall.ready_times.append((student.id, ready_at, order.id))
         student.order_id = order.id
+        self.data_recorder.record_event(
+            EventRecordP0(
+                event_type="order_created",
+                game_time=self.game_time,
+                student_id=student.id,
+                stall_id=stall.id,
+                dish_id=dish.id,
+                order_id=order.id,
+            )
+        )
         previous_state = student.state
         student.state = StudentState.QUEUED
         self._record_student_event(
@@ -1188,6 +1207,8 @@ class SimulationWorker(QObject):
                 stall_id=student.stall_id,
                 table_id=student.table_id,
                 seat_index=student.seat_index,
+                dish_id=student.dish_id,
+                order_id=student.order_id,
                 from_state=_state_value(from_state),
                 to_state=_state_value(to_state),
             )

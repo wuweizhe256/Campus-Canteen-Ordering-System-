@@ -29,6 +29,9 @@ class DataRecorderTest(unittest.TestCase):
         self.assertEqual(stats["max_active_students"], 2)
         self.assertEqual(stats["stall_queue_stats"], [{"stall_id": 3, "max_queue_length": 2}])
         self.assertEqual(stats["seat_utilization"], 0.05)
+        self.assertEqual(stats["dish_sales"], [])
+        self.assertEqual(stats["sold_out_counts"], [])
+        self.assertIsNone(stats["avg_order_wait_time"])
 
     def test_skips_missing_pairs_without_crashing(self) -> None:
         recorder = DataRecorder(total_seats=4, duration=100.0)
@@ -60,6 +63,28 @@ class DataRecorderTest(unittest.TestCase):
         events = recorder.student_events(1)
 
         self.assertEqual([event.event_type for event in events], ["student_spawned", "student_left"])
+
+    def test_builds_p1_dish_order_stats(self) -> None:
+        recorder = DataRecorder()
+        for event in [
+            EventRecordP0("order_created", 10.0, student_id=1, stall_id=2, dish_id=5, order_id=100),
+            EventRecordP0("order_created", 12.0, student_id=2, stall_id=2, dish_id=5, order_id=101),
+            EventRecordP0("order_created", 15.0, student_id=3, stall_id=3, dish_id=6, order_id=102),
+            EventRecordP0("food_ready", 25.0, student_id=1, stall_id=2, dish_id=5, order_id=100),
+            EventRecordP0("food_ready", 30.0, student_id=2, stall_id=2, dish_id=5, order_id=101),
+            EventRecordP0("food_ready", 35.0, student_id=3, stall_id=3, dish_id=6, order_id=102),
+            EventRecordP0("dish_sold_out", 35.0, stall_id=3, dish_id=6),
+        ]:
+            recorder.record_event(event)
+
+        stats = recorder.build_stats().to_dict()
+
+        self.assertEqual(
+            stats["dish_sales"],
+            [{"dish_id": 5, "sales_count": 2}, {"dish_id": 6, "sales_count": 1}],
+        )
+        self.assertEqual(stats["sold_out_counts"], [{"dish_id": 6, "sold_out_count": 1}])
+        self.assertEqual(stats["avg_order_wait_time"], 17.666666666666668)
 
 
 if __name__ == "__main__":

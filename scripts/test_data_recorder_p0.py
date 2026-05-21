@@ -66,12 +66,18 @@ def test_stats_frame_p0_from_events() -> None:
         "reroute_count",
         "avg_queue_length",
         "tray_return_queue_length",
+        "dish_sales",
+        "sold_out_counts",
+        "avg_order_wait_time",
     }
     assert_close(stats["avg_wait_time"], 11.0)
     assert_close(stats["avg_total_time"], 69.5)
     assert stats["max_active_students"] == 2
     assert stats["stall_queue_stats"] == [{"stall_id": 3, "max_queue_length": 2}]
     assert_close(stats["seat_utilization"], 0.05)
+    assert stats["dish_sales"] == []
+    assert stats["sold_out_counts"] == []
+    assert stats["avg_order_wait_time"] is None
 
 
 def test_missing_pairs_do_not_break_stats() -> None:
