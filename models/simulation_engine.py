@@ -692,12 +692,58 @@ class SimulationWorker(QObject):
             table_density = self._density_near(table.x, table.y, 92.0)
             tray_distance = distance(seat_x, seat_y, *self._nearest_tray_return_center(seat_x, seat_y))
             occupied_bias = table.occupied_count * 18.0
+            group_bias = self._group_seat_bias(student, table, seat_index)
             jitter = self.rng.uniform(0.0, 6.0)
-            score = walk_distance + table_density * 55.0 + tray_distance * 0.08 + occupied_bias + jitter
+            score = (
+                walk_distance
+                + table_density * 55.0
+                + tray_distance * 0.08
+                + occupied_bias
+                + group_bias
+                + jitter
+            )
             if best is None or score < best[0]:
                 best = (score, table, seat_index, path, walk_distance)
         assert best is not None
         return best[1], best[2], best[3], best[4]
+
+    def _group_seat_bias(self, student: Student, table: Table, seat_index: int) -> float:
+        if student.group_id is None:
+            return 0.0
+
+        group_members = [
+            member
+            for member in self.students.values()
+            if member.id != student.id
+            and member.group_id == student.group_id
+            and member.table_id is not None
+            and member.seat_index is not None
+        ]
+        if not group_members:
+            if table.free_seat_indexes() and len(table.free_seat_indexes()) >= max(1, student.group_size or 1):
+                return -20.0
+            return 0.0
+
+        same_table_members = [member for member in group_members if member.table_id == table.id]
+        if same_table_members:
+            distance_to_group = min(
+                self._seat_adjacency_distance(table, seat_index, member.seat_index)
+                for member in same_table_members
+                if member.seat_index is not None
+            )
+            return -260.0 - 35.0 / max(1, distance_to_group)
+
+        nearest_group_table_distance = min(
+            distance(table.x, table.y, self.tables[member.table_id].x, self.tables[member.table_id].y)
+            for member in group_members
+            if member.table_id is not None
+        )
+        return min(120.0, nearest_group_table_distance * 0.25)
+
+    def _seat_adjacency_distance(self, table: Table, first_index: int, second_index: int) -> float:
+        first_x, first_y = self._seat_position(table, first_index)
+        second_x, second_y = self._seat_position(table, second_index)
+        return max(1.0, distance(first_x, first_y, second_x, second_y))
 
     def _occupy_reserved_seat(self, student: Student) -> None:
         if student.table_id is None or student.seat_index is None:
