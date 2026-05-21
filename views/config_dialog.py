@@ -33,6 +33,21 @@ class ConfigDialog(QDialog):
         self.tables_spin.setValue(24)
         self.tables_spin.setSuffix(" \u5f20")
 
+        self.two_tables_spin = QSpinBox()
+        self.two_tables_spin.setRange(0, 36)
+        self.two_tables_spin.setValue(6)
+        self.two_tables_spin.setSuffix(" \u5f20")
+
+        self.four_tables_spin = QSpinBox()
+        self.four_tables_spin.setRange(0, 36)
+        self.four_tables_spin.setValue(12)
+        self.four_tables_spin.setSuffix(" \u5f20")
+
+        self.six_tables_spin = QSpinBox()
+        self.six_tables_spin.setRange(0, 36)
+        self.six_tables_spin.setValue(6)
+        self.six_tables_spin.setSuffix(" \u5f20")
+
         self.total_students_spin = QSpinBox()
         self.total_students_spin.setRange(10, 100000)
         self.total_students_spin.setValue(120)
@@ -48,6 +63,9 @@ class ConfigDialog(QDialog):
         form.addRow("\u663e\u793a\u4eff\u771f\u65f6\u957f", self.minutes_spin)
         form.addRow("\u7a97\u53e3\u6570\u91cf", self.stalls_spin)
         form.addRow("\u9910\u684c\u6570\u91cf", self.tables_spin)
+        form.addRow("2\u4eba\u684c\u6570\u91cf", self.two_tables_spin)
+        form.addRow("4\u4eba\u684c\u6570\u91cf", self.four_tables_spin)
+        form.addRow("6\u4eba\u684c\u6570\u91cf", self.six_tables_spin)
         form.addRow("\u751f\u6210\u5b66\u751f\u603b\u6570", self.total_students_spin)
         form.addRow("\u968f\u673a\u79cd\u5b50", self.seed_spin)
 
@@ -66,10 +84,19 @@ class ConfigDialog(QDialog):
     def config(self) -> SimulationConfig:
         seed = self.seed_spin.value()
         total_students = self.total_students_spin.value()
+        typed_table_count = (
+            self.two_tables_spin.value()
+            + self.four_tables_spin.value()
+            + self.six_tables_spin.value()
+        )
+        table_count = typed_table_count or self.tables_spin.value()
         return SimulationConfig(
             sim_minutes=self.minutes_spin.value(),
             stall_count=self.stalls_spin.value(),
-            table_count=self.tables_spin.value(),
+            table_count=table_count,
+            two_person_table_count=self.two_tables_spin.value(),
+            four_person_table_count=self.four_tables_spin.value(),
+            six_person_table_count=self.six_tables_spin.value(),
             seed=None if seed == 0 else seed,
             total_student_count=total_students,
             max_active_students=max(55, total_students),

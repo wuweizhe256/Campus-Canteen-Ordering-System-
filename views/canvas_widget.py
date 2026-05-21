@@ -326,8 +326,8 @@ class CanvasWidget(QWidget):
             painter.drawLine(int(x - 21), int(y + 18), int(x - 25), int(y + 34))
             painter.drawLine(int(x + 21), int(y + 18), int(x + 17), int(y + 34))
 
-            seat_offsets = [(-47, -32), (31, -32), (-47, 24), (31, 24)]
             seats = table.get("seat_frames") or table.get("seats") or []
+            seat_offsets = self._table_seat_offsets(int(table.get("seat_count") or len(seats) or 4))
             for index, (dx, dy) in enumerate(seat_offsets):
                 seat = seats[index] if index < len(seats) else None
                 status = self._seat_status(seat)
@@ -338,6 +338,13 @@ class CanvasWidget(QWidget):
                 painter.drawRoundedRect(QRectF(x + dx, y + dy, 18, 18), 6, 6)
                 painter.setBrush(color.lighter(112))
                 painter.drawEllipse(QRectF(x + dx + 3, y + dy - 4, 12, 10))
+
+    def _table_seat_offsets(self, seat_count: int) -> list[tuple[int, int]]:
+        if seat_count <= 2:
+            return [(-47, -4), (31, -4)]
+        if seat_count <= 4:
+            return [(-47, -32), (31, -32), (-47, 24), (31, 24)]
+        return [(-51, -40), (35, -40), (-51, -4), (35, -4), (-51, 32), (35, 32)][:seat_count]
 
     def _draw_students(self, painter: QPainter) -> None:
         students = [student for student in self.frame.get("students", []) if isinstance(student, dict)]
