@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from models.entities import Dish, SimulationConfig, Student
+from models.entities import Dish, Entrance, SimulationConfig, Student
 from models.simulation_engine import SimulationWorker
 
 
@@ -194,6 +194,7 @@ def run_self_test() -> None:
     print_p1_flow_snapshot(recorder)
     print_p2_group_snapshot(recorder.last_frame)
     print_p2_table_snapshot(recorder.last_frame)
+    print_p3_entrance_snapshot(recorder.last_frame)
     run_p1_sold_out_self_test()
 
 
@@ -295,6 +296,7 @@ class LowStockSimulationWorker(SimulationWorker):
         group_id: int | None,
         group_size: int,
         member_index: int,
+        entrance: Entrance,
     ) -> Student:
         student = super()._build_student(
             meat_pref,
@@ -303,6 +305,7 @@ class LowStockSimulationWorker(SimulationWorker):
             group_id,
             group_size,
             member_index,
+            entrance,
         )
         student.decision_done_at = self.game_time + self.rng.uniform(1.0, 2.0)
         student.walk_speed = 22.0
@@ -382,6 +385,34 @@ def print_p2_table_snapshot(frame: dict[str, Any] | None) -> None:
     print(f"occupied_counts: {dict(sorted(occupied_counts.items()))}")
     print(f"table_type_utilization: {stats.get('table_type_utilization', {})}")
     print(f"group_same_table_rate: {stats.get('group_same_table_rate')}")
+
+
+def print_p3_entrance_snapshot(frame: dict[str, Any] | None) -> None:
+    if frame is None:
+        print("p3_entrance_snapshot: no frame captured")
+        return
+
+    print("=== P3 Entrance Snapshot ===")
+    entrances = [
+        {
+            "id": entrance.get("id"),
+            "x": entrance.get("x"),
+            "y": entrance.get("y"),
+            "weight": entrance.get("weight"),
+        }
+        for entrance in frame.get("entrances", [])
+    ]
+    students_by_entrance: dict[int, int] = {}
+    for student in frame.get("students", []):
+        entrance_id = student.get("entrance_id")
+        if entrance_id is None:
+            continue
+        entrance_key = int(entrance_id)
+        students_by_entrance[entrance_key] = students_by_entrance.get(entrance_key, 0) + 1
+    stats = frame.get("stats") if isinstance(frame.get("stats"), dict) else {}
+    print(f"entrances: {entrances}")
+    print(f"active_students_by_entrance: {dict(sorted(students_by_entrance.items()))}")
+    print(f"entrance_flow: {stats.get('entrance_flow', [])}")
 
 
 def _optional_int(value: Any) -> int | None:

@@ -10,6 +10,7 @@ from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
 from models.data_recorder import DataRecorder, EventRecordP0
 from models.entities import (
     Dish,
+    Entrance,
     Order,
     OrderStatus,
     RunSummary,
@@ -43,6 +44,8 @@ class SimulationWorker(QObject):
         self.bottom_walkway_y = 724.0
         self.door = (58.0, 112.0)
         self.exit = (1224.0, 710.0)
+        self.entrances: list[Entrance] = []
+        self.entrance_flow_counts: dict[int, int] = {}
         self.tray_return_points: list[tuple[float, float, float, float]] = []
         self.stalls: list[Stall] = []
         self.tables: list[Table] = []
@@ -117,6 +120,7 @@ class SimulationWorker(QObject):
         self.time_scale = max(1.0, min(24.0, time_scale))
 
     def _initialize(self) -> None:
+        self._build_entrances()
         self._build_stalls()
         self._build_tables()
         self._build_tray_return_points()
@@ -128,10 +132,36 @@ class SimulationWorker(QObject):
         self.spawned_students = 0
         self.served_students = 0
         self.max_active_students_seen = 0
+        self.entrance_flow_counts = {entrance.id: 0 for entrance in self.entrances}
         self.data_recorder = DataRecorder(
             total_seats=sum(len(table.seats) for table in self.tables),
             duration=self.config.duration_game_seconds,
         )
+
+    def _build_entrances(self) -> None:
+        weights = list(self.config.entrance_weights or ())
+        default_positions = [
+            (0, 58.0, 112.0, 96.0, 104.0),
+            (1, 58.0, 310.0, 96.0, 104.0),
+            (2, 58.0, 560.0, 96.0, 104.0),
+        ]
+        if not weights:
+            weights = [1.0]
+        self.entrances = [
+            Entrance(
+                id=entrance_id,
+                x=x,
+                y=y,
+                width=width,
+                height=height,
+                weight=max(0.0, float(weights[index] if index < len(weights) else 0.0)),
+            )
+            for index, (entrance_id, x, y, width, height) in enumerate(default_positions)
+            if index < len(weights)
+        ]
+        if not self.entrances or all(entrance.weight <= 0 for entrance in self.entrances):
+            self.entrances = [Entrance(0, self.door[0], self.door[1], 96.0, 104.0, 1.0)]
+        self.door = (self.entrances[0].x, self.entrances[0].y)
 
     def _build_stalls(self) -> None:
         self.stalls.clear()
@@ -275,6 +305,7 @@ class SimulationWorker(QObject):
             "wait_tolerance": self.rng.uniform(0.2, 1.0),
             "spicy": self.rng.uniform(0.0, 1.0),
         }
+        entrance = self._choose_entrance()
         sample_student = self._build_student(
             meat_pref=meat_pref,
             veg_pref=veg_pref,
@@ -282,6 +313,7 @@ class SimulationWorker(QObject):
             group_id=group_id,
             group_size=group_size,
             member_index=0,
+            entrance=entrance,
         )
         dish_id, stall_id = self._choose_dish_and_stall(sample_student)
         self._register_student(sample_student, dish_id, stall_id)
@@ -293,8 +325,22 @@ class SimulationWorker(QObject):
                 group_id=group_id,
                 group_size=group_size,
                 member_index=member_index,
+                entrance=entrance,
             )
             self._register_student(member, dish_id, stall_id)
+
+    def _choose_entrance(self) -> Entrance:
+        available = [entrance for entrance in self.entrances if entrance.weight > 0]
+        if not available:
+            return self.entrances[0]
+        total_weight = sum(entrance.weight for entrance in available)
+        roll = self.rng.uniform(0.0, total_weight)
+        cumulative = 0.0
+        for entrance in available:
+            cumulative += entrance.weight
+            if roll <= cumulative:
+                return entrance
+        return available[-1]
 
     def _build_student(
         self,
@@ -304,6 +350,7 @@ class SimulationWorker(QObject):
         group_id: int | None,
         group_size: int,
         member_index: int,
+        entrance: Entrance,
     ) -> Student:
         spawn_jitter_x = self.rng.uniform(-6.0, 6.0) + member_index * 6.0
         spawn_jitter_y = self.rng.uniform(-6.0, 6.0) + member_index * 4.0
@@ -316,14 +363,15 @@ class SimulationWorker(QObject):
             hesitation_time=self.rng.uniform(10.0, 28.0),
             table_walk_time=self.rng.uniform(35.0, 70.0),
             spawn_time=self.game_time,
-            x=self.door[0] + spawn_jitter_x,
-            y=self.door[1] + spawn_jitter_y,
-            target_x=self.door[0] + self.rng.uniform(12.0, 55.0),
-            target_y=self.door[1] + self.rng.uniform(5.0, 55.0),
+            x=entrance.x + spawn_jitter_x,
+            y=entrance.y + spawn_jitter_y,
+            target_x=entrance.x + self.rng.uniform(12.0, 55.0),
+            target_y=entrance.y + self.rng.uniform(5.0, 55.0),
             walk_speed=self.rng.uniform(8.0, 14.0),
             preferences=preferences,
             group_id=group_id,
             group_size=group_size,
+            entrance_id=entrance.id,
         )
         student.decision_done_at = self.game_time + student.hesitation_time
         return student
@@ -339,6 +387,10 @@ class SimulationWorker(QObject):
         self.students[student.id] = student
         self.next_student_id += 1
         self.spawned_students += 1
+        if student.entrance_id is not None:
+            self.entrance_flow_counts[student.entrance_id] = (
+                self.entrance_flow_counts.get(student.entrance_id, 0) + 1
+            )
         self._record_student_event(
             "student_spawned",
             student,
@@ -1338,6 +1390,7 @@ class SimulationWorker(QObject):
             "active_students": self._active_student_count(),
             "door": self.door,
             "exit": self.exit,
+            "entrances": [self._entrance_frame(entrance) for entrance in self.entrances],
             "tray_return_points": [
                 {
                     "id": index,
@@ -1388,6 +1441,23 @@ class SimulationWorker(QObject):
         return {
             "table_type_utilization": self._table_type_utilization(frame),
             "group_same_table_rate": self._group_same_table_rate(frame),
+            "entrance_flow": [
+                {
+                    "entrance_id": entrance.id,
+                    "count": self.entrance_flow_counts.get(entrance.id, 0),
+                }
+                for entrance in self.entrances
+            ],
+        }
+
+    def _entrance_frame(self, entrance: Entrance) -> dict[str, Any]:
+        return {
+            "id": entrance.id,
+            "x": entrance.x,
+            "y": entrance.y,
+            "width": entrance.width,
+            "height": entrance.height,
+            "weight": entrance.weight,
         }
 
     def _table_type_utilization(self, frame: dict[str, Any]) -> dict[str, float | None]:
@@ -1493,6 +1563,7 @@ class SimulationWorker(QObject):
             "order_id": student.order_id,
             "group_id": student.group_id,
             "group_size": student.group_size,
+            "entrance_id": student.entrance_id,
             "stall_id": student.stall_id,
             "table_id": student.table_id,
             "seat_index": student.seat_index,
