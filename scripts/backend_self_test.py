@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from models.entities import SimulationConfig
+from models.entities import Dish, SimulationConfig, Student
 from models.simulation_engine import SimulationWorker
 
 
@@ -26,6 +26,12 @@ class Metrics:
 class FrameDrivenRecorder:
     def __init__(self, table_count: int, seats_per_table: int = 4) -> None:
         self.last_frame: dict[str, Any] | None = None
+        self.first_stock_by_key: dict[tuple[int, int], int] = {}
+        self.last_stock_by_key: dict[tuple[int, int], int] = {}
+        self.dish_name_by_id: dict[int, str] = {}
+        self.order_status_history: dict[int, list[str]] = {}
+        self.order_dish_by_id: dict[int, int] = {}
+        self.student_choice_history: dict[int, list[tuple[int | None, int | None]]] = {}
         self.last_game_time = 0.0
         self.max_active_students = 0
         self.stall_max_queue: dict[int, int] = {}
@@ -63,6 +69,21 @@ class FrameDrivenRecorder:
             stall_id = int(stall["id"])
             q = int(stall["queue_count"])
             self.stall_max_queue[stall_id] = max(self.stall_max_queue.get(stall_id, 0), q)
+            for dish in stall.get("dishes", []):
+                dish_id = int(dish["id"])
+                key = (stall_id, dish_id)
+                stock = int(dish.get("stock") or 0)
+                self.first_stock_by_key.setdefault(key, stock)
+                self.last_stock_by_key[key] = stock
+                self.dish_name_by_id.setdefault(dish_id, str(dish.get("name") or dish_id))
+            for order in stall.get("orders", []):
+                order_id = int(order["id"])
+                status = str(order.get("status"))
+                history = self.order_status_history.setdefault(order_id, [])
+                if not history or history[-1] != status:
+                    history.append(status)
+                if order.get("dish_id") is not None:
+                    self.order_dish_by_id[order_id] = int(order["dish_id"])
 
         occupied_now = 0
         for table in frame.get("tables", []):
@@ -79,6 +100,10 @@ class FrameDrivenRecorder:
             sid = int(student["id"])
             state = str(student["state"])
             seen_ids.add(sid)
+            choice = (_optional_int(student.get("dish_id")), _optional_int(student.get("stall_id")))
+            choice_history = self.student_choice_history.setdefault(sid, [])
+            if not choice_history or choice_history[-1] != choice:
+                choice_history.append(choice)
 
             if sid not in self.spawn_time:
                 self.spawn_time[sid] = game_time
@@ -166,7 +191,9 @@ def run_self_test() -> None:
     print(f"seat_utilization: {metrics.seat_utilization}")
     print(f"event_counts: {metrics.event_counts}")
     print_p1_snapshot(recorder.last_frame)
+    print_p1_flow_snapshot(recorder)
     print_p2_group_snapshot(recorder.last_frame)
+    run_p1_sold_out_self_test()
 
 
 def print_p1_snapshot(frame: dict[str, Any] | None) -> None:
@@ -209,6 +236,100 @@ def print_p1_snapshot(frame: dict[str, Any] | None) -> None:
     print(f"total_orders: {total_orders}")
     print(f"sold_out_stalls: {sold_out_stalls}")
     print(f"student_choices_sample: {student_choices}")
+    if frame.get("stats") is not None:
+        stats = frame["stats"]
+        print(f"dish_sales: {stats.get('dish_sales', [])}")
+        print(f"sold_out_counts: {stats.get('sold_out_counts', [])}")
+        print(f"avg_order_wait_time: {stats.get('avg_order_wait_time')}")
+
+
+def print_p1_flow_snapshot(recorder: FrameDrivenRecorder) -> None:
+    print("=== P1 Order / Stock Flow ===")
+    stock_changes = []
+    for key, first_stock in sorted(recorder.first_stock_by_key.items()):
+        last_stock = recorder.last_stock_by_key.get(key, first_stock)
+        if last_stock != first_stock:
+            stall_id, dish_id = key
+            stock_changes.append(
+                {
+                    "stall_id": stall_id,
+                    "dish_id": dish_id,
+                    "name": recorder.dish_name_by_id.get(dish_id, str(dish_id)),
+                    "initial_stock": first_stock,
+                    "current_stock": last_stock,
+                    "sold": first_stock - last_stock,
+                }
+            )
+    print(f"stock_changes_sample: {stock_changes[:8]}")
+    order_flows = [
+        {
+            "order_id": order_id,
+            "dish_id": recorder.order_dish_by_id.get(order_id),
+            "statuses": statuses,
+        }
+        for order_id, statuses in sorted(recorder.order_status_history.items())[:10]
+    ]
+    print(f"order_status_flows_sample: {order_flows}")
+    changed_choices = {
+        student_id: choices
+        for student_id, choices in sorted(recorder.student_choice_history.items())
+        if len(choices) > 1
+    }
+    print(f"student_rechoice_sample: {dict(list(changed_choices.items())[:8])}")
+
+
+class LowStockSimulationWorker(SimulationWorker):
+    def _build_stall_dishes(self, stall_index: int) -> list[Dish]:
+        dishes = super()._build_stall_dishes(stall_index)
+        for dish in dishes:
+            dish.stock = 1
+            dish.cook_time = 2.5
+        return dishes
+
+    def _build_student(
+        self,
+        meat_pref: float,
+        veg_pref: float,
+        preferences: dict[str, float],
+        group_id: int | None,
+        group_size: int,
+        member_index: int,
+    ) -> Student:
+        student = super()._build_student(
+            meat_pref,
+            veg_pref,
+            preferences,
+            group_id,
+            group_size,
+            member_index,
+        )
+        student.decision_done_at = self.game_time + self.rng.uniform(1.0, 2.0)
+        student.walk_speed = 22.0
+        student.table_walk_time = 18.0
+        return student
+
+
+def run_p1_sold_out_self_test() -> None:
+    config = SimulationConfig(
+        sim_minutes=2,
+        time_scale=180.0,
+        stall_count=3,
+        table_count=8,
+        seed=20240522,
+        total_student_count=28,
+        max_active_students=28,
+        companion_pair_ratio=0.0,
+        companion_multi_ratio=0.0,
+    )
+    worker = LowStockSimulationWorker(config)
+    recorder = FrameDrivenRecorder(table_count=config.table_count)
+
+    worker.frameReady.connect(recorder.feed)
+    worker.run()
+
+    print("=== P1 Low Stock Sold-out Check ===")
+    print_p1_snapshot(recorder.last_frame)
+    print_p1_flow_snapshot(recorder)
 
 
 def print_p2_group_snapshot(frame: dict[str, Any] | None) -> None:
@@ -237,6 +358,12 @@ def print_p2_group_snapshot(frame: dict[str, Any] | None) -> None:
             f"group {group_id}: members={len(members)} declared_sizes={declared_sizes} "
             f"dishes={dish_ids} stalls={stall_ids} states={states}"
         )
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    return int(value)
 
 
 if __name__ == "__main__":
