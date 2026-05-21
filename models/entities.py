@@ -44,6 +44,7 @@ class SimulationConfig:
     max_active_students: int = 120
     companion_pair_ratio: float = 0.18
     companion_multi_ratio: float = 0.08
+    entrance_weights: tuple[float, ...] = (1.0, 0.7, 0.5)
 
     @property
     def duration_game_seconds(self) -> float:
@@ -97,6 +98,7 @@ class Student:
     order_id: int | None = None
     group_id: int | None = None
     group_size: int | None = None
+    entrance_id: int | None = None
     decision_done_at: float = 0.0
     food_ready_at: float | None = None
     eating_done_at: float | None = None
@@ -156,6 +158,16 @@ class Dish:
     @property
     def available(self) -> bool:
         return self.stock > 0
+
+
+@dataclass(frozen=True)
+class Entrance:
+    id: int
+    x: float
+    y: float
+    width: float
+    height: float
+    weight: float
 
 
 @dataclass
