@@ -99,6 +99,7 @@ class Student:
     group_id: int | None = None
     group_size: int | None = None
     entrance_id: int | None = None
+    exit_id: int | None = None
     decision_done_at: float = 0.0
     food_ready_at: float | None = None
     eating_done_at: float | None = None
@@ -168,6 +169,15 @@ class Entrance:
     width: float
     height: float
     weight: float
+
+
+@dataclass(frozen=True)
+class Exit:
+    id: int
+    x: float
+    y: float
+    width: float
+    height: float
 
 
 @dataclass

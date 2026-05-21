@@ -195,6 +195,7 @@ def run_self_test() -> None:
     print_p2_group_snapshot(recorder.last_frame)
     print_p2_table_snapshot(recorder.last_frame)
     print_p3_entrance_snapshot(recorder.last_frame)
+    print_p3_exit_snapshot(recorder.last_frame)
     run_p1_sold_out_self_test()
 
 
@@ -413,6 +414,34 @@ def print_p3_entrance_snapshot(frame: dict[str, Any] | None) -> None:
     print(f"entrances: {entrances}")
     print(f"active_students_by_entrance: {dict(sorted(students_by_entrance.items()))}")
     print(f"entrance_flow: {stats.get('entrance_flow', [])}")
+
+
+def print_p3_exit_snapshot(frame: dict[str, Any] | None) -> None:
+    if frame is None:
+        print("p3_exit_snapshot: no frame captured")
+        return
+
+    print("=== P3 Exit Snapshot ===")
+    exits = [
+        {
+            "id": exit_area.get("id"),
+            "x": exit_area.get("x"),
+            "y": exit_area.get("y"),
+            "is_congested": exit_area.get("is_congested"),
+        }
+        for exit_area in frame.get("exits", [])
+    ]
+    leaving_by_exit: dict[int, int] = {}
+    for student in frame.get("students", []):
+        exit_id = student.get("exit_id")
+        if exit_id is None:
+            continue
+        exit_key = int(exit_id)
+        leaving_by_exit[exit_key] = leaving_by_exit.get(exit_key, 0) + 1
+    stats = frame.get("stats") if isinstance(frame.get("stats"), dict) else {}
+    print(f"exits: {exits}")
+    print(f"active_students_by_exit: {dict(sorted(leaving_by_exit.items()))}")
+    print(f"exit_flow: {stats.get('exit_flow', [])}")
 
 
 def _optional_int(value: Any) -> int | None:
