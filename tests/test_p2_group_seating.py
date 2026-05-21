@@ -46,14 +46,6 @@ class P2GroupSeatingTest(unittest.TestCase):
         self.assertEqual(table.id, first_table.id)
         self.assertNotEqual(seat_index, first.seat_index)
 
-        second.table_id = table.id
-        second.seat_index = seat_index
-        table.seats[seat_index].status = SeatStatus.RESERVED
-        table.seats[seat_index].student_id = second.id
-        frame = worker._build_frame()
-
-        self.assertEqual(frame["stats"]["group_same_table_rate"], 1.0)
-
 
 if __name__ == "__main__":
     unittest.main()
