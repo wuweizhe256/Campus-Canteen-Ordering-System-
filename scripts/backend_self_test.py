@@ -193,6 +193,7 @@ def run_self_test() -> None:
     print_p1_snapshot(recorder.last_frame)
     print_p1_flow_snapshot(recorder)
     print_p2_group_snapshot(recorder.last_frame)
+    print_p2_table_snapshot(recorder.last_frame)
     run_p1_sold_out_self_test()
 
 
@@ -358,6 +359,29 @@ def print_p2_group_snapshot(frame: dict[str, Any] | None) -> None:
             f"group {group_id}: members={len(members)} declared_sizes={declared_sizes} "
             f"dishes={dish_ids} stalls={stall_ids} states={states}"
         )
+
+
+def print_p2_table_snapshot(frame: dict[str, Any] | None) -> None:
+    if frame is None:
+        print("p2_table_snapshot: no frame captured")
+        return
+
+    print("=== P2 Table Type Snapshot ===")
+    table_counts: dict[str, int] = {}
+    seat_counts: dict[str, int] = {}
+    occupied_counts: dict[str, int] = {}
+    for table in frame.get("tables", []):
+        table_type = str(table.get("table_type") or "four")
+        table_counts[table_type] = table_counts.get(table_type, 0) + 1
+        seat_counts[table_type] = seat_counts.get(table_type, 0) + int(table.get("seat_count") or 0)
+        occupied_counts[table_type] = occupied_counts.get(table_type, 0) + int(table.get("occupied") or 0)
+
+    stats = frame.get("stats") if isinstance(frame.get("stats"), dict) else {}
+    print(f"table_counts: {dict(sorted(table_counts.items()))}")
+    print(f"seat_counts: {dict(sorted(seat_counts.items()))}")
+    print(f"occupied_counts: {dict(sorted(occupied_counts.items()))}")
+    print(f"table_type_utilization: {stats.get('table_type_utilization', {})}")
+    print(f"group_same_table_rate: {stats.get('group_same_table_rate')}")
 
 
 def _optional_int(value: Any) -> int | None:

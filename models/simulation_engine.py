@@ -1329,7 +1329,7 @@ class SimulationWorker(QObject):
         self._record_queue_samples()
         self._record_runtime_sample()
         stats = self.data_recorder.build_stats(current_time=self.game_time).to_dict()
-        return {
+        frame = {
             "game_time": min(self.game_time, self.config.duration_game_seconds),
             "duration": self.config.duration_game_seconds,
             "time_scale": self.time_scale,
@@ -1381,6 +1381,57 @@ class SimulationWorker(QObject):
                 if student.state != StudentState.DONE
             ],
         }
+        stats.update(self._build_p2_stats(frame))
+        return frame
+
+    def _build_p2_stats(self, frame: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "table_type_utilization": self._table_type_utilization(frame),
+            "group_same_table_rate": self._group_same_table_rate(frame),
+        }
+
+    def _table_type_utilization(self, frame: dict[str, Any]) -> dict[str, float | None]:
+        totals: dict[str, int] = {}
+        occupied: dict[str, int] = {}
+        for table in frame.get("tables", []):
+            if not isinstance(table, dict):
+                continue
+            table_type = str(table.get("table_type") or "four")
+            seat_count = max(0, int(table.get("seat_count") or 0))
+            totals[table_type] = totals.get(table_type, 0) + seat_count
+            occupied[table_type] = occupied.get(table_type, 0) + max(0, int(table.get("occupied") or 0))
+
+        result: dict[str, float | None] = {}
+        for table_type in ("two", "four", "six"):
+            total = totals.get(table_type, 0)
+            result[table_type] = occupied.get(table_type, 0) / total if total > 0 else None
+        return result
+
+    def _group_same_table_rate(self, frame: dict[str, Any]) -> float | None:
+        grouped_tables: dict[int, set[int]] = {}
+        grouped_member_counts: dict[int, int] = {}
+        for student in frame.get("students", []):
+            if not isinstance(student, dict):
+                continue
+            group_id = student.get("group_id")
+            if group_id is None:
+                continue
+            group_key = int(group_id)
+            grouped_member_counts[group_key] = grouped_member_counts.get(group_key, 0) + 1
+            table_id = student.get("table_id")
+            if table_id is not None:
+                grouped_tables.setdefault(group_key, set()).add(int(table_id))
+
+        eligible = [
+            group_id
+            for group_id, count in grouped_member_counts.items()
+            if count >= 2 and grouped_tables.get(group_id)
+        ]
+        if not eligible:
+            return None
+
+        same_table_count = sum(1 for group_id in eligible if len(grouped_tables[group_id]) == 1)
+        return same_table_count / len(eligible)
 
     def _stall_frame(self, stall: Stall) -> dict[str, Any]:
         dishes = stall.dishes or []
