@@ -1218,11 +1218,40 @@ class SimulationWorker(QObject):
                 foot_x, foot_y = self._student_foot_point(student)
 
     def _obstacle_rects(self) -> list[tuple[float, float, float, float]]:
-        rects: list[tuple[float, float, float, float]] = []
+        return [
+            (item["left"], item["top"], item["right"], item["bottom"])
+            for item in self._obstacle_frames()
+        ]
+
+    def _obstacle_frames(self) -> list[dict[str, Any]]:
+        rects: list[dict[str, Any]] = []
         for stall in self.stalls:
-            rects.append((stall.x - 66.0, stall.y - 52.0, stall.x + 66.0, stall.y + 62.0))
+            rects.append(
+                {
+                    "left": stall.x - 66.0,
+                    "top": stall.y - 52.0,
+                    "right": stall.x + 66.0,
+                    "bottom": stall.y + 62.0,
+                    "kind": "stall",
+                }
+            )
         for table in self.tables:
-            rects.append((table.x - 48.0, table.y - 22.0, table.x + 48.0, table.y + 22.0))
+            rects.append(
+                {
+                    "left": table.x - 48.0,
+                    "top": table.y - 22.0,
+                    "right": table.x + 48.0,
+                    "bottom": table.y + 22.0,
+                    "kind": "table",
+                }
+            )
+        rects.extend(
+            [
+                {"left": 34.0, "top": 34.0, "right": self.width - 34.0, "bottom": 44.0, "kind": "wall"},
+                {"left": 34.0, "top": 34.0, "right": 44.0, "bottom": self.height - 34.0, "kind": "wall"},
+                {"left": self.width - 44.0, "top": 34.0, "right": self.width - 34.0, "bottom": self.height - 34.0, "kind": "wall"},
+            ]
+        )
         return rects
 
     def _try_start_detour(self, student: Student, students: list[Student]) -> None:
@@ -1455,6 +1484,8 @@ class SimulationWorker(QObject):
             "height": self.height,
             "stats": stats,
             "walk_paths": self._build_walk_paths(),
+            "path_debug_lines": self._build_walk_paths(),
+            "obstacles": self._obstacle_frames(),
             "collision_boxes": self._build_collision_boxes(),
             "stalls": [self._stall_frame(stall) for stall in self.stalls],
             "tables": [

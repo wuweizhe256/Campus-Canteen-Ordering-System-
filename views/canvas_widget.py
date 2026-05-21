@@ -163,8 +163,9 @@ class CanvasWidget(QWidget):
 
         painter.setPen(QPen(QColor(220, 38, 38, 145), 1.6))
         painter.setBrush(QColor(248, 113, 113, 35))
-        for box in self.frame.get("collision_boxes", []):
-            rect = self._rect_frame(box, default_width=1.0, default_height=1.0)
+        obstacle_frames = self.frame.get("obstacles") or self.frame.get("collision_boxes") or []
+        for box in obstacle_frames:
+            rect = self._obstacle_rect_frame(box)
             if rect is None:
                 continue
             x, y, width, height, _ = rect
@@ -532,6 +533,17 @@ class CanvasWidget(QWidget):
         if point is None:
             return None
         return point[0], point[1], max(1.0, width), max(1.0, height), congested
+
+    def _obstacle_rect_frame(self, value: Any) -> tuple[float, float, float, float, bool] | None:
+        if isinstance(value, dict) and all(key in value for key in ("left", "top", "right", "bottom")):
+            left = self._number(value.get("left"), 0.0)
+            top = self._number(value.get("top"), 0.0)
+            right = self._number(value.get("right"), left)
+            bottom = self._number(value.get("bottom"), top)
+            width = max(1.0, right - left)
+            height = max(1.0, bottom - top)
+            return left + width / 2.0, top + height / 2.0, width, height, False
+        return self._rect_frame(value, default_width=1.0, default_height=1.0)
 
     def _seat_status(self, seat: Any) -> str:
         if isinstance(seat, dict):
