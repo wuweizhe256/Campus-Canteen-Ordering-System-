@@ -196,6 +196,7 @@ def run_self_test() -> None:
     print_p2_table_snapshot(recorder.last_frame)
     print_p3_entrance_snapshot(recorder.last_frame)
     print_p3_exit_snapshot(recorder.last_frame)
+    print_p3_obstacle_snapshot(recorder.last_frame)
     run_p1_sold_out_self_test()
 
 
@@ -442,6 +443,24 @@ def print_p3_exit_snapshot(frame: dict[str, Any] | None) -> None:
     print(f"exits: {exits}")
     print(f"active_students_by_exit: {dict(sorted(leaving_by_exit.items()))}")
     print(f"exit_flow: {stats.get('exit_flow', [])}")
+
+
+def print_p3_obstacle_snapshot(frame: dict[str, Any] | None) -> None:
+    if frame is None:
+        print("p3_obstacle_snapshot: no frame captured")
+        return
+
+    print("=== P3 Obstacle / Path Snapshot ===")
+    obstacle_counts: dict[str, int] = {}
+    for obstacle in frame.get("obstacles", []):
+        kind = str(obstacle.get("kind") or "unknown")
+        obstacle_counts[kind] = obstacle_counts.get(kind, 0) + 1
+    walk_paths = frame.get("walk_paths") or []
+    path_debug_lines = frame.get("path_debug_lines") or []
+    print(f"obstacle_counts: {dict(sorted(obstacle_counts.items()))}")
+    print(f"walk_path_count: {len(walk_paths)}")
+    print(f"path_debug_line_count: {len(path_debug_lines)}")
+    print(f"obstacle_sample: {frame.get('obstacles', [])[:5]}")
 
 
 def _optional_int(value: Any) -> int | None:
