@@ -36,6 +36,9 @@ class SimulationConfig:
     time_scale: float = 6.0
     stall_count: int = 10
     table_count: int = 24
+    two_person_table_count: int | None = None
+    four_person_table_count: int | None = None
+    six_person_table_count: int | None = None
     seed: int | None = None
     total_student_count: int = 120
     max_active_students: int = 120
@@ -49,6 +52,26 @@ class SimulationConfig:
     @property
     def duration_real_seconds(self) -> float:
         return self.duration_game_seconds / self.time_scale
+
+    def resolved_table_type_counts(self) -> dict[str, int]:
+        explicit_counts = {
+            "two": self.two_person_table_count,
+            "four": self.four_person_table_count,
+            "six": self.six_person_table_count,
+        }
+        if any(value is not None for value in explicit_counts.values()):
+            return {
+                table_type: max(0, int(value or 0))
+                for table_type, value in explicit_counts.items()
+            }
+
+        count = max(1, int(self.table_count))
+        if count == 1:
+            return {"two": 0, "four": 1, "six": 0}
+        two_count = max(1, count // 4)
+        six_count = max(0, count // 4)
+        four_count = max(0, count - two_count - six_count)
+        return {"two": two_count, "four": four_count, "six": six_count}
 
 
 @dataclass
@@ -164,7 +187,14 @@ class Table:
     id: int
     x: float
     y: float
-    seats: list[Seat] = field(default_factory=lambda: [Seat(), Seat(), Seat(), Seat()])
+    table_type: str = "four"
+    seat_count: int = 4
+    seats: list[Seat] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.seat_count = max(1, int(self.seat_count))
+        if not self.seats:
+            self.seats = [Seat() for _ in range(self.seat_count)]
 
     def free_seat_indexes(self) -> list[int]:
         return [

@@ -181,12 +181,13 @@ class SimulationWorker(QObject):
 
     def _build_tables(self) -> None:
         self.tables.clear()
-        count = max(1, self.config.table_count)
+        table_specs = self._table_specs()
+        count = len(table_specs)
         start_x = 190.0
         start_y = 372.0
         gap_x = 172.0
         gap_y = 118.0
-        for index in range(count):
+        for index, (table_type, seat_count) in enumerate(table_specs):
             row = index // self.table_columns
             column = index % self.table_columns
             stagger = 22.0 if row % 2 else 0.0
@@ -195,8 +196,18 @@ class SimulationWorker(QObject):
                     id=index,
                     x=start_x + column * gap_x + stagger,
                     y=start_y + row * gap_y,
+                    table_type=table_type,
+                    seat_count=seat_count,
                 )
             )
+
+    def _table_specs(self) -> list[tuple[str, int]]:
+        seat_counts = {"two": 2, "four": 4, "six": 6}
+        specs: list[tuple[str, int]] = []
+        for table_type, count in self.config.resolved_table_type_counts().items():
+            seat_count = seat_counts.get(table_type, 4)
+            specs.extend((table_type, seat_count) for _ in range(max(0, int(count))))
+        return specs or [("four", 4)]
 
     def _build_tray_return_points(self) -> None:
         self.tray_return_points = [
@@ -707,9 +718,23 @@ class SimulationWorker(QObject):
         student.seat_index = None
 
     def _seat_position(self, table: Table, seat_index: int) -> tuple[float, float]:
-        offsets = [(-50.0, -42.0), (50.0, -42.0), (-50.0, 42.0), (50.0, 42.0)]
-        dx, dy = offsets[seat_index]
+        offsets = self._seat_offsets(table.seat_count)
+        dx, dy = offsets[min(seat_index, len(offsets) - 1)]
         return table.x + dx, table.y + dy
+
+    def _seat_offsets(self, seat_count: int) -> list[tuple[float, float]]:
+        if seat_count <= 2:
+            return [(-50.0, 0.0), (50.0, 0.0)]
+        if seat_count <= 4:
+            return [(-50.0, -42.0), (50.0, -42.0), (-50.0, 42.0), (50.0, 42.0)]
+        return [
+            (-54.0, -50.0),
+            (54.0, -50.0),
+            (-54.0, 0.0),
+            (54.0, 0.0),
+            (-54.0, 50.0),
+            (54.0, 50.0),
+        ][:seat_count]
 
     def _build_table_path(
         self,
@@ -807,12 +832,14 @@ class SimulationWorker(QObject):
 
     def _adjacent_aisle_x(self, table: Table, seat_index: int) -> float:
         column = table.id % self.table_columns
-        if seat_index in (0, 2):
+        seat_x, _ = self._seat_position(table, seat_index)
+        if seat_x < table.x:
             return max(92.0, table.x - 92.5 if column > 0 else 92.0)
         return min(self.width - 64.0, table.x + 92.5)
 
     def _seat_access_y(self, table: Table, seat_index: int) -> float:
-        if seat_index in (0, 1):
+        _, seat_y = self._seat_position(table, seat_index)
+        if seat_y < table.y:
             return max(self.top_walkway_y, table.y - 56.0)
         return min(self.height - 64.0, table.y + 56.0)
 
@@ -1287,6 +1314,8 @@ class SimulationWorker(QObject):
                     "id": table.id,
                     "x": table.x,
                     "y": table.y,
+                    "table_type": table.table_type,
+                    "seat_count": table.seat_count,
                     "occupied": table.occupied_count,
                     "seats": [seat.student_id for seat in table.seats],
                     "seat_frames": [
