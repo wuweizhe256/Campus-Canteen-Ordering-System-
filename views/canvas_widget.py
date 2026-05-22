@@ -163,8 +163,9 @@ class CanvasWidget(QWidget):
 
         painter.setPen(QPen(QColor(220, 38, 38, 145), 1.6))
         painter.setBrush(QColor(248, 113, 113, 35))
-        for box in self.frame.get("collision_boxes", []):
-            rect = self._rect_frame(box, default_width=1.0, default_height=1.0)
+        obstacle_frames = self.frame.get("obstacles") or self.frame.get("collision_boxes") or []
+        for box in obstacle_frames:
+            rect = self._obstacle_rect_frame(box)
             if rect is None:
                 continue
             x, y, width, height, _ = rect
@@ -326,8 +327,8 @@ class CanvasWidget(QWidget):
             painter.drawLine(int(x - 21), int(y + 18), int(x - 25), int(y + 34))
             painter.drawLine(int(x + 21), int(y + 18), int(x + 17), int(y + 34))
 
-            seat_offsets = [(-47, -32), (31, -32), (-47, 24), (31, 24)]
             seats = table.get("seat_frames") or table.get("seats") or []
+            seat_offsets = self._table_seat_offsets(int(table.get("seat_count") or len(seats) or 4))
             for index, (dx, dy) in enumerate(seat_offsets):
                 seat = seats[index] if index < len(seats) else None
                 status = self._seat_status(seat)
@@ -338,6 +339,13 @@ class CanvasWidget(QWidget):
                 painter.drawRoundedRect(QRectF(x + dx, y + dy, 18, 18), 6, 6)
                 painter.setBrush(color.lighter(112))
                 painter.drawEllipse(QRectF(x + dx + 3, y + dy - 4, 12, 10))
+
+    def _table_seat_offsets(self, seat_count: int) -> list[tuple[int, int]]:
+        if seat_count <= 2:
+            return [(-47, -4), (31, -4)]
+        if seat_count <= 4:
+            return [(-47, -32), (31, -32), (-47, 24), (31, 24)]
+        return [(-51, -40), (35, -40), (-51, -4), (35, -4), (-51, 32), (35, 32)][:seat_count]
 
     def _draw_students(self, painter: QPainter) -> None:
         students = [student for student in self.frame.get("students", []) if isinstance(student, dict)]
@@ -525,6 +533,17 @@ class CanvasWidget(QWidget):
         if point is None:
             return None
         return point[0], point[1], max(1.0, width), max(1.0, height), congested
+
+    def _obstacle_rect_frame(self, value: Any) -> tuple[float, float, float, float, bool] | None:
+        if isinstance(value, dict) and all(key in value for key in ("left", "top", "right", "bottom")):
+            left = self._number(value.get("left"), 0.0)
+            top = self._number(value.get("top"), 0.0)
+            right = self._number(value.get("right"), left)
+            bottom = self._number(value.get("bottom"), top)
+            width = max(1.0, right - left)
+            height = max(1.0, bottom - top)
+            return left + width / 2.0, top + height / 2.0, width, height, False
+        return self._rect_frame(value, default_width=1.0, default_height=1.0)
 
     def _seat_status(self, seat: Any) -> str:
         if isinstance(seat, dict):
