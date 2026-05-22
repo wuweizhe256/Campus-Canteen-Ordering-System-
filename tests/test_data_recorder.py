@@ -336,6 +336,47 @@ class DataRecorderTest(unittest.TestCase):
             ],
         )
 
+    def test_records_p3_entrance_exit_path_and_obstacle_events(self) -> None:
+        recorder = DataRecorder()
+        for event in [
+            {
+                "event_type": "entrance_used",
+                "game_time": 1,
+                "student_id": 1,
+                "entrance_id": 2,
+            },
+            {
+                "event_type": "exit_used",
+                "game_time": 50,
+                "student_id": 1,
+                "exit_id": 3,
+            },
+            {
+                "event_type": "path_congestion_sample",
+                "game_time": 20,
+                "student_id": 1,
+                "path_id": "p-1",
+                "path_length": 120.5,
+                "path_duration": 30,
+                "path_congestion_index": 0.25,
+                "path_blocked": "false",
+            },
+            {
+                "event_type": "obstacle_registered",
+                "game_time": 0,
+                "obstacle_id": 9,
+                "obstacle_kind": "table",
+            },
+        ]:
+            recorder.record_event(event)
+
+        self.assertEqual([event.event_type for event in recorder.entrance_events(2)], ["entrance_used"])
+        self.assertEqual([event.event_type for event in recorder.exit_events(3)], ["exit_used"])
+        self.assertEqual([event.event_type for event in recorder.path_events("p-1")], ["path_congestion_sample"])
+        self.assertEqual([event.event_type for event in recorder.obstacle_events(9)], ["obstacle_registered"])
+        self.assertEqual(recorder.path_events("p-1")[0].path_length, 120.5)
+        self.assertFalse(recorder.path_events("p-1")[0].path_blocked)
+
 
 if __name__ == "__main__":
     unittest.main()
