@@ -696,6 +696,8 @@ P4 建议包含：
 
 - `models/data_recorder.py` 已提供事件级记录、队列采样、运行态采样和 P0 统计输出。`done`
 - 当前统计模块支持 P0 指标。`done`
+- 数据处理模块已支持 P1 订单、菜品、库存和售罄事件记录。`done`
+- 数据处理模块已支持 P1 菜品销量、售罄次数、最新库存、订单等待时间、订单出餐时间、订单总耗时、完成订单数和取消订单数统计。`done`
 
 待实现：
 
@@ -714,6 +716,13 @@ P4 建议包含：
 - 当前通过 `queue_started` 和 `food_ready` 事件累计并输出 `stats.avg_wait_time`。`done`
 - 本版只统计“总等待时间”。`todel`
 - 双队列等待统计移入扩展设计。`todel`
+
+P1 订单等待口径：
+
+- 订单等待时间 = `order_started.game_time - order_created.game_time`。`done`
+- 订单出餐时间 = `order_completed.game_time - order_started.game_time`。`done`
+- 订单总耗时 = `order_completed.game_time - order_created.game_time`。`done`
+- P1 统计分别输出到 `stats.avg_order_wait_time`、`stats.avg_order_cook_time` 和 `stats.avg_order_total_time`。`done`
 
 ### 8.4 平均就餐总耗时
 
@@ -748,7 +757,24 @@ P4 建议包含：
 - 当前通过 `eating_started` 和 `eating_finished` 事件累计并输出 `stats.seat_utilization`。`done`
 - 多桌型场景下，增加“各桌型利用率”统计。`todo`
 
-### 8.7 高峰时段场内人数
+### 8.7 P1 菜品与订单统计
+
+定义：
+
+- 菜品销量按已完成订单统计，只统计 `order_completed`。`done`
+- 售罄次数按 `dish_sold_out` 事件累计。`done`
+- 最新库存取 `dish_stock_changed`、`dish_sold_out` 或带 `stock_after` 的 `order_completed` 中最新的 `stock_after`。`done`
+- 取消订单只进入 `cancelled_order_count`，不计入销量和订单耗时均值。`done`
+
+当前输出：
+
+- `stats.dish_sales_stats`：按 `dish_id` 和 `stall_id` 聚合的销量与收入。`done`
+- `stats.dish_sold_out_stats`：按 `dish_id` 和 `stall_id` 聚合的售罄次数。`done`
+- `stats.dish_stock_stats`：按 `dish_id` 和 `stall_id` 输出最新库存。`done`
+- `stats.completed_order_count`：完成订单数。`done`
+- `stats.cancelled_order_count`：取消订单数。`done`
+
+### 8.8 高峰时段场内人数
 
 当前状态：
 
