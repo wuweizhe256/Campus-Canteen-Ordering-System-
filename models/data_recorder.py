@@ -164,6 +164,28 @@ class TableTypeUtilizationStats:
 
 
 @dataclass(frozen=True)
+class FlowStats:
+    id: int
+    flow_count: int
+
+    def to_dict(self) -> dict[str, int]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class PathCongestionStats:
+    avg_path_length: float | None
+    avg_path_duration: float | None
+    avg_path_congestion_index: float | None
+    path_sample_count: int
+    completed_path_count: int
+    blocked_path_count: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class StatsFrameP0:
     avg_wait_time: float | None
     avg_total_time: float | None
@@ -188,6 +210,9 @@ class StatsFrameP0:
     completed_group_count: int
     same_table_group_count: int
     table_type_utilization: list[TableTypeUtilizationStats]
+    entrance_flow: list[FlowStats]
+    exit_flow: list[FlowStats]
+    path_congestion_stats: PathCongestionStats
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -214,6 +239,9 @@ class StatsFrameP0:
             "completed_group_count": self.completed_group_count,
             "same_table_group_count": self.same_table_group_count,
             "table_type_utilization": [item.to_dict() for item in self.table_type_utilization],
+            "entrance_flow": [item.to_dict() for item in self.entrance_flow],
+            "exit_flow": [item.to_dict() for item in self.exit_flow],
+            "path_congestion_stats": self.path_congestion_stats.to_dict(),
         }
 
 
@@ -403,6 +431,9 @@ class DataRecorder:
             completed_group_count=group_table_stats["completed_group_count"],
             same_table_group_count=group_table_stats["same_table_group_count"],
             table_type_utilization=self._table_type_utilization(current_time),
+            entrance_flow=self._flow_stats("entrance_used", "entrance_id"),
+            exit_flow=self._flow_stats("exit_used", "exit_id"),
+            path_congestion_stats=self._path_congestion_stats(),
         )
 
     def _average_duration_by_student(self, start_type: str, end_type: str) -> float | None:
@@ -722,6 +753,55 @@ class DataRecorder:
         for table_type, seat_count in by_table.values():
             capacity[table_type] += seat_count
         return dict(capacity)
+
+    def _flow_stats(self, event_type: str, id_field: str) -> list[FlowStats]:
+        counts: dict[int, int] = defaultdict(int)
+        for event in self.events:
+            if event.event_type != event_type:
+                continue
+            value = getattr(event, id_field)
+            if value is None:
+                self.issues.append(f"{event_type} missing {id_field}")
+                continue
+            counts[int(value)] += 1
+
+        return [
+            FlowStats(id=item_id, flow_count=flow_count)
+            for item_id, flow_count in sorted(counts.items())
+        ]
+
+    def _path_congestion_stats(self) -> PathCongestionStats:
+        length_samples: list[float] = []
+        duration_samples: list[float] = []
+        congestion_samples: list[float] = []
+        path_sample_count = 0
+        completed_path_count = 0
+        blocked_path_count = 0
+
+        for event in self.events:
+            if event.event_type not in {"path_planned", "path_completed", "path_congestion_sample"}:
+                continue
+            if event.path_length is not None and event.event_type in {"path_planned", "path_completed"}:
+                length_samples.append(max(0.0, event.path_length))
+            if event.path_duration is not None and event.event_type == "path_completed":
+                duration_samples.append(max(0.0, event.path_duration))
+            if event.path_congestion_index is not None:
+                congestion_samples.append(max(0.0, min(1.0, event.path_congestion_index)))
+            if event.event_type == "path_congestion_sample":
+                path_sample_count += 1
+            if event.event_type == "path_completed":
+                completed_path_count += 1
+            if event.path_blocked:
+                blocked_path_count += 1
+
+        return PathCongestionStats(
+            avg_path_length=_average(length_samples),
+            avg_path_duration=_average(duration_samples),
+            avg_path_congestion_index=_average(congestion_samples),
+            path_sample_count=path_sample_count,
+            completed_path_count=completed_path_count,
+            blocked_path_count=blocked_path_count,
+        )
 
 
 def _event_sort_key(event: EventRecordP0) -> tuple[float, int]:
