@@ -95,6 +95,110 @@ class DataRecorderTest(unittest.TestCase):
         self.assertEqual(order_events[0].price, 12.5)
         self.assertEqual(order_events[0].quantity, 1)
 
+    def test_builds_p1_dish_and_order_stats(self) -> None:
+        recorder = DataRecorder()
+        for event in [
+            {
+                "event_type": "order_created",
+                "game_time": 10,
+                "student_id": 1,
+                "stall_id": 2,
+                "dish_id": 3,
+                "order_id": 100,
+                "price": 12.5,
+                "quantity": 1,
+            },
+            {
+                "event_type": "order_started",
+                "game_time": 14,
+                "student_id": 1,
+                "stall_id": 2,
+                "dish_id": 3,
+                "order_id": 100,
+            },
+            {
+                "event_type": "order_completed",
+                "game_time": 20,
+                "student_id": 1,
+                "stall_id": 2,
+                "dish_id": 3,
+                "order_id": 100,
+                "stock_after": 4,
+            },
+            {
+                "event_type": "order_created",
+                "game_time": 30,
+                "student_id": 2,
+                "stall_id": 2,
+                "dish_id": 3,
+                "order_id": 101,
+                "price": 12.5,
+                "quantity": 2,
+            },
+            {
+                "event_type": "order_started",
+                "game_time": 34,
+                "student_id": 2,
+                "stall_id": 2,
+                "dish_id": 3,
+                "order_id": 101,
+            },
+            {
+                "event_type": "order_completed",
+                "game_time": 44,
+                "student_id": 2,
+                "stall_id": 2,
+                "dish_id": 3,
+                "order_id": 101,
+                "stock_after": 2,
+            },
+            {
+                "event_type": "order_created",
+                "game_time": 50,
+                "student_id": 3,
+                "stall_id": 2,
+                "dish_id": 4,
+                "order_id": 102,
+                "price": 8.0,
+            },
+            {
+                "event_type": "order_cancelled",
+                "game_time": 55,
+                "student_id": 3,
+                "stall_id": 2,
+                "dish_id": 4,
+                "order_id": 102,
+            },
+            {
+                "event_type": "dish_sold_out",
+                "game_time": 60,
+                "stall_id": 2,
+                "dish_id": 3,
+                "stock_after": 0,
+            },
+        ]:
+            recorder.record_event(event)
+
+        stats = recorder.build_stats().to_dict()
+
+        self.assertEqual(
+            stats["dish_sales_stats"],
+            [{"dish_id": 3, "stall_id": 2, "sales_count": 3, "revenue": 37.5}],
+        )
+        self.assertEqual(
+            stats["dish_sold_out_stats"],
+            [{"dish_id": 3, "stall_id": 2, "sold_out_count": 1}],
+        )
+        self.assertEqual(
+            stats["dish_stock_stats"],
+            [{"dish_id": 3, "stall_id": 2, "stock": 0}],
+        )
+        self.assertEqual(stats["avg_order_wait_time"], 4.0)
+        self.assertEqual(stats["avg_order_cook_time"], 8.0)
+        self.assertEqual(stats["avg_order_total_time"], 12.0)
+        self.assertEqual(stats["completed_order_count"], 2)
+        self.assertEqual(stats["cancelled_order_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
