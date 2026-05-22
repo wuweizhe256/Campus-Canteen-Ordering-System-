@@ -80,6 +80,37 @@ class StallQueueStats:
 
 
 @dataclass(frozen=True)
+class DishSalesStats:
+    dish_id: int
+    stall_id: int | None
+    sales_count: int
+    revenue: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class DishSoldOutStats:
+    dish_id: int
+    stall_id: int | None
+    sold_out_count: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class DishStockStats:
+    dish_id: int
+    stall_id: int | None
+    stock: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class StatsFrameP0:
     avg_wait_time: float | None
     avg_total_time: float | None
@@ -92,6 +123,14 @@ class StatsFrameP0:
     reroute_count: int
     avg_queue_length: float | None
     tray_return_queue_length: int
+    dish_sales_stats: list[DishSalesStats]
+    dish_sold_out_stats: list[DishSoldOutStats]
+    dish_stock_stats: list[DishStockStats]
+    avg_order_wait_time: float | None
+    avg_order_cook_time: float | None
+    avg_order_total_time: float | None
+    completed_order_count: int
+    cancelled_order_count: int
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -106,6 +145,14 @@ class StatsFrameP0:
             "reroute_count": self.reroute_count,
             "avg_queue_length": self.avg_queue_length,
             "tray_return_queue_length": self.tray_return_queue_length,
+            "dish_sales_stats": [item.to_dict() for item in self.dish_sales_stats],
+            "dish_sold_out_stats": [item.to_dict() for item in self.dish_sold_out_stats],
+            "dish_stock_stats": [item.to_dict() for item in self.dish_stock_stats],
+            "avg_order_wait_time": self.avg_order_wait_time,
+            "avg_order_cook_time": self.avg_order_cook_time,
+            "avg_order_total_time": self.avg_order_total_time,
+            "completed_order_count": self.completed_order_count,
+            "cancelled_order_count": self.cancelled_order_count,
         }
 
 
@@ -232,6 +279,7 @@ class DataRecorder:
         max_active_students = self._max_active_students(events)
         stall_queue_stats = self._stall_queue_stats(events)
         seat_utilization = self._seat_utilization(current_time)
+        order_timing_stats = self._order_timing_stats()
         runtime = self.runtime_samples[-1] if self.runtime_samples else None
         return StatsFrameP0(
             avg_wait_time=avg_wait_time,
@@ -245,6 +293,14 @@ class DataRecorder:
             reroute_count=runtime.reroute_count if runtime else 0,
             avg_queue_length=runtime.avg_queue_length if runtime else None,
             tray_return_queue_length=runtime.tray_return_queue_length if runtime else 0,
+            dish_sales_stats=self._dish_sales_stats(),
+            dish_sold_out_stats=self._dish_sold_out_stats(),
+            dish_stock_stats=self._dish_stock_stats(),
+            avg_order_wait_time=order_timing_stats["avg_order_wait_time"],
+            avg_order_cook_time=order_timing_stats["avg_order_cook_time"],
+            avg_order_total_time=order_timing_stats["avg_order_total_time"],
+            completed_order_count=order_timing_stats["completed_order_count"],
+            cancelled_order_count=order_timing_stats["cancelled_order_count"],
         )
 
     def _average_duration_by_student(self, start_type: str, end_type: str) -> float | None:
@@ -344,6 +400,135 @@ class DataRecorder:
             return None
         return max(0.0, min(1.0, occupied_duration / total_seat_time))
 
+    def _dish_sales_stats(self) -> list[DishSalesStats]:
+        grouped: dict[tuple[int, int | None], dict[str, float | int]] = {}
+        for event in self.events:
+            if event.event_type != "order_completed":
+                continue
+            dish_id = event.dish_id
+            if dish_id is None and event.order_id is not None:
+                dish_id = _first_known_int(self.order_events(event.order_id), "dish_id")
+            if dish_id is None:
+                self.issues.append("order_completed missing dish_id")
+                continue
+
+            stall_id = event.stall_id
+            if stall_id is None and event.order_id is not None:
+                stall_id = _first_known_int(self.order_events(event.order_id), "stall_id")
+            quantity = event.quantity
+            if quantity is None and event.order_id is not None:
+                quantity = _first_known_int(self.order_events(event.order_id), "quantity")
+            quantity = max(1, quantity or 1)
+
+            price = event.price
+            if price is None and event.order_id is not None:
+                price = _first_known_float(self.order_events(event.order_id), "price")
+            revenue = quantity * (price or 0.0)
+
+            key = (dish_id, stall_id)
+            current = grouped.setdefault(key, {"sales_count": 0, "revenue": 0.0})
+            current["sales_count"] = int(current["sales_count"]) + quantity
+            current["revenue"] = float(current["revenue"]) + revenue
+
+        return [
+            DishSalesStats(
+                dish_id=dish_id,
+                stall_id=stall_id,
+                sales_count=int(values["sales_count"]),
+                revenue=float(values["revenue"]),
+            )
+            for (dish_id, stall_id), values in sorted(
+                grouped.items(), key=lambda item: (item[0][0], -1 if item[0][1] is None else item[0][1])
+            )
+        ]
+
+    def _dish_sold_out_stats(self) -> list[DishSoldOutStats]:
+        grouped: dict[tuple[int, int | None], int] = defaultdict(int)
+        for event in self.events:
+            if event.event_type != "dish_sold_out":
+                continue
+            if event.dish_id is None:
+                self.issues.append("dish_sold_out missing dish_id")
+                continue
+            grouped[(event.dish_id, event.stall_id)] += 1
+
+        return [
+            DishSoldOutStats(dish_id=dish_id, stall_id=stall_id, sold_out_count=count)
+            for (dish_id, stall_id), count in sorted(
+                grouped.items(), key=lambda item: (item[0][0], -1 if item[0][1] is None else item[0][1])
+            )
+        ]
+
+    def _dish_stock_stats(self) -> list[DishStockStats]:
+        latest: dict[tuple[int, int | None], EventRecordP0] = {}
+        for event in sorted(self.events, key=_event_sort_key):
+            if event.event_type not in {"dish_stock_changed", "dish_sold_out", "order_completed"}:
+                continue
+            if event.dish_id is None or event.stock_after is None:
+                continue
+            latest[(event.dish_id, event.stall_id)] = event
+
+        return [
+            DishStockStats(dish_id=dish_id, stall_id=stall_id, stock=max(0, int(event.stock_after or 0)))
+            for (dish_id, stall_id), event in sorted(
+                latest.items(), key=lambda item: (item[0][0], -1 if item[0][1] is None else item[0][1])
+            )
+        ]
+
+    def _order_timing_stats(self) -> dict[str, float | int | None]:
+        wait_samples: list[float] = []
+        cook_samples: list[float] = []
+        total_samples: list[float] = []
+        completed_order_count = 0
+        cancelled_order_count = 0
+
+        for order_id, order_events in self.events_by_order.items():
+            events = sorted(order_events, key=_event_sort_key)
+            created = _first_event(events, "order_created")
+            started = _first_event(events, "order_started")
+            completed = _first_event(events, "order_completed")
+            cancelled = _first_event(events, "order_cancelled")
+
+            if cancelled is not None:
+                cancelled_order_count += 1
+            if completed is None:
+                continue
+            completed_order_count += 1
+
+            if created is not None:
+                total_samples.extend(
+                    self._duration_sample(order_id, created, completed, "order_created->order_completed")
+                )
+            if created is not None and started is not None:
+                wait_samples.extend(
+                    self._duration_sample(order_id, created, started, "order_created->order_started")
+                )
+            if started is not None:
+                cook_samples.extend(
+                    self._duration_sample(order_id, started, completed, "order_started->order_completed")
+                )
+
+        return {
+            "avg_order_wait_time": _average(wait_samples),
+            "avg_order_cook_time": _average(cook_samples),
+            "avg_order_total_time": _average(total_samples),
+            "completed_order_count": completed_order_count,
+            "cancelled_order_count": cancelled_order_count,
+        }
+
+    def _duration_sample(
+        self,
+        order_id: int,
+        start: EventRecordP0,
+        end: EventRecordP0,
+        label: str,
+    ) -> list[float]:
+        duration = end.game_time - start.game_time
+        if duration < 0:
+            self.issues.append(f"negative order duration for order {order_id}: {label}")
+            return []
+        return [duration]
+
 
 def _event_sort_key(event: EventRecordP0) -> tuple[float, int]:
     priority = {
@@ -369,6 +554,22 @@ def _first_event(
         if min_time is not None and event.game_time < min_time:
             continue
         return event
+    return None
+
+
+def _first_known_int(events: Iterable[EventRecordP0], field_name: str) -> int | None:
+    for event in sorted(events, key=_event_sort_key):
+        value = getattr(event, field_name)
+        if value is not None:
+            return int(value)
+    return None
+
+
+def _first_known_float(events: Iterable[EventRecordP0], field_name: str) -> float | None:
+    for event in sorted(events, key=_event_sort_key):
+        value = getattr(event, field_name)
+        if value is not None:
+            return float(value)
     return None
 
 
