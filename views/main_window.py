@@ -62,12 +62,27 @@ class MainWindow(QMainWindow):
         self.time_scale_slider.setToolTip("调整仿真内时间和现实时间的比例")
         self.path_checkbox = QCheckBox("显示调试层")
         self.path_checkbox.setObjectName("PathToggle")
+        self.obstacle_checkbox = QCheckBox("障碍物层")
+        self.obstacle_checkbox.setObjectName("PathToggle")
+        self.zoom_label = QLabel("画布缩放 100%")
+        self.zoom_label.setObjectName("ToolbarLabel")
+        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
+        self.zoom_slider.setRange(60, 180)
+        self.zoom_slider.setValue(100)
+        self.zoom_slider.setFixedWidth(130)
+        self.zoom_slider.setToolTip("调整左侧食堂演示画布缩放比例")
+        self.reset_view_button = QPushButton("重置视图")
+        self.reset_view_button.setObjectName("SecondaryButton")
 
         self.start_button.clicked.connect(self._open_config_dialog)
         self.pause_button.clicked.connect(self._toggle_pause)
         self.stop_button.clicked.connect(self.stopRequested.emit)
         self.time_scale_slider.valueChanged.connect(self._time_scale_slider_changed)
         self.path_checkbox.toggled.connect(self.canvas.set_show_paths)
+        self.obstacle_checkbox.toggled.connect(self.canvas.set_show_obstacles)
+        self.zoom_slider.valueChanged.connect(self._zoom_slider_changed)
+        self.canvas.zoomChanged.connect(self._canvas_zoom_changed)
+        self.reset_view_button.clicked.connect(self.canvas.reset_view)
 
         top_bar = QHBoxLayout()
         top_bar.setContentsMargins(18, 12, 18, 12)
@@ -81,6 +96,10 @@ class MainWindow(QMainWindow):
         top_bar.addWidget(self.time_scale_label)
         top_bar.addWidget(self.time_scale_slider)
         top_bar.addWidget(self.path_checkbox)
+        top_bar.addWidget(self.obstacle_checkbox)
+        top_bar.addWidget(self.zoom_label)
+        top_bar.addWidget(self.zoom_slider)
+        top_bar.addWidget(self.reset_view_button)
         top_bar.addSpacing(18)
         top_bar.addWidget(self.status_label, 1)
 
@@ -115,6 +134,8 @@ class MainWindow(QMainWindow):
 
     def start_simulation(self, config: SimulationConfig) -> None:
         config = replace(config, time_scale=float(self.time_scale_slider.value()))
+        self.path_checkbox.setChecked(config.show_path_debug_layer)
+        self.obstacle_checkbox.setChecked(config.show_obstacle_layer)
         self._running = True
         self._paused = False
         self.start_button.setEnabled(False)
@@ -129,6 +150,20 @@ class MainWindow(QMainWindow):
     def _time_scale_slider_changed(self, value: int) -> None:
         self.time_scale_label.setText(f"时间倍率 {value}x")
         self.timeScaleChanged.emit(float(value))
+
+    def _zoom_slider_changed(self, value: int) -> None:
+        zoom = value / 100.0
+        self.zoom_label.setText(f"画布缩放 {value}%")
+        self.canvas.set_view_zoom(zoom)
+
+    def _canvas_zoom_changed(self, zoom: float) -> None:
+        value = int(round(zoom * 100))
+        self.zoom_label.setText(f"画布缩放 {value}%")
+        if self.zoom_slider.value() == value:
+            return
+        self.zoom_slider.blockSignals(True)
+        self.zoom_slider.setValue(value)
+        self.zoom_slider.blockSignals(False)
 
     def _toggle_pause(self) -> None:
         if not self._running:
