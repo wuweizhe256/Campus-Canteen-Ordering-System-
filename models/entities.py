@@ -39,6 +39,15 @@ class SimulationConfig:
     two_person_table_count: int | None = None
     four_person_table_count: int | None = None
     six_person_table_count: int | None = None
+    dish_preference_weight: float = 0.4
+    price_weight: float = 0.2
+    default_dish_stock: int = 24
+    low_stock_threshold: int = 3
+    companion_ratio: float = 0.25
+    entrance_count: int = 1
+    exit_count: int = 1
+    show_path_debug_layer: bool = False
+    show_obstacle_layer: bool = False
     seed: int | None = None
     total_student_count: int = 120
     max_active_students: int = 120
