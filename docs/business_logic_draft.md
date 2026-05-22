@@ -696,6 +696,12 @@ P4 建议包含：
 
 - `models/data_recorder.py` 已提供事件级记录、队列采样、运行态采样和 P0 统计输出。`done`
 - 当前统计模块支持 P0 指标。`done`
+- 数据处理模块已支持 P1 订单、菜品、库存和售罄事件记录。`done`
+- 数据处理模块已支持 P1 菜品销量、售罄次数、最新库存、订单等待时间、订单出餐时间、订单总耗时、完成订单数和取消订单数统计。`done`
+- 数据处理模块已支持 P2 同行组、座位分配和桌型事件记录。`done`
+- 数据处理模块已支持 P2 同行组同桌率和各桌型利用率统计。`done`
+- 数据处理模块已支持 P3 入口、出口、路径和障碍物事件记录。`done`
+- 数据处理模块已支持 P3 入口流量、出口流量和路径拥堵指标统计。`done`
 
 待实现：
 
@@ -714,6 +720,13 @@ P4 建议包含：
 - 当前通过 `queue_started` 和 `food_ready` 事件累计并输出 `stats.avg_wait_time`。`done`
 - 本版只统计“总等待时间”。`todel`
 - 双队列等待统计移入扩展设计。`todel`
+
+P1 订单等待口径：
+
+- 订单等待时间 = `order_started.game_time - order_created.game_time`。`done`
+- 订单出餐时间 = `order_completed.game_time - order_started.game_time`。`done`
+- 订单总耗时 = `order_completed.game_time - order_created.game_time`。`done`
+- P1 统计分别输出到 `stats.avg_order_wait_time`、`stats.avg_order_cook_time` 和 `stats.avg_order_total_time`。`done`
 
 ### 8.4 平均就餐总耗时
 
@@ -748,14 +761,70 @@ P4 建议包含：
 - 当前通过 `eating_started` 和 `eating_finished` 事件累计并输出 `stats.seat_utilization`。`done`
 - 多桌型场景下，增加“各桌型利用率”统计。`todo`
 
-### 8.7 高峰时段场内人数
+### 8.7 P1 菜品与订单统计
+
+定义：
+
+- 菜品销量按已完成订单统计，只统计 `order_completed`。`done`
+- 售罄次数按 `dish_sold_out` 事件累计。`done`
+- 最新库存取 `dish_stock_changed`、`dish_sold_out` 或带 `stock_after` 的 `order_completed` 中最新的 `stock_after`。`done`
+- 取消订单只进入 `cancelled_order_count`，不计入销量和订单耗时均值。`done`
+
+当前输出：
+
+- `stats.dish_sales_stats`：按 `dish_id` 和 `stall_id` 聚合的销量与收入。`done`
+- `stats.dish_sold_out_stats`：按 `dish_id` 和 `stall_id` 聚合的售罄次数。`done`
+- `stats.dish_stock_stats`：按 `dish_id` 和 `stall_id` 输出最新库存。`done`
+- `stats.completed_order_count`：完成订单数。`done`
+- `stats.cancelled_order_count`：取消订单数。`done`
+
+### 8.8 P2 同行组与桌型统计
+
+定义：
+
+- 同行组同桌率 = 全组坐在同一桌的完整同行组数量 / 已形成完整座位分配的同行组数量。`done`
+- 独行学生不计入同行组同桌率。`done`
+- 同行组不完整分配时暂不进入同桌率分母，避免把未完成联调的数据误判为不同桌。`done`
+- 各桌型利用率 = 该桌型座位占用总时长 / 该桌型总座位时长。`done`
+- 桌型总座位数优先来自 `table_type_registered` 或带 `table_type`、`seat_count` 的座位 / 就餐事件。`done`
+
+当前输出：
+
+- `stats.group_same_table_rate`：同行组同桌率。`done`
+- `stats.completed_group_count`：已完整分配座位的同行组数量。`done`
+- `stats.same_table_group_count`：全组坐在同一桌的同行组数量。`done`
+- `stats.table_type_utilization`：各桌型座位数和利用率。`done`
+
+### 8.9 P3 出入口与路径统计
+
+定义：
+
+- 入口流量按 `entrance_used` 事件中的 `entrance_id` 累计。`done`
+- 出口流量按 `exit_used` 事件中的 `exit_id` 累计。`done`
+- 平均路径长度来自 `path_planned` 和 `path_completed` 中的 `path_length`。`done`
+- 平均路径耗时来自 `path_completed` 中的 `path_duration`。`done`
+- 平均路径拥堵指数来自 `path_congestion_sample` 或其他路径事件中的 `path_congestion_index`。`done`
+- 路径阻断次数按 `path_blocked = true` 的事件累计。`done`
+
+当前输出：
+
+- `stats.entrance_flow`：各入口累计流量。`done`
+- `stats.exit_flow`：各出口累计流量。`done`
+- `stats.path_congestion_stats.avg_path_length`：平均路径长度。`done`
+- `stats.path_congestion_stats.avg_path_duration`：平均路径耗时。`done`
+- `stats.path_congestion_stats.avg_path_congestion_index`：平均路径拥堵指数。`done`
+- `stats.path_congestion_stats.path_sample_count`：路径拥堵采样次数。`done`
+- `stats.path_congestion_stats.completed_path_count`：完成路径数量。`done`
+- `stats.path_congestion_stats.blocked_path_count`：路径阻断或明显绕行次数。`done`
+
+### 8.10 高峰时段场内人数
 
 当前状态：
 
 - 当前在场人数 `active_students` 已实时显示。`done`
 - 最大在场人数已输出到 `stats.max_active_students`。`done`
 - 指定时段平均在场人数当前没有输出。`todo`
-- 多入口和多出口场景下，补充“各入口流量 / 各出口流量”统计。`todo`
+- 多入口和多出口场景下，“各入口流量 / 各出口流量”已由 P3 数据处理统计支持。`done`
 
 ---
 

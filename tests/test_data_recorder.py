@@ -61,6 +61,377 @@ class DataRecorderTest(unittest.TestCase):
 
         self.assertEqual([event.event_type for event in events], ["student_spawned", "student_left"])
 
+    def test_records_p1_order_and_dish_events(self) -> None:
+        recorder = DataRecorder()
+        recorder.record_event(
+            {
+                "event_type": "order_created",
+                "game_time": 10,
+                "student_id": 1,
+                "stall_id": 2,
+                "dish_id": 3,
+                "order_id": 4,
+                "price": 12.5,
+                "quantity": 1,
+                "order_status": "queued",
+            }
+        )
+        recorder.record_event(
+            {
+                "event_type": "dish_sold_out",
+                "game_time": 20,
+                "stall_id": 2,
+                "dish_id": 3,
+                "stock_before": 1,
+                "stock_after": 0,
+            }
+        )
+
+        order_events = recorder.order_events(4)
+        dish_events = recorder.dish_events(3)
+
+        self.assertEqual([event.event_type for event in order_events], ["order_created"])
+        self.assertEqual([event.event_type for event in dish_events], ["order_created", "dish_sold_out"])
+        self.assertEqual(order_events[0].price, 12.5)
+        self.assertEqual(order_events[0].quantity, 1)
+
+    def test_builds_p1_dish_and_order_stats(self) -> None:
+        recorder = DataRecorder()
+        for event in [
+            {
+                "event_type": "order_created",
+                "game_time": 10,
+                "student_id": 1,
+                "stall_id": 2,
+                "dish_id": 3,
+                "order_id": 100,
+                "price": 12.5,
+                "quantity": 1,
+            },
+            {
+                "event_type": "order_started",
+                "game_time": 14,
+                "student_id": 1,
+                "stall_id": 2,
+                "dish_id": 3,
+                "order_id": 100,
+            },
+            {
+                "event_type": "order_completed",
+                "game_time": 20,
+                "student_id": 1,
+                "stall_id": 2,
+                "dish_id": 3,
+                "order_id": 100,
+                "stock_after": 4,
+            },
+            {
+                "event_type": "order_created",
+                "game_time": 30,
+                "student_id": 2,
+                "stall_id": 2,
+                "dish_id": 3,
+                "order_id": 101,
+                "price": 12.5,
+                "quantity": 2,
+            },
+            {
+                "event_type": "order_started",
+                "game_time": 34,
+                "student_id": 2,
+                "stall_id": 2,
+                "dish_id": 3,
+                "order_id": 101,
+            },
+            {
+                "event_type": "order_completed",
+                "game_time": 44,
+                "student_id": 2,
+                "stall_id": 2,
+                "dish_id": 3,
+                "order_id": 101,
+                "stock_after": 2,
+            },
+            {
+                "event_type": "order_created",
+                "game_time": 50,
+                "student_id": 3,
+                "stall_id": 2,
+                "dish_id": 4,
+                "order_id": 102,
+                "price": 8.0,
+            },
+            {
+                "event_type": "order_cancelled",
+                "game_time": 55,
+                "student_id": 3,
+                "stall_id": 2,
+                "dish_id": 4,
+                "order_id": 102,
+            },
+            {
+                "event_type": "dish_sold_out",
+                "game_time": 60,
+                "stall_id": 2,
+                "dish_id": 3,
+                "stock_after": 0,
+            },
+        ]:
+            recorder.record_event(event)
+
+        stats = recorder.build_stats().to_dict()
+
+        self.assertEqual(
+            stats["dish_sales_stats"],
+            [{"dish_id": 3, "stall_id": 2, "sales_count": 3, "revenue": 37.5}],
+        )
+        self.assertEqual(
+            stats["dish_sold_out_stats"],
+            [{"dish_id": 3, "stall_id": 2, "sold_out_count": 1}],
+        )
+        self.assertEqual(
+            stats["dish_stock_stats"],
+            [{"dish_id": 3, "stall_id": 2, "stock": 0}],
+        )
+        self.assertEqual(stats["avg_order_wait_time"], 4.0)
+        self.assertEqual(stats["avg_order_cook_time"], 8.0)
+        self.assertEqual(stats["avg_order_total_time"], 12.0)
+        self.assertEqual(stats["completed_order_count"], 2)
+        self.assertEqual(stats["cancelled_order_count"], 1)
+
+    def test_records_p2_group_and_table_type_events(self) -> None:
+        recorder = DataRecorder()
+        recorder.record_event(
+            {
+                "event_type": "group_created",
+                "game_time": 1,
+                "group_id": 7,
+                "group_size": 2,
+            }
+        )
+        recorder.record_event(
+            {
+                "event_type": "seat_assigned",
+                "game_time": 20,
+                "student_id": 1,
+                "group_id": 7,
+                "group_size": 2,
+                "table_id": 4,
+                "seat_index": 0,
+                "table_type": "four",
+                "seat_count": 4,
+            }
+        )
+
+        group_events = recorder.group_events(7)
+        table_type_events = recorder.table_type_events("four")
+
+        self.assertEqual([event.event_type for event in group_events], ["group_created", "seat_assigned"])
+        self.assertEqual([event.event_type for event in table_type_events], ["seat_assigned"])
+        self.assertEqual(group_events[1].group_size, 2)
+        self.assertEqual(group_events[1].seat_count, 4)
+
+    def test_builds_p2_group_same_table_and_table_type_stats(self) -> None:
+        recorder = DataRecorder(duration=100.0)
+        for event in [
+            {"event_type": "table_type_registered", "game_time": 0, "table_id": 1, "table_type": "two", "seat_count": 2},
+            {"event_type": "table_type_registered", "game_time": 0, "table_id": 2, "table_type": "four", "seat_count": 4},
+            {"event_type": "group_created", "game_time": 1, "group_id": 10, "group_size": 2},
+            {"event_type": "group_created", "game_time": 2, "group_id": 11, "group_size": 2},
+            {
+                "event_type": "seat_assigned",
+                "game_time": 10,
+                "student_id": 1,
+                "group_id": 10,
+                "group_size": 2,
+                "table_id": 2,
+                "seat_index": 0,
+                "table_type": "four",
+                "seat_count": 4,
+            },
+            {
+                "event_type": "seat_assigned",
+                "game_time": 10,
+                "student_id": 2,
+                "group_id": 10,
+                "group_size": 2,
+                "table_id": 2,
+                "seat_index": 1,
+                "table_type": "four",
+                "seat_count": 4,
+            },
+            {
+                "event_type": "seat_assigned",
+                "game_time": 12,
+                "student_id": 3,
+                "group_id": 11,
+                "group_size": 2,
+                "table_id": 1,
+                "seat_index": 0,
+                "table_type": "two",
+                "seat_count": 2,
+            },
+            {
+                "event_type": "seat_assigned",
+                "game_time": 12,
+                "student_id": 4,
+                "group_id": 11,
+                "group_size": 2,
+                "table_id": 2,
+                "seat_index": 2,
+                "table_type": "four",
+                "seat_count": 4,
+            },
+            {
+                "event_type": "eating_started",
+                "game_time": 20,
+                "student_id": 1,
+                "group_id": 10,
+                "table_id": 2,
+                "seat_index": 0,
+                "table_type": "four",
+                "seat_count": 4,
+            },
+            {
+                "event_type": "eating_started",
+                "game_time": 20,
+                "student_id": 2,
+                "group_id": 10,
+                "table_id": 2,
+                "seat_index": 1,
+                "table_type": "four",
+                "seat_count": 4,
+            },
+            {
+                "event_type": "eating_finished",
+                "game_time": 50,
+                "student_id": 1,
+                "group_id": 10,
+                "table_id": 2,
+                "seat_index": 0,
+                "table_type": "four",
+            },
+            {
+                "event_type": "eating_finished",
+                "game_time": 50,
+                "student_id": 2,
+                "group_id": 10,
+                "table_id": 2,
+                "seat_index": 1,
+                "table_type": "four",
+            },
+        ]:
+            recorder.record_event(event)
+
+        stats = recorder.build_stats().to_dict()
+
+        self.assertEqual(stats["group_same_table_rate"], 0.5)
+        self.assertEqual(stats["completed_group_count"], 2)
+        self.assertEqual(stats["same_table_group_count"], 1)
+        self.assertEqual(
+            stats["table_type_utilization"],
+            [
+                {"table_type": "four", "seat_count": 4, "utilization": 0.15},
+                {"table_type": "two", "seat_count": 2, "utilization": 0.0},
+            ],
+        )
+
+    def test_records_p3_entrance_exit_path_and_obstacle_events(self) -> None:
+        recorder = DataRecorder()
+        for event in [
+            {
+                "event_type": "entrance_used",
+                "game_time": 1,
+                "student_id": 1,
+                "entrance_id": 2,
+            },
+            {
+                "event_type": "exit_used",
+                "game_time": 50,
+                "student_id": 1,
+                "exit_id": 3,
+            },
+            {
+                "event_type": "path_congestion_sample",
+                "game_time": 20,
+                "student_id": 1,
+                "path_id": "p-1",
+                "path_length": 120.5,
+                "path_duration": 30,
+                "path_congestion_index": 0.25,
+                "path_blocked": "false",
+            },
+            {
+                "event_type": "obstacle_registered",
+                "game_time": 0,
+                "obstacle_id": 9,
+                "obstacle_kind": "table",
+            },
+        ]:
+            recorder.record_event(event)
+
+        self.assertEqual([event.event_type for event in recorder.entrance_events(2)], ["entrance_used"])
+        self.assertEqual([event.event_type for event in recorder.exit_events(3)], ["exit_used"])
+        self.assertEqual([event.event_type for event in recorder.path_events("p-1")], ["path_congestion_sample"])
+        self.assertEqual([event.event_type for event in recorder.obstacle_events(9)], ["obstacle_registered"])
+        self.assertEqual(recorder.path_events("p-1")[0].path_length, 120.5)
+        self.assertFalse(recorder.path_events("p-1")[0].path_blocked)
+
+    def test_builds_p3_flow_and_path_congestion_stats(self) -> None:
+        recorder = DataRecorder()
+        for event in [
+            {"event_type": "entrance_used", "game_time": 1, "student_id": 1, "entrance_id": 1},
+            {"event_type": "entrance_used", "game_time": 2, "student_id": 2, "entrance_id": 1},
+            {"event_type": "entrance_used", "game_time": 3, "student_id": 3, "entrance_id": 2},
+            {"event_type": "exit_used", "game_time": 60, "student_id": 1, "exit_id": 3},
+            {"event_type": "exit_used", "game_time": 65, "student_id": 2, "exit_id": 4},
+            {"event_type": "exit_used", "game_time": 70, "student_id": 3, "exit_id": 4},
+            {
+                "event_type": "path_planned",
+                "game_time": 5,
+                "student_id": 1,
+                "path_id": "p-1",
+                "path_length": 100,
+            },
+            {
+                "event_type": "path_congestion_sample",
+                "game_time": 10,
+                "student_id": 1,
+                "path_id": "p-1",
+                "path_congestion_index": 0.2,
+            },
+            {
+                "event_type": "path_congestion_sample",
+                "game_time": 20,
+                "student_id": 1,
+                "path_id": "p-1",
+                "path_congestion_index": 0.6,
+                "path_blocked": True,
+            },
+            {
+                "event_type": "path_completed",
+                "game_time": 30,
+                "student_id": 1,
+                "path_id": "p-1",
+                "path_length": 120,
+                "path_duration": 25,
+                "path_congestion_index": 0.4,
+            },
+        ]:
+            recorder.record_event(event)
+
+        stats = recorder.build_stats().to_dict()
+
+        self.assertEqual(stats["entrance_flow"], [{"id": 1, "flow_count": 2}, {"id": 2, "flow_count": 1}])
+        self.assertEqual(stats["exit_flow"], [{"id": 3, "flow_count": 1}, {"id": 4, "flow_count": 2}])
+        path_stats = stats["path_congestion_stats"]
+        self.assertEqual(path_stats["avg_path_length"], 110.0)
+        self.assertEqual(path_stats["avg_path_duration"], 25.0)
+        self.assertAlmostEqual(path_stats["avg_path_congestion_index"], 0.4)
+        self.assertEqual(path_stats["path_sample_count"], 2)
+        self.assertEqual(path_stats["completed_path_count"], 1)
+        self.assertEqual(path_stats["blocked_path_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
