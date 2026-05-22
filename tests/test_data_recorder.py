@@ -61,6 +61,40 @@ class DataRecorderTest(unittest.TestCase):
 
         self.assertEqual([event.event_type for event in events], ["student_spawned", "student_left"])
 
+    def test_records_p1_order_and_dish_events(self) -> None:
+        recorder = DataRecorder()
+        recorder.record_event(
+            {
+                "event_type": "order_created",
+                "game_time": 10,
+                "student_id": 1,
+                "stall_id": 2,
+                "dish_id": 3,
+                "order_id": 4,
+                "price": 12.5,
+                "quantity": 1,
+                "order_status": "queued",
+            }
+        )
+        recorder.record_event(
+            {
+                "event_type": "dish_sold_out",
+                "game_time": 20,
+                "stall_id": 2,
+                "dish_id": 3,
+                "stock_before": 1,
+                "stock_after": 0,
+            }
+        )
+
+        order_events = recorder.order_events(4)
+        dish_events = recorder.dish_events(3)
+
+        self.assertEqual([event.event_type for event in order_events], ["order_created"])
+        self.assertEqual([event.event_type for event in dish_events], ["order_created", "dish_sold_out"])
+        self.assertEqual(order_events[0].price, 12.5)
+        self.assertEqual(order_events[0].quantity, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

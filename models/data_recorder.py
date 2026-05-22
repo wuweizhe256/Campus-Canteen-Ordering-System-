@@ -14,6 +14,17 @@ P0_EVENT_TYPES = {
     "student_left",
 }
 
+P1_EVENT_TYPES = {
+    "order_created",
+    "order_started",
+    "order_completed",
+    "order_cancelled",
+    "dish_stock_changed",
+    "dish_sold_out",
+}
+
+EVENT_TYPES = P0_EVENT_TYPES | P1_EVENT_TYPES
+
 
 @dataclass(frozen=True)
 class EventRecordP0:
@@ -21,8 +32,16 @@ class EventRecordP0:
     game_time: float
     student_id: int | None = None
     stall_id: int | None = None
+    dish_id: int | None = None
+    order_id: int | None = None
     table_id: int | None = None
     seat_index: int | None = None
+    quantity: int | None = None
+    price: float | None = None
+    stock_before: int | None = None
+    stock_after: int | None = None
+    order_status: str | None = None
+    stall_status: str | None = None
     from_state: str | None = None
     to_state: str | None = None
 
@@ -33,8 +52,16 @@ class EventRecordP0:
             game_time=float(value["game_time"]),
             student_id=_optional_int(value.get("student_id")),
             stall_id=_optional_int(value.get("stall_id")),
+            dish_id=_optional_int(value.get("dish_id")),
+            order_id=_optional_int(value.get("order_id")),
             table_id=_optional_int(value.get("table_id")),
             seat_index=_optional_int(value.get("seat_index")),
+            quantity=_optional_int(value.get("quantity")),
+            price=_optional_float(value.get("price")),
+            stock_before=_optional_int(value.get("stock_before")),
+            stock_after=_optional_int(value.get("stock_after")),
+            order_status=_optional_str(value.get("order_status")),
+            stall_status=_optional_str(value.get("stall_status")),
             from_state=_optional_str(value.get("from_state")),
             to_state=_optional_str(value.get("to_state")),
         )
@@ -107,6 +134,8 @@ class DataRecorder:
         self.events: list[EventRecordP0] = []
         self.events_by_student: dict[int, list[EventRecordP0]] = defaultdict(list)
         self.events_by_stall: dict[int, list[EventRecordP0]] = defaultdict(list)
+        self.events_by_dish: dict[int, list[EventRecordP0]] = defaultdict(list)
+        self.events_by_order: dict[int, list[EventRecordP0]] = defaultdict(list)
         self.events_by_seat: dict[tuple[int, int], list[EventRecordP0]] = defaultdict(list)
         self.queue_samples: list[QueueLengthSample] = []
         self.runtime_samples: list[RuntimeStatsSample] = []
@@ -114,7 +143,7 @@ class DataRecorder:
 
     def record_event(self, event: EventRecordP0 | dict[str, Any]) -> None:
         record = EventRecordP0.from_mapping(event) if isinstance(event, dict) else event
-        if record.event_type not in P0_EVENT_TYPES:
+        if record.event_type not in EVENT_TYPES:
             self.issues.append(f"unknown event_type: {record.event_type}")
             return
 
@@ -123,6 +152,10 @@ class DataRecorder:
             self.events_by_student[record.student_id].append(record)
         if record.stall_id is not None:
             self.events_by_stall[record.stall_id].append(record)
+        if record.dish_id is not None:
+            self.events_by_dish[record.dish_id].append(record)
+        if record.order_id is not None:
+            self.events_by_order[record.order_id].append(record)
         if record.table_id is not None and record.seat_index is not None:
             self.events_by_seat[(record.table_id, record.seat_index)].append(record)
 
@@ -185,6 +218,12 @@ class DataRecorder:
 
     def student_events(self, student_id: int) -> list[EventRecordP0]:
         return sorted(self.events_by_student.get(student_id, []), key=_event_sort_key)
+
+    def dish_events(self, dish_id: int) -> list[EventRecordP0]:
+        return sorted(self.events_by_dish.get(dish_id, []), key=_event_sort_key)
+
+    def order_events(self, order_id: int) -> list[EventRecordP0]:
+        return sorted(self.events_by_order.get(order_id, []), key=_event_sort_key)
 
     def build_stats(self, current_time: float | None = None) -> StatsFrameP0:
         events = sorted(self.events, key=_event_sort_key)
@@ -349,3 +388,9 @@ def _optional_str(value: Any) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    return float(value)
