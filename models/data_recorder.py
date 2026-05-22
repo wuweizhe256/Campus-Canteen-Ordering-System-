@@ -23,7 +23,15 @@ P1_EVENT_TYPES = {
     "dish_sold_out",
 }
 
-EVENT_TYPES = P0_EVENT_TYPES | P1_EVENT_TYPES
+P2_EVENT_TYPES = {
+    "group_created",
+    "group_member_joined",
+    "seat_assigned",
+    "seat_released",
+    "table_type_registered",
+}
+
+EVENT_TYPES = P0_EVENT_TYPES | P1_EVENT_TYPES | P2_EVENT_TYPES
 
 
 @dataclass(frozen=True)
@@ -34,8 +42,12 @@ class EventRecordP0:
     stall_id: int | None = None
     dish_id: int | None = None
     order_id: int | None = None
+    group_id: int | None = None
+    group_size: int | None = None
     table_id: int | None = None
     seat_index: int | None = None
+    table_type: str | None = None
+    seat_count: int | None = None
     quantity: int | None = None
     price: float | None = None
     stock_before: int | None = None
@@ -54,8 +66,12 @@ class EventRecordP0:
             stall_id=_optional_int(value.get("stall_id")),
             dish_id=_optional_int(value.get("dish_id")),
             order_id=_optional_int(value.get("order_id")),
+            group_id=_optional_int(value.get("group_id")),
+            group_size=_optional_int(value.get("group_size")),
             table_id=_optional_int(value.get("table_id")),
             seat_index=_optional_int(value.get("seat_index")),
+            table_type=_optional_str(value.get("table_type")),
+            seat_count=_optional_int(value.get("seat_count")),
             quantity=_optional_int(value.get("quantity")),
             price=_optional_float(value.get("price")),
             stock_before=_optional_int(value.get("stock_before")),
@@ -183,6 +199,8 @@ class DataRecorder:
         self.events_by_stall: dict[int, list[EventRecordP0]] = defaultdict(list)
         self.events_by_dish: dict[int, list[EventRecordP0]] = defaultdict(list)
         self.events_by_order: dict[int, list[EventRecordP0]] = defaultdict(list)
+        self.events_by_group: dict[int, list[EventRecordP0]] = defaultdict(list)
+        self.events_by_table_type: dict[str, list[EventRecordP0]] = defaultdict(list)
         self.events_by_seat: dict[tuple[int, int], list[EventRecordP0]] = defaultdict(list)
         self.queue_samples: list[QueueLengthSample] = []
         self.runtime_samples: list[RuntimeStatsSample] = []
@@ -203,6 +221,10 @@ class DataRecorder:
             self.events_by_dish[record.dish_id].append(record)
         if record.order_id is not None:
             self.events_by_order[record.order_id].append(record)
+        if record.group_id is not None:
+            self.events_by_group[record.group_id].append(record)
+        if record.table_type is not None:
+            self.events_by_table_type[record.table_type].append(record)
         if record.table_id is not None and record.seat_index is not None:
             self.events_by_seat[(record.table_id, record.seat_index)].append(record)
 
@@ -271,6 +293,12 @@ class DataRecorder:
 
     def order_events(self, order_id: int) -> list[EventRecordP0]:
         return sorted(self.events_by_order.get(order_id, []), key=_event_sort_key)
+
+    def group_events(self, group_id: int) -> list[EventRecordP0]:
+        return sorted(self.events_by_group.get(group_id, []), key=_event_sort_key)
+
+    def table_type_events(self, table_type: str) -> list[EventRecordP0]:
+        return sorted(self.events_by_table_type.get(table_type, []), key=_event_sort_key)
 
     def build_stats(self, current_time: float | None = None) -> StatsFrameP0:
         events = sorted(self.events, key=_event_sort_key)
