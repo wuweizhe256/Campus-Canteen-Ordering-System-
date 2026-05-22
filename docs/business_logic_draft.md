@@ -700,6 +700,8 @@ P4 建议包含：
 - 数据处理模块已支持 P1 菜品销量、售罄次数、最新库存、订单等待时间、订单出餐时间、订单总耗时、完成订单数和取消订单数统计。`done`
 - 数据处理模块已支持 P2 同行组、座位分配和桌型事件记录。`done`
 - 数据处理模块已支持 P2 同行组同桌率和各桌型利用率统计。`done`
+- 数据处理模块已支持 P3 入口、出口、路径和障碍物事件记录。`done`
+- 数据处理模块已支持 P3 入口流量、出口流量和路径拥堵指标统计。`done`
 
 待实现：
 
@@ -793,14 +795,36 @@ P1 订单等待口径：
 - `stats.same_table_group_count`：全组坐在同一桌的同行组数量。`done`
 - `stats.table_type_utilization`：各桌型座位数和利用率。`done`
 
-### 8.9 高峰时段场内人数
+### 8.9 P3 出入口与路径统计
+
+定义：
+
+- 入口流量按 `entrance_used` 事件中的 `entrance_id` 累计。`done`
+- 出口流量按 `exit_used` 事件中的 `exit_id` 累计。`done`
+- 平均路径长度来自 `path_planned` 和 `path_completed` 中的 `path_length`。`done`
+- 平均路径耗时来自 `path_completed` 中的 `path_duration`。`done`
+- 平均路径拥堵指数来自 `path_congestion_sample` 或其他路径事件中的 `path_congestion_index`。`done`
+- 路径阻断次数按 `path_blocked = true` 的事件累计。`done`
+
+当前输出：
+
+- `stats.entrance_flow`：各入口累计流量。`done`
+- `stats.exit_flow`：各出口累计流量。`done`
+- `stats.path_congestion_stats.avg_path_length`：平均路径长度。`done`
+- `stats.path_congestion_stats.avg_path_duration`：平均路径耗时。`done`
+- `stats.path_congestion_stats.avg_path_congestion_index`：平均路径拥堵指数。`done`
+- `stats.path_congestion_stats.path_sample_count`：路径拥堵采样次数。`done`
+- `stats.path_congestion_stats.completed_path_count`：完成路径数量。`done`
+- `stats.path_congestion_stats.blocked_path_count`：路径阻断或明显绕行次数。`done`
+
+### 8.10 高峰时段场内人数
 
 当前状态：
 
 - 当前在场人数 `active_students` 已实时显示。`done`
 - 最大在场人数已输出到 `stats.max_active_students`。`done`
 - 指定时段平均在场人数当前没有输出。`todo`
-- 多入口和多出口场景下，补充“各入口流量 / 各出口流量”统计。`todo`
+- 多入口和多出口场景下，“各入口流量 / 各出口流量”已由 P3 数据处理统计支持。`done`
 
 ---
 
