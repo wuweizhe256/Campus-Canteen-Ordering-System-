@@ -199,6 +199,38 @@ class DataRecorderTest(unittest.TestCase):
         self.assertEqual(stats["completed_order_count"], 2)
         self.assertEqual(stats["cancelled_order_count"], 1)
 
+    def test_records_p2_group_and_table_type_events(self) -> None:
+        recorder = DataRecorder()
+        recorder.record_event(
+            {
+                "event_type": "group_created",
+                "game_time": 1,
+                "group_id": 7,
+                "group_size": 2,
+            }
+        )
+        recorder.record_event(
+            {
+                "event_type": "seat_assigned",
+                "game_time": 20,
+                "student_id": 1,
+                "group_id": 7,
+                "group_size": 2,
+                "table_id": 4,
+                "seat_index": 0,
+                "table_type": "four",
+                "seat_count": 4,
+            }
+        )
+
+        group_events = recorder.group_events(7)
+        table_type_events = recorder.table_type_events("four")
+
+        self.assertEqual([event.event_type for event in group_events], ["group_created", "seat_assigned"])
+        self.assertEqual([event.event_type for event in table_type_events], ["seat_assigned"])
+        self.assertEqual(group_events[1].group_size, 2)
+        self.assertEqual(group_events[1].seat_count, 4)
+
 
 if __name__ == "__main__":
     unittest.main()
