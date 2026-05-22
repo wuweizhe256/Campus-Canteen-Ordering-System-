@@ -551,7 +551,52 @@ P2 目标是引入同行关系和多桌型。
 
 | 字段 | 类型 | 阶段 | 说明 |
 | --- | --- | --- | --- |
-| `table_type_utilization` | `object` | `P2_planned` | 各桌型利用率 |
+| `group_same_table_rate` | `number/null` | `P2_planned` | 完整同行组中，全组坐在同一桌的比例 |
+| `completed_group_count` | `integer` | `P2_planned` | 已形成完整座位分配的同行组数量，不含独行 |
+| `same_table_group_count` | `integer` | `P2_planned` | 全组坐在同一桌的同行组数量 |
+| `table_type_utilization` | `array<TableTypeUtilizationStats>` | `P2_planned` | 各桌型利用率 |
+
+### 5.4 P2 后端 -> 数据处理：事件记录扩展
+
+P2 在 P0/P1 事件记录基础上增加同行组和桌型字段。数据处理模块已按这些字段计算同行组同桌率和各桌型利用率。
+
+新增事件字段：
+
+| 字段 | 类型 | 阶段 | 说明 |
+| --- | --- | --- | --- |
+| `group_id` | `integer/null` | `P2_planned` | 同行组编号 |
+| `group_size` | `integer/null` | `P2_planned` | 同行组人数 |
+| `table_type` | `string/null` | `P2_planned` | 桌型，取值见桌型枚举 |
+| `seat_count` | `integer/null` | `P2_planned` | 当前餐桌座位数量 |
+
+P2 事件类型枚举：
+
+| 值 | 阶段 | 说明 | 用于指标 |
+| --- | --- | --- | --- |
+| `group_created` | `P2_planned` | 同行组创建 | 同行组数量、同桌率分母 |
+| `group_member_joined` | `P2_planned` | 学生加入同行组 | 同行组成员复盘 |
+| `seat_assigned` | `P2_planned` | 座位分配完成 | 同行组同桌率 |
+| `seat_released` | `P2_planned` | 座位释放 | 座位流转复盘 |
+| `table_type_registered` | `P2_planned` | 餐桌桌型登记 | 各桌型总座位数 |
+
+### 5.5 P2 数据处理 -> 前端：统计输出扩展
+
+P2 统计字段继续放在 `frame["stats"]` 中，缺少 P2 事件时同桌率返回 `null`，计数返回 `0`，桌型利用率返回空数组。
+
+| 字段 | 类型 | 阶段 | 来源事件 / 数据 |
+| --- | --- | --- | --- |
+| `group_same_table_rate` | `number/null` | `P2_planned` | `seat_assigned` 或带 `group_id` 的 `eating_started` |
+| `completed_group_count` | `integer` | `P2_planned` | 完整同行组座位分配 |
+| `same_table_group_count` | `integer` | `P2_planned` | 完整同行组且 `table_id` 相同 |
+| `table_type_utilization` | `array<TableTypeUtilizationStats>` | `P2_planned` | `table_type_registered`、`eating_started`、`eating_finished` |
+
+`TableTypeUtilizationStats`：
+
+| 字段 | 类型 | 阶段 | 说明 |
+| --- | --- | --- | --- |
+| `table_type` | `string` | `P2_planned` | 桌型 |
+| `seat_count` | `integer` | `P2_planned` | 该桌型总座位数 |
+| `utilization` | `number/null` | `P2_planned` | 该桌型占用总时长 / 该桌型总座位时长 |
 
 ---
 

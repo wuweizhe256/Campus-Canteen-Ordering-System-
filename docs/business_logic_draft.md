@@ -698,6 +698,8 @@ P4 建议包含：
 - 当前统计模块支持 P0 指标。`done`
 - 数据处理模块已支持 P1 订单、菜品、库存和售罄事件记录。`done`
 - 数据处理模块已支持 P1 菜品销量、售罄次数、最新库存、订单等待时间、订单出餐时间、订单总耗时、完成订单数和取消订单数统计。`done`
+- 数据处理模块已支持 P2 同行组、座位分配和桌型事件记录。`done`
+- 数据处理模块已支持 P2 同行组同桌率和各桌型利用率统计。`done`
 
 待实现：
 
@@ -774,7 +776,24 @@ P1 订单等待口径：
 - `stats.completed_order_count`：完成订单数。`done`
 - `stats.cancelled_order_count`：取消订单数。`done`
 
-### 8.8 高峰时段场内人数
+### 8.8 P2 同行组与桌型统计
+
+定义：
+
+- 同行组同桌率 = 全组坐在同一桌的完整同行组数量 / 已形成完整座位分配的同行组数量。`done`
+- 独行学生不计入同行组同桌率。`done`
+- 同行组不完整分配时暂不进入同桌率分母，避免把未完成联调的数据误判为不同桌。`done`
+- 各桌型利用率 = 该桌型座位占用总时长 / 该桌型总座位时长。`done`
+- 桌型总座位数优先来自 `table_type_registered` 或带 `table_type`、`seat_count` 的座位 / 就餐事件。`done`
+
+当前输出：
+
+- `stats.group_same_table_rate`：同行组同桌率。`done`
+- `stats.completed_group_count`：已完整分配座位的同行组数量。`done`
+- `stats.same_table_group_count`：全组坐在同一桌的同行组数量。`done`
+- `stats.table_type_utilization`：各桌型座位数和利用率。`done`
+
+### 8.9 高峰时段场内人数
 
 当前状态：
 
