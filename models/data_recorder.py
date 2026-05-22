@@ -31,7 +31,16 @@ P2_EVENT_TYPES = {
     "table_type_registered",
 }
 
-EVENT_TYPES = P0_EVENT_TYPES | P1_EVENT_TYPES | P2_EVENT_TYPES
+P3_EVENT_TYPES = {
+    "entrance_used",
+    "exit_used",
+    "path_planned",
+    "path_completed",
+    "path_congestion_sample",
+    "obstacle_registered",
+}
+
+EVENT_TYPES = P0_EVENT_TYPES | P1_EVENT_TYPES | P2_EVENT_TYPES | P3_EVENT_TYPES
 
 
 @dataclass(frozen=True)
@@ -44,10 +53,19 @@ class EventRecordP0:
     order_id: int | None = None
     group_id: int | None = None
     group_size: int | None = None
+    entrance_id: int | None = None
+    exit_id: int | None = None
+    obstacle_id: int | None = None
+    path_id: str | None = None
     table_id: int | None = None
     seat_index: int | None = None
     table_type: str | None = None
     seat_count: int | None = None
+    path_length: float | None = None
+    path_duration: float | None = None
+    path_congestion_index: float | None = None
+    path_blocked: bool | None = None
+    obstacle_kind: str | None = None
     quantity: int | None = None
     price: float | None = None
     stock_before: int | None = None
@@ -68,10 +86,19 @@ class EventRecordP0:
             order_id=_optional_int(value.get("order_id")),
             group_id=_optional_int(value.get("group_id")),
             group_size=_optional_int(value.get("group_size")),
+            entrance_id=_optional_int(value.get("entrance_id")),
+            exit_id=_optional_int(value.get("exit_id")),
+            obstacle_id=_optional_int(value.get("obstacle_id")),
+            path_id=_optional_str(value.get("path_id")),
             table_id=_optional_int(value.get("table_id")),
             seat_index=_optional_int(value.get("seat_index")),
             table_type=_optional_str(value.get("table_type")),
             seat_count=_optional_int(value.get("seat_count")),
+            path_length=_optional_float(value.get("path_length")),
+            path_duration=_optional_float(value.get("path_duration")),
+            path_congestion_index=_optional_float(value.get("path_congestion_index")),
+            path_blocked=_optional_bool(value.get("path_blocked")),
+            obstacle_kind=_optional_str(value.get("obstacle_kind")),
             quantity=_optional_int(value.get("quantity")),
             price=_optional_float(value.get("price")),
             stock_before=_optional_int(value.get("stock_before")),
@@ -219,6 +246,10 @@ class DataRecorder:
         self.events_by_order: dict[int, list[EventRecordP0]] = defaultdict(list)
         self.events_by_group: dict[int, list[EventRecordP0]] = defaultdict(list)
         self.events_by_table_type: dict[str, list[EventRecordP0]] = defaultdict(list)
+        self.events_by_entrance: dict[int, list[EventRecordP0]] = defaultdict(list)
+        self.events_by_exit: dict[int, list[EventRecordP0]] = defaultdict(list)
+        self.events_by_path: dict[str, list[EventRecordP0]] = defaultdict(list)
+        self.events_by_obstacle: dict[int, list[EventRecordP0]] = defaultdict(list)
         self.events_by_seat: dict[tuple[int, int], list[EventRecordP0]] = defaultdict(list)
         self.queue_samples: list[QueueLengthSample] = []
         self.runtime_samples: list[RuntimeStatsSample] = []
@@ -243,6 +274,14 @@ class DataRecorder:
             self.events_by_group[record.group_id].append(record)
         if record.table_type is not None:
             self.events_by_table_type[record.table_type].append(record)
+        if record.entrance_id is not None:
+            self.events_by_entrance[record.entrance_id].append(record)
+        if record.exit_id is not None:
+            self.events_by_exit[record.exit_id].append(record)
+        if record.path_id is not None:
+            self.events_by_path[record.path_id].append(record)
+        if record.obstacle_id is not None:
+            self.events_by_obstacle[record.obstacle_id].append(record)
         if record.table_id is not None and record.seat_index is not None:
             self.events_by_seat[(record.table_id, record.seat_index)].append(record)
 
@@ -317,6 +356,18 @@ class DataRecorder:
 
     def table_type_events(self, table_type: str) -> list[EventRecordP0]:
         return sorted(self.events_by_table_type.get(table_type, []), key=_event_sort_key)
+
+    def entrance_events(self, entrance_id: int) -> list[EventRecordP0]:
+        return sorted(self.events_by_entrance.get(entrance_id, []), key=_event_sort_key)
+
+    def exit_events(self, exit_id: int) -> list[EventRecordP0]:
+        return sorted(self.events_by_exit.get(exit_id, []), key=_event_sort_key)
+
+    def path_events(self, path_id: str) -> list[EventRecordP0]:
+        return sorted(self.events_by_path.get(path_id, []), key=_event_sort_key)
+
+    def obstacle_events(self, obstacle_id: int) -> list[EventRecordP0]:
+        return sorted(self.events_by_obstacle.get(obstacle_id, []), key=_event_sort_key)
 
     def build_stats(self, current_time: float | None = None) -> StatsFrameP0:
         events = sorted(self.events, key=_event_sort_key)
@@ -752,3 +803,11 @@ def _optional_float(value: Any) -> float | None:
     if value is None:
         return None
     return float(value)
+
+
+def _optional_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y"}
+    return bool(value)
