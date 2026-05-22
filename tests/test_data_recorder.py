@@ -377,6 +377,61 @@ class DataRecorderTest(unittest.TestCase):
         self.assertEqual(recorder.path_events("p-1")[0].path_length, 120.5)
         self.assertFalse(recorder.path_events("p-1")[0].path_blocked)
 
+    def test_builds_p3_flow_and_path_congestion_stats(self) -> None:
+        recorder = DataRecorder()
+        for event in [
+            {"event_type": "entrance_used", "game_time": 1, "student_id": 1, "entrance_id": 1},
+            {"event_type": "entrance_used", "game_time": 2, "student_id": 2, "entrance_id": 1},
+            {"event_type": "entrance_used", "game_time": 3, "student_id": 3, "entrance_id": 2},
+            {"event_type": "exit_used", "game_time": 60, "student_id": 1, "exit_id": 3},
+            {"event_type": "exit_used", "game_time": 65, "student_id": 2, "exit_id": 4},
+            {"event_type": "exit_used", "game_time": 70, "student_id": 3, "exit_id": 4},
+            {
+                "event_type": "path_planned",
+                "game_time": 5,
+                "student_id": 1,
+                "path_id": "p-1",
+                "path_length": 100,
+            },
+            {
+                "event_type": "path_congestion_sample",
+                "game_time": 10,
+                "student_id": 1,
+                "path_id": "p-1",
+                "path_congestion_index": 0.2,
+            },
+            {
+                "event_type": "path_congestion_sample",
+                "game_time": 20,
+                "student_id": 1,
+                "path_id": "p-1",
+                "path_congestion_index": 0.6,
+                "path_blocked": True,
+            },
+            {
+                "event_type": "path_completed",
+                "game_time": 30,
+                "student_id": 1,
+                "path_id": "p-1",
+                "path_length": 120,
+                "path_duration": 25,
+                "path_congestion_index": 0.4,
+            },
+        ]:
+            recorder.record_event(event)
+
+        stats = recorder.build_stats().to_dict()
+
+        self.assertEqual(stats["entrance_flow"], [{"id": 1, "flow_count": 2}, {"id": 2, "flow_count": 1}])
+        self.assertEqual(stats["exit_flow"], [{"id": 3, "flow_count": 1}, {"id": 4, "flow_count": 2}])
+        path_stats = stats["path_congestion_stats"]
+        self.assertEqual(path_stats["avg_path_length"], 110.0)
+        self.assertEqual(path_stats["avg_path_duration"], 25.0)
+        self.assertAlmostEqual(path_stats["avg_path_congestion_index"], 0.4)
+        self.assertEqual(path_stats["path_sample_count"], 2)
+        self.assertEqual(path_stats["completed_path_count"], 1)
+        self.assertEqual(path_stats["blocked_path_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
