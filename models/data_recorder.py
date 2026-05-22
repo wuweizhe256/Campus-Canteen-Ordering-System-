@@ -127,6 +127,16 @@ class DishStockStats:
 
 
 @dataclass(frozen=True)
+class TableTypeUtilizationStats:
+    table_type: str
+    seat_count: int
+    utilization: float | None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class StatsFrameP0:
     avg_wait_time: float | None
     avg_total_time: float | None
@@ -147,6 +157,10 @@ class StatsFrameP0:
     avg_order_total_time: float | None
     completed_order_count: int
     cancelled_order_count: int
+    group_same_table_rate: float | None
+    completed_group_count: int
+    same_table_group_count: int
+    table_type_utilization: list[TableTypeUtilizationStats]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -169,6 +183,10 @@ class StatsFrameP0:
             "avg_order_total_time": self.avg_order_total_time,
             "completed_order_count": self.completed_order_count,
             "cancelled_order_count": self.cancelled_order_count,
+            "group_same_table_rate": self.group_same_table_rate,
+            "completed_group_count": self.completed_group_count,
+            "same_table_group_count": self.same_table_group_count,
+            "table_type_utilization": [item.to_dict() for item in self.table_type_utilization],
         }
 
 
@@ -308,6 +326,7 @@ class DataRecorder:
         stall_queue_stats = self._stall_queue_stats(events)
         seat_utilization = self._seat_utilization(current_time)
         order_timing_stats = self._order_timing_stats()
+        group_table_stats = self._group_table_stats()
         runtime = self.runtime_samples[-1] if self.runtime_samples else None
         return StatsFrameP0(
             avg_wait_time=avg_wait_time,
@@ -329,6 +348,10 @@ class DataRecorder:
             avg_order_total_time=order_timing_stats["avg_order_total_time"],
             completed_order_count=order_timing_stats["completed_order_count"],
             cancelled_order_count=order_timing_stats["cancelled_order_count"],
+            group_same_table_rate=group_table_stats["group_same_table_rate"],
+            completed_group_count=group_table_stats["completed_group_count"],
+            same_table_group_count=group_table_stats["same_table_group_count"],
+            table_type_utilization=self._table_type_utilization(current_time),
         )
 
     def _average_duration_by_student(self, start_type: str, end_type: str) -> float | None:
@@ -557,6 +580,98 @@ class DataRecorder:
             return []
         return [duration]
 
+    def _group_table_stats(self) -> dict[str, float | int | None]:
+        completed_group_count = 0
+        same_table_group_count = 0
+
+        for group_id, group_events in self.events_by_group.items():
+            events = sorted(group_events, key=_event_sort_key)
+            group_size = _first_known_int(events, "group_size")
+            assignments: dict[int, int] = {}
+            for event in events:
+                if event.event_type not in {"seat_assigned", "eating_started"}:
+                    continue
+                if event.student_id is None or event.table_id is None:
+                    continue
+                assignments[event.student_id] = event.table_id
+
+            expected_size = group_size or len(assignments)
+            if expected_size <= 1:
+                continue
+            if len(assignments) < expected_size:
+                continue
+
+            completed_group_count += 1
+            if len(set(assignments.values())) == 1:
+                same_table_group_count += 1
+
+        return {
+            "group_same_table_rate": (
+                same_table_group_count / completed_group_count if completed_group_count else None
+            ),
+            "completed_group_count": completed_group_count,
+            "same_table_group_count": same_table_group_count,
+        }
+
+    def _table_type_utilization(self, current_time: float | None) -> list[TableTypeUtilizationStats]:
+        denominator_duration = self.duration
+        if denominator_duration is None:
+            denominator_duration = current_time
+        if denominator_duration is None or denominator_duration <= 0:
+            return []
+
+        table_capacity = self._table_capacity_by_type()
+        occupied_duration: dict[str, float] = defaultdict(float)
+
+        for seat_events in self.events_by_seat.values():
+            open_start: EventRecordP0 | None = None
+            for event in sorted(seat_events, key=_event_sort_key):
+                if event.event_type == "eating_started":
+                    open_start = event
+                elif event.event_type == "eating_finished" and open_start is not None:
+                    table_type = open_start.table_type or event.table_type
+                    if table_type is None:
+                        open_start = None
+                        continue
+                    duration = event.game_time - open_start.game_time
+                    if duration < 0:
+                        self.issues.append(f"negative table type duration for table_type {table_type}")
+                    else:
+                        occupied_duration[table_type] += duration
+                    open_start = None
+
+            if open_start is not None and current_time is not None and current_time >= open_start.game_time:
+                if open_start.table_type is not None:
+                    occupied_duration[open_start.table_type] += current_time - open_start.game_time
+
+        table_types = set(table_capacity) | set(occupied_duration)
+        return [
+            TableTypeUtilizationStats(
+                table_type=table_type,
+                seat_count=table_capacity.get(table_type, 0),
+                utilization=_bounded_ratio(
+                    occupied_duration.get(table_type, 0.0),
+                    table_capacity.get(table_type, 0) * denominator_duration,
+                ),
+            )
+            for table_type in sorted(table_types)
+        ]
+
+    def _table_capacity_by_type(self) -> dict[str, int]:
+        by_table: dict[int, tuple[str, int]] = {}
+        for event in sorted(self.events, key=_event_sort_key):
+            if event.table_id is None or event.table_type is None:
+                continue
+            seat_count = event.seat_count or _default_seat_count(event.table_type)
+            if seat_count is None:
+                continue
+            by_table[event.table_id] = (event.table_type, max(0, seat_count))
+
+        capacity: dict[str, int] = defaultdict(int)
+        for table_type, seat_count in by_table.values():
+            capacity[table_type] += seat_count
+        return dict(capacity)
+
 
 def _event_sort_key(event: EventRecordP0) -> tuple[float, int]:
     priority = {
@@ -605,6 +720,20 @@ def _average(values: list[float]) -> float | None:
     if not values:
         return None
     return sum(values) / len(values)
+
+
+def _bounded_ratio(numerator: float, denominator: float) -> float | None:
+    if denominator <= 0:
+        return None
+    return max(0.0, min(1.0, numerator / denominator))
+
+
+def _default_seat_count(table_type: str) -> int | None:
+    return {
+        "two": 2,
+        "four": 4,
+        "six": 6,
+    }.get(table_type)
 
 
 def _optional_int(value: Any) -> int | None:

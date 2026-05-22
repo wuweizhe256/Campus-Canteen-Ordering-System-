@@ -231,6 +231,111 @@ class DataRecorderTest(unittest.TestCase):
         self.assertEqual(group_events[1].group_size, 2)
         self.assertEqual(group_events[1].seat_count, 4)
 
+    def test_builds_p2_group_same_table_and_table_type_stats(self) -> None:
+        recorder = DataRecorder(duration=100.0)
+        for event in [
+            {"event_type": "table_type_registered", "game_time": 0, "table_id": 1, "table_type": "two", "seat_count": 2},
+            {"event_type": "table_type_registered", "game_time": 0, "table_id": 2, "table_type": "four", "seat_count": 4},
+            {"event_type": "group_created", "game_time": 1, "group_id": 10, "group_size": 2},
+            {"event_type": "group_created", "game_time": 2, "group_id": 11, "group_size": 2},
+            {
+                "event_type": "seat_assigned",
+                "game_time": 10,
+                "student_id": 1,
+                "group_id": 10,
+                "group_size": 2,
+                "table_id": 2,
+                "seat_index": 0,
+                "table_type": "four",
+                "seat_count": 4,
+            },
+            {
+                "event_type": "seat_assigned",
+                "game_time": 10,
+                "student_id": 2,
+                "group_id": 10,
+                "group_size": 2,
+                "table_id": 2,
+                "seat_index": 1,
+                "table_type": "four",
+                "seat_count": 4,
+            },
+            {
+                "event_type": "seat_assigned",
+                "game_time": 12,
+                "student_id": 3,
+                "group_id": 11,
+                "group_size": 2,
+                "table_id": 1,
+                "seat_index": 0,
+                "table_type": "two",
+                "seat_count": 2,
+            },
+            {
+                "event_type": "seat_assigned",
+                "game_time": 12,
+                "student_id": 4,
+                "group_id": 11,
+                "group_size": 2,
+                "table_id": 2,
+                "seat_index": 2,
+                "table_type": "four",
+                "seat_count": 4,
+            },
+            {
+                "event_type": "eating_started",
+                "game_time": 20,
+                "student_id": 1,
+                "group_id": 10,
+                "table_id": 2,
+                "seat_index": 0,
+                "table_type": "four",
+                "seat_count": 4,
+            },
+            {
+                "event_type": "eating_started",
+                "game_time": 20,
+                "student_id": 2,
+                "group_id": 10,
+                "table_id": 2,
+                "seat_index": 1,
+                "table_type": "four",
+                "seat_count": 4,
+            },
+            {
+                "event_type": "eating_finished",
+                "game_time": 50,
+                "student_id": 1,
+                "group_id": 10,
+                "table_id": 2,
+                "seat_index": 0,
+                "table_type": "four",
+            },
+            {
+                "event_type": "eating_finished",
+                "game_time": 50,
+                "student_id": 2,
+                "group_id": 10,
+                "table_id": 2,
+                "seat_index": 1,
+                "table_type": "four",
+            },
+        ]:
+            recorder.record_event(event)
+
+        stats = recorder.build_stats().to_dict()
+
+        self.assertEqual(stats["group_same_table_rate"], 0.5)
+        self.assertEqual(stats["completed_group_count"], 2)
+        self.assertEqual(stats["same_table_group_count"], 1)
+        self.assertEqual(
+            stats["table_type_utilization"],
+            [
+                {"table_type": "four", "seat_count": 4, "utilization": 0.15},
+                {"table_type": "two", "seat_count": 2, "utilization": 0.0},
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
