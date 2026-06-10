@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import random
 import time
 from math import hypot
+from pathlib import Path
 from typing import Any
 
 from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
@@ -25,6 +27,9 @@ from models.entities import (
 )
 from models.pathfinding import Doorway, GridPathFinder, NavRect
 from utils.helpers import clamp, distance, manhattan_2d, move_towards
+
+MENU_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "menu.json"
+MAX_SEAT_WAIT_SECONDS = 180.0
 
 
 class SimulationWorker(QObject):
@@ -58,10 +63,14 @@ class SimulationWorker(QObject):
         self.next_student_id = 1
         self.next_order_id = 1
         self.next_group_id = 1
+        self.next_path_id = 1
         self.spawned_students = 0
-        self.served_students = 0
+        self.finished_eating_students = 0
         self.max_active_students_seen = 0
         self.data_recorder = DataRecorder()
+        self.menu_config, self.issues = _load_menu_config(MENU_CONFIG_PATH)
+        self._navigation_obstacle_cache: list[NavRect] | None = None
+        self._navigation_doorway_cache: list[Doorway] | None = None
         self._stop_requested = False
         self._paused = False
 
@@ -88,6 +97,9 @@ class SimulationWorker(QObject):
                 self._complete_ready_food()
                 self._update_students(game_delta)
                 self._separate_students(game_delta)
+                self._refresh_orders_and_stalls()
+                self._record_queue_samples()
+                self._record_runtime_sample()
                 self.max_active_students_seen = max(
                     self.max_active_students_seen,
                     self._active_student_count(),
@@ -103,7 +115,7 @@ class SimulationWorker(QObject):
                     status=status,
                     game_time=min(self.game_time, self.config.duration_game_seconds),
                     spawned_students=self.spawned_students,
-                    served_students=self.served_students,
+                    finished_eating_students=self.finished_eating_students,
                     active_students=self._active_student_count(),
                 )
             )
@@ -134,15 +146,19 @@ class SimulationWorker(QObject):
         self.next_student_id = 1
         self.next_order_id = 1
         self.next_group_id = 1
+        self.next_path_id = 1
         self.spawned_students = 0
-        self.served_students = 0
+        self.finished_eating_students = 0
         self.max_active_students_seen = 0
+        self._navigation_obstacle_cache = None
+        self._navigation_doorway_cache = None
         self.entrance_flow_counts = {entrance.id: 0 for entrance in self.entrances}
         self.exit_flow_counts = {exit_area.id: 0 for exit_area in self.exits}
         self.data_recorder = DataRecorder(
             total_seats=sum(len(table.seats) for table in self.tables),
             duration=self.config.duration_game_seconds,
         )
+        self._record_layout_events()
 
     def _build_entrances(self) -> None:
         weights = list(self.config.entrance_weights or ())
@@ -200,25 +216,21 @@ class SimulationWorker(QObject):
             )
 
     def _build_stall_dishes(self, stall_index: int) -> list[Dish]:
-        menu = [
-            (1, "Braised Chicken Rice", {"meat": 0.88, "veg": 0.22, "spicy": 0.35}, 13.0, 22.0),
-            (2, "Tomato Egg Noodles", {"meat": 0.18, "veg": 0.72, "spicy": 0.05}, 9.5, 16.0),
-            (3, "Beef Noodles", {"meat": 0.78, "veg": 0.34, "spicy": 0.42}, 15.0, 24.0),
-            (4, "Vegetable Set Meal", {"meat": 0.08, "veg": 0.92, "spicy": 0.12}, 10.0, 18.0),
-            (5, "Spicy Pork Rice", {"meat": 0.72, "veg": 0.38, "spicy": 0.82}, 12.0, 20.0),
-            (6, "Mushroom Chicken Soup", {"meat": 0.56, "veg": 0.66, "spicy": 0.02}, 11.5, 19.0),
-        ]
+        menu = self.menu_config["dishes"]
+        dishes_per_stall = int(self.menu_config["dishes_per_stall"])
+        price_jitter = self.menu_config["price_jitter"]
+        cook_time_jitter = self.menu_config["cook_time_jitter"]
         dishes: list[Dish] = []
-        for offset in range(3):
-            dish_id, name, features, price, cook_time = menu[(stall_index + offset * 2) % len(menu)]
+        for offset in range(dishes_per_stall):
+            dish_data = menu[(stall_index + offset * 2) % len(menu)]
             dishes.append(
                 Dish(
-                    id=dish_id,
-                    name=name,
-                    features=dict(features),
-                    price=price + self.rng.uniform(-0.5, 0.8),
-                    stock=self.rng.randint(10, 24),
-                    cook_time=cook_time + self.rng.uniform(-2.0, 3.0),
+                    id=int(dish_data["id"]),
+                    name=str(dish_data["name"]),
+                    features=dict(dish_data["features"]),
+                    price=float(dish_data["price"]) + self.rng.uniform(*price_jitter),
+                    stock=max(0, int(dish_data["stock"])),
+                    cook_time=max(1.0, float(dish_data["cook_time"]) + self.rng.uniform(*cook_time_jitter)),
                 )
             )
         return dishes
@@ -257,6 +269,27 @@ class SimulationWorker(QObject):
         self.tray_return_points = [
             (self.width - 82.0, 548.0, 136.0, 96.0),
         ]
+
+    def _record_layout_events(self) -> None:
+        for table in self.tables:
+            self.data_recorder.record_event(
+                EventRecordP0(
+                    event_type="table_type_registered",
+                    game_time=self.game_time,
+                    table_id=table.id,
+                    table_type=table.table_type,
+                    seat_count=table.seat_count,
+                )
+            )
+        for obstacle_id, obstacle in enumerate(self._obstacle_frames()):
+            self.data_recorder.record_event(
+                EventRecordP0(
+                    event_type="obstacle_registered",
+                    game_time=self.game_time,
+                    obstacle_id=obstacle_id,
+                    obstacle_kind=str(obstacle.get("kind") or "obstacle"),
+                )
+            )
 
     def _spawn_due_students(self) -> None:
         remaining_total = self.config.total_student_count - self.spawned_students
@@ -309,6 +342,14 @@ class SimulationWorker(QObject):
         group_id = self.next_group_id if group_size > 1 else None
         if group_id is not None:
             self.next_group_id += 1
+            self.data_recorder.record_event(
+                EventRecordP0(
+                    event_type="group_created",
+                    game_time=self.game_time,
+                    group_id=group_id,
+                    group_size=group_size,
+                )
+            )
 
         meat_pref = self.rng.uniform(0.0, 1.0)
         veg_pref = self.rng.uniform(0.0, 1.0)
@@ -417,6 +458,24 @@ class SimulationWorker(QObject):
         if student.entrance_id is not None:
             self.entrance_flow_counts[student.entrance_id] = (
                 self.entrance_flow_counts.get(student.entrance_id, 0) + 1
+            )
+            self.data_recorder.record_event(
+                EventRecordP0(
+                    event_type="entrance_used",
+                    game_time=self.game_time,
+                    student_id=student.id,
+                    entrance_id=student.entrance_id,
+                )
+            )
+        if student.group_id is not None:
+            self.data_recorder.record_event(
+                EventRecordP0(
+                    event_type="group_member_joined",
+                    game_time=self.game_time,
+                    student_id=student.id,
+                    group_id=student.group_id,
+                    group_size=student.group_size,
+                )
             )
         self._record_student_event(
             "student_spawned",
@@ -545,8 +604,49 @@ class SimulationWorker(QObject):
                     order.status = OrderStatus.DONE
                     order.finished_at = ready_at
                 dish = self._dish_by_id(stall, student.dish_id)
+                stock_before = dish.stock if dish is not None else None
                 if dish is not None and dish.stock > 0:
                     dish.stock -= 1
+                    self.data_recorder.record_event(
+                        EventRecordP0(
+                            event_type="dish_stock_changed",
+                            game_time=ready_at,
+                            student_id=student.id,
+                            stall_id=stall.id,
+                            dish_id=dish.id,
+                            order_id=order_id,
+                            stock_before=stock_before,
+                            stock_after=dish.stock,
+                        )
+                    )
+                    if dish.stock == 0:
+                        self.data_recorder.record_event(
+                            EventRecordP0(
+                                event_type="dish_sold_out",
+                                game_time=ready_at,
+                                stall_id=stall.id,
+                                dish_id=dish.id,
+                                stock_before=stock_before,
+                                stock_after=dish.stock,
+                            )
+                        )
+                if order is not None:
+                    self.data_recorder.record_event(
+                        EventRecordP0(
+                            event_type="order_completed",
+                            game_time=ready_at,
+                            student_id=student.id,
+                            stall_id=stall.id,
+                            dish_id=order.dish_id,
+                            order_id=order.id,
+                            price=dish.price if dish is not None else None,
+                            quantity=1,
+                            stock_before=stock_before,
+                            stock_after=dish.stock if dish is not None else None,
+                            order_status=OrderStatus.DONE.value,
+                            stall_status=stall.status.value if isinstance(stall.status, StallStatus) else str(stall.status),
+                        )
+                    )
                 stall.refresh_status()
                 previous_state = student.state
                 student.food_ready_at = ready_at
@@ -584,6 +684,8 @@ class SimulationWorker(QObject):
                 arrived = self._move_student(student, game_delta, student.table_walk_speed)
                 if arrived:
                     self._occupy_reserved_seat(student)
+                    if not self._student_has_occupied_seat(student):
+                        self.issues.append(f"student {student.id} reached seat without a valid occupied reservation")
                     previous_state = student.state
                     student.state = StudentState.EATING
                     student.eating_done_at = self.game_time + student.eating_time
@@ -605,10 +707,16 @@ class SimulationWorker(QObject):
                     self._release_seat(student)
                     self._set_tray_return_path(student)
                     student.state = StudentState.MOVING_TO_TRAY_RETURN
-                    self.served_students += 1
+                    self.finished_eating_students += 1
             elif student.state == StudentState.MOVING_TO_TRAY_RETURN:
                 arrived = self._move_student(student, game_delta, student.walk_speed)
                 if arrived or self._is_inside_tray_return(student):
+                    self._record_student_event(
+                        "tray_return_reached",
+                        student,
+                        from_state=student.state,
+                        to_state=StudentState.LEAVING,
+                    )
                     self._set_exit_path(student)
                     student.state = StudentState.LEAVING
             elif student.state == StudentState.LEAVING:
@@ -619,6 +727,14 @@ class SimulationWorker(QObject):
                     if student.exit_id is not None:
                         self.exit_flow_counts[student.exit_id] = (
                             self.exit_flow_counts.get(student.exit_id, 0) + 1
+                        )
+                        self.data_recorder.record_event(
+                            EventRecordP0(
+                                event_type="exit_used",
+                                game_time=self.game_time,
+                                student_id=student.id,
+                                exit_id=student.exit_id,
+                            )
                         )
                     self._record_student_event(
                         "student_left",
@@ -683,16 +799,19 @@ class SimulationWorker(QObject):
         if student.stall_id is None:
             student.dish_id, student.stall_id = self._choose_dish_and_stall(student)
         if student.stall_id is None:
+            self._send_student_to_exit(student, reason="no_available_stall")
             return
         stall = self.stalls[student.stall_id]
         dish = self._dish_by_id(stall, student.dish_id)
         if dish is None or not self._dish_has_order_capacity(stall, dish):
             student.dish_id, student.stall_id = self._choose_dish_and_stall(student)
             if student.stall_id is None:
+                self._send_student_to_exit(student, reason="no_available_dish")
                 return
             stall = self.stalls[student.stall_id]
             dish = self._dish_by_id(stall, student.dish_id)
             if dish is None or not self._dish_has_order_capacity(stall, dish):
+                self._send_student_to_exit(student, reason="no_order_capacity")
                 return
         if student.id in stall.queue:
             student.state = StudentState.QUEUED
@@ -715,6 +834,33 @@ class SimulationWorker(QObject):
         stall.queue.append(student.id)
         stall.ready_times.append((student.id, ready_at, order.id))
         student.order_id = order.id
+        self.data_recorder.record_event(
+            EventRecordP0(
+                event_type="order_created",
+                game_time=self.game_time,
+                student_id=student.id,
+                stall_id=stall.id,
+                dish_id=dish.id,
+                order_id=order.id,
+                price=dish.price,
+                quantity=1,
+                order_status=order.status.value,
+                stall_status=stall.status.value if isinstance(stall.status, StallStatus) else str(stall.status),
+            )
+        )
+        if order.status == OrderStatus.COOKING:
+            self.data_recorder.record_event(
+                EventRecordP0(
+                    event_type="order_started",
+                    game_time=self.game_time,
+                    student_id=student.id,
+                    stall_id=stall.id,
+                    dish_id=dish.id,
+                    order_id=order.id,
+                    order_status=order.status.value,
+                    stall_status=stall.status.value if isinstance(stall.status, StallStatus) else str(stall.status),
+                )
+            )
         previous_state = student.state
         student.state = StudentState.QUEUED
         self._record_student_event(
@@ -737,6 +883,18 @@ class SimulationWorker(QObject):
                     continue
                 if order.started_at is not None and self.game_time >= order.started_at:
                     order.status = OrderStatus.COOKING
+                    self.data_recorder.record_event(
+                        EventRecordP0(
+                            event_type="order_started",
+                            game_time=order.started_at,
+                            student_id=order.student_id,
+                            stall_id=order.stall_id,
+                            dish_id=order.dish_id,
+                            order_id=order.id,
+                            order_status=order.status.value,
+                            stall_status=stall.status.value if isinstance(stall.status, StallStatus) else str(stall.status),
+                        )
+                    )
             stall.refresh_status()
 
     def _send_student_to_table(self, student: Student) -> None:
@@ -745,10 +903,19 @@ class SimulationWorker(QObject):
             for seat_index in table.free_seat_indexes():
                 free.append((table, seat_index))
         if not free:
+            if student.waiting_seat_since is None:
+                student.waiting_seat_since = self.game_time
+            if self.game_time - student.waiting_seat_since >= MAX_SEAT_WAIT_SECONDS:
+                self._send_student_to_exit(student, reason="seat_wait_timeout")
+                return
+            if student.state != StudentState.WAITING_SEAT:
+                student.state = StudentState.WAITING_SEAT
+                self._set_navigation_path(student, (self.width - 70.0, self.top_walkway_y))
+                return
             student.state = StudentState.WAITING_SEAT
-            self._set_navigation_path(student, (self.width - 70.0, self.top_walkway_y))
             return
 
+        student.waiting_seat_since = None
         table, seat_index, path, walk_distance = self._best_seat_candidate(student, free)
         seat = table.seats[seat_index]
         seat.status = SeatStatus.RESERVED
@@ -756,8 +923,27 @@ class SimulationWorker(QObject):
         student.table_id = table.id
         student.seat_index = seat_index
         self._set_path(student, path)
+        self._start_path_tracking(
+            student,
+            path,
+            start=(student.x, student.y),
+            kind="seat",
+        )
         student.table_walk_speed = max(6.0, walk_distance / student.table_walk_time)
         student.state = StudentState.MOVING_TO_SEAT
+        self.data_recorder.record_event(
+            EventRecordP0(
+                event_type="seat_assigned",
+                game_time=self.game_time,
+                student_id=student.id,
+                group_id=student.group_id,
+                group_size=student.group_size,
+                table_id=table.id,
+                seat_index=seat_index,
+                table_type=table.table_type,
+                seat_count=table.seat_count,
+            )
+        )
 
     def _best_seat_candidate(
         self,
@@ -837,6 +1023,12 @@ class SimulationWorker(QObject):
         if seat.student_id == student.id and seat.status == SeatStatus.RESERVED:
             seat.status = SeatStatus.OCCUPIED
 
+    def _student_has_occupied_seat(self, student: Student) -> bool:
+        if student.table_id is None or student.seat_index is None:
+            return False
+        seat = self.tables[student.table_id].seats[student.seat_index]
+        return seat.student_id == student.id and seat.status == SeatStatus.OCCUPIED
+
     def _release_seat(self, student: Student) -> None:
         if student.table_id is None or student.seat_index is None:
             return
@@ -845,6 +1037,19 @@ class SimulationWorker(QObject):
         if seat.student_id == student.id:
             seat.status = SeatStatus.FREE
             seat.student_id = None
+            self.data_recorder.record_event(
+                EventRecordP0(
+                    event_type="seat_released",
+                    game_time=self.game_time,
+                    student_id=student.id,
+                    group_id=student.group_id,
+                    group_size=student.group_size,
+                    table_id=table.id,
+                    seat_index=student.seat_index,
+                    table_type=table.table_type,
+                    seat_count=table.seat_count,
+                )
+            )
         student.table_id = None
         student.seat_index = None
 
@@ -883,6 +1088,35 @@ class SimulationWorker(QObject):
         student.exit_id = exit_area.id
         exit_point = (exit_area.x, exit_area.y)
         self._set_navigation_path(student, exit_point)
+
+    def _send_student_to_exit(self, student: Student, reason: str) -> None:
+        self.issues.append(f"student {student.id} leaving early: {reason}")
+        if student.order_id is not None and student.stall_id is not None:
+            stall = self.stalls[student.stall_id]
+            order = self._order_by_id(stall, student.order_id)
+            if order is not None and order.status in (OrderStatus.QUEUED, OrderStatus.COOKING):
+                order.status = OrderStatus.CANCELLED
+                self.data_recorder.record_event(
+                    EventRecordP0(
+                        event_type="order_cancelled",
+                        game_time=self.game_time,
+                        student_id=student.id,
+                        stall_id=stall.id,
+                        dish_id=order.dish_id,
+                        order_id=order.id,
+                        order_status=order.status.value,
+                    )
+                )
+        self._release_seat(student)
+        previous_state = student.state
+        self._set_exit_path(student)
+        student.state = StudentState.LEAVING
+        self._record_student_event(
+            "early_leave_started",
+            student,
+            from_state=previous_state,
+            to_state=student.state,
+        )
 
     def _choose_exit(self, student: Student) -> Exit:
         if student.exit_id is not None:
@@ -936,14 +1170,14 @@ class SimulationWorker(QObject):
         return min(self.height - 64.0, table.y + 56.0)
 
     def _set_navigation_path(self, student: Student, target: tuple[float, float]) -> None:
-        self._set_path(
-            student,
-            self._build_navigation_path(
-                (student.x, student.y),
-                target,
-                ignored_student_id=student.id,
-            ),
+        start = (student.x, student.y)
+        path = self._build_navigation_path(
+            start,
+            target,
+            ignored_student_id=student.id,
         )
+        self._set_path(student, path)
+        self._start_path_tracking(student, path, start=start, kind=student.state.value)
 
     def _build_navigation_path(
         self,
@@ -964,27 +1198,31 @@ class SimulationWorker(QObject):
         return self._compact_path([(x, y - 14.0) for x, y in foot_path])
 
     def _navigation_obstacles(self) -> list[NavRect]:
-        return [
-            NavRect(
-                left=float(item["left"]),
-                top=float(item["top"]),
-                right=float(item["right"]),
-                bottom=float(item["bottom"]),
-                kind=str(item["kind"]),
-            )
-            for item in self._obstacle_frames()
-        ]
+        if self._navigation_obstacle_cache is None:
+            self._navigation_obstacle_cache = [
+                NavRect(
+                    left=float(item["left"]),
+                    top=float(item["top"]),
+                    right=float(item["right"]),
+                    bottom=float(item["bottom"]),
+                    kind=str(item["kind"]),
+                )
+                for item in self._obstacle_frames()
+            ]
+        return self._navigation_obstacle_cache
 
     def _navigation_doorways(self) -> list[Doorway]:
-        doorways = [
-            Doorway(entrance.x, entrance.y, entrance.width, entrance.height, "left")
-            for entrance in self.entrances
-        ]
-        doorways.extend(
-            Doorway(exit_area.x, exit_area.y, exit_area.width, exit_area.height, "right")
-            for exit_area in self.exits
-        )
-        return doorways
+        if self._navigation_doorway_cache is None:
+            doorways = [
+                Doorway(entrance.x, entrance.y, entrance.width, entrance.height, "left")
+                for entrance in self.entrances
+            ]
+            doorways.extend(
+                Doorway(exit_area.x, exit_area.y, exit_area.width, exit_area.height, "right")
+                for exit_area in self.exits
+            )
+            self._navigation_doorway_cache = doorways
+        return self._navigation_doorway_cache
 
     def _navigation_congestion_points(self, ignored_student_id: int | None = None) -> list[tuple[float, float]]:
         return [
@@ -998,6 +1236,50 @@ class SimulationWorker(QObject):
         student.path = self._compact_path(path)
         if student.path:
             student.target_x, student.target_y = student.path[0]
+
+    def _start_path_tracking(
+        self,
+        student: Student,
+        path: list[tuple[float, float]],
+        start: tuple[float, float],
+        kind: str,
+    ) -> None:
+        student.path_id = f"s{student.id}-p{self.next_path_id}"
+        self.next_path_id += 1
+        student.path_started_at = self.game_time
+        student.path_length = self._path_distance(start[0], start[1], path)
+        self.data_recorder.record_event(
+            EventRecordP0(
+                event_type="path_planned",
+                game_time=self.game_time,
+                student_id=student.id,
+                path_id=student.path_id,
+                path_length=student.path_length,
+                path_blocked=not bool(path),
+                from_state=kind,
+            )
+        )
+
+    def _complete_path_tracking(self, student: Student) -> None:
+        if student.path_id is None:
+            return
+        self.data_recorder.record_event(
+            EventRecordP0(
+                event_type="path_completed",
+                game_time=self.game_time,
+                student_id=student.id,
+                path_id=student.path_id,
+                path_length=student.path_length,
+                path_duration=(
+                    self.game_time - student.path_started_at
+                    if student.path_started_at is not None
+                    else None
+                ),
+            )
+        )
+        student.path_id = None
+        student.path_started_at = None
+        student.path_length = None
 
     def _compact_path(self, path: list[tuple[float, float]]) -> list[tuple[float, float]]:
         compacted: list[tuple[float, float]] = []
@@ -1067,6 +1349,8 @@ class SimulationWorker(QObject):
             if student.path:
                 student.target_x, student.target_y = student.path[0]
                 return False
+        if arrived:
+            self._complete_path_tracking(student)
         return arrived
 
     def _separate_students(self, game_delta: float) -> None:
@@ -1361,6 +1645,18 @@ class SimulationWorker(QObject):
             if student.state == StudentState.MOVING_TO_TRAY_RETURN
             and distance(*self._student_foot_point(student), *self._nearest_tray_return_center(student.x, student.y)) <= 96.0
         )
+        for student in moving:
+            if student.path_id is None:
+                continue
+            self.data_recorder.record_event(
+                EventRecordP0(
+                    event_type="path_congestion_sample",
+                    game_time=self.game_time,
+                    student_id=student.id,
+                    path_id=student.path_id,
+                    path_congestion_index=max(0.0, min(1.0, student.stuck_time / 10.0)),
+                )
+            )
         self.data_recorder.record_runtime_sample(
             self.game_time,
             avg_move_speed,
@@ -1372,17 +1668,17 @@ class SimulationWorker(QObject):
         )
 
     def _build_frame(self) -> dict[str, Any]:
-        self._refresh_orders_and_stalls()
-        self._record_queue_samples()
-        self._record_runtime_sample()
         stats = self.data_recorder.build_stats(current_time=self.game_time).to_dict()
+        issues = [*self.issues, *self.data_recorder.issues]
         frame = {
             "game_time": min(self.game_time, self.config.duration_game_seconds),
             "duration": self.config.duration_game_seconds,
             "time_scale": self.time_scale,
             "spawned_students": self.spawned_students,
-            "served_students": self.served_students,
+            "finished_eating_students": self.finished_eating_students,
+            "served_students": self.finished_eating_students,
             "active_students": self._active_student_count(),
+            "issues": issues,
             "door": self.door,
             "exit": self.exit,
             "entrances": [self._entrance_frame(entrance) for entrance in self.entrances],
@@ -1611,3 +1907,69 @@ def _average_float(values: Any) -> float | None:
     if not samples:
         return None
     return sum(samples) / len(samples)
+
+
+def _load_menu_config(path: Path) -> tuple[dict[str, Any], list[str]]:
+    issues: list[str] = []
+    fallback = _default_menu_config()
+    try:
+        with path.open("r", encoding="utf-8") as file:
+            raw = json.load(file)
+    except OSError as exc:
+        return fallback, [f"menu config not loaded: {exc}"]
+    except json.JSONDecodeError as exc:
+        return fallback, [f"menu config invalid json: {exc}"]
+
+    try:
+        dishes = raw["dishes"]
+        if not isinstance(dishes, list) or not dishes:
+            raise ValueError("dishes must be a non-empty list")
+        normalized_dishes: list[dict[str, Any]] = []
+        for index, dish in enumerate(dishes):
+            if not isinstance(dish, dict):
+                raise ValueError(f"dish {index} must be an object")
+            features = dish.get("features")
+            if not isinstance(features, dict):
+                raise ValueError(f"dish {index} missing features")
+            normalized_dishes.append(
+                {
+                    "id": int(dish["id"]),
+                    "name": str(dish["name"]),
+                    "features": {str(key): float(value) for key, value in features.items()},
+                    "price": float(dish["price"]),
+                    "stock": max(0, int(dish["stock"])),
+                    "cook_time": max(1.0, float(dish["cook_time"])),
+                }
+            )
+        return {
+            "dishes_per_stall": max(1, int(raw.get("dishes_per_stall", 3))),
+            "price_jitter": _two_float_tuple(raw.get("price_jitter"), (-0.5, 0.8)),
+            "cook_time_jitter": _two_float_tuple(raw.get("cook_time_jitter"), (-2.0, 3.0)),
+            "dishes": normalized_dishes,
+        }, issues
+    except (KeyError, TypeError, ValueError) as exc:
+        return fallback, [f"menu config invalid schema: {exc}"]
+
+
+def _two_float_tuple(value: Any, default: tuple[float, float]) -> tuple[float, float]:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return default
+    first = float(value[0])
+    second = float(value[1])
+    return min(first, second), max(first, second)
+
+
+def _default_menu_config() -> dict[str, Any]:
+    return {
+        "dishes_per_stall": 3,
+        "price_jitter": (-0.5, 0.8),
+        "cook_time_jitter": (-2.0, 3.0),
+        "dishes": [
+            {"id": 1, "name": "Braised Chicken Rice", "features": {"meat": 0.88, "veg": 0.22, "spicy": 0.35}, "price": 13.0, "stock": 24, "cook_time": 22.0},
+            {"id": 2, "name": "Tomato Egg Noodles", "features": {"meat": 0.18, "veg": 0.72, "spicy": 0.05}, "price": 9.5, "stock": 24, "cook_time": 16.0},
+            {"id": 3, "name": "Beef Noodles", "features": {"meat": 0.78, "veg": 0.34, "spicy": 0.42}, "price": 15.0, "stock": 24, "cook_time": 24.0},
+            {"id": 4, "name": "Vegetable Set Meal", "features": {"meat": 0.08, "veg": 0.92, "spicy": 0.12}, "price": 10.0, "stock": 24, "cook_time": 18.0},
+            {"id": 5, "name": "Spicy Pork Rice", "features": {"meat": 0.72, "veg": 0.38, "spicy": 0.82}, "price": 12.0, "stock": 24, "cook_time": 20.0},
+            {"id": 6, "name": "Mushroom Chicken Soup", "features": {"meat": 0.56, "veg": 0.66, "spicy": 0.02}, "price": 11.5, "stock": 24, "cook_time": 19.0},
+        ],
+    }

@@ -11,6 +11,8 @@ P0_EVENT_TYPES = {
     "food_ready",
     "eating_started",
     "eating_finished",
+    "tray_return_reached",
+    "early_leave_started",
     "student_left",
 }
 
@@ -213,6 +215,7 @@ class StatsFrameP0:
     entrance_flow: list[FlowStats]
     exit_flow: list[FlowStats]
     path_congestion_stats: PathCongestionStats
+    issues: list[str]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -242,6 +245,7 @@ class StatsFrameP0:
             "entrance_flow": [item.to_dict() for item in self.entrance_flow],
             "exit_flow": [item.to_dict() for item in self.exit_flow],
             "path_congestion_stats": self.path_congestion_stats.to_dict(),
+            "issues": list(self.issues),
         }
 
 
@@ -434,6 +438,7 @@ class DataRecorder:
             entrance_flow=self._flow_stats("entrance_used", "entrance_id"),
             exit_flow=self._flow_stats("exit_used", "exit_id"),
             path_congestion_stats=self._path_congestion_stats(),
+            issues=list(self.issues),
         )
 
     def _average_duration_by_student(self, start_type: str, end_type: str) -> float | None:

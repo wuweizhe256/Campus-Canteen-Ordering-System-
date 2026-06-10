@@ -122,6 +122,10 @@ class Student:
     reroute_count: int = 0
     facing_x: float = 1.0
     facing_y: float = 0.0
+    waiting_seat_since: float | None = None
+    path_id: str | None = None
+    path_started_at: float | None = None
+    path_length: float | None = None
     last_x: float = field(init=False)
     last_y: float = field(init=False)
 
@@ -244,5 +248,9 @@ class RunSummary:
     status: str
     game_time: float
     spawned_students: int
-    served_students: int
+    finished_eating_students: int
     active_students: int
+
+    @property
+    def served_students(self) -> int:
+        return self.finished_eating_students
