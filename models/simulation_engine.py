@@ -70,6 +70,7 @@ class SimulationWorker(QObject):
         self.data_recorder = DataRecorder()
         self.menu_config, self.issues = _load_menu_config(MENU_CONFIG_PATH)
         self._navigation_obstacle_cache: list[NavRect] | None = None
+        self._navigation_pathfinder_cache: GridPathFinder | None = None
         self._navigation_doorway_cache: list[Doorway] | None = None
         self._stop_requested = False
         self._paused = False
@@ -151,6 +152,7 @@ class SimulationWorker(QObject):
         self.finished_eating_students = 0
         self.max_active_students_seen = 0
         self._navigation_obstacle_cache = None
+        self._navigation_pathfinder_cache = None
         self._navigation_doorway_cache = None
         self.entrance_flow_counts = {entrance.id: 0 for entrance in self.entrances}
         self.exit_flow_counts = {exit_area.id: 0 for exit_area in self.exits}
@@ -1185,17 +1187,22 @@ class SimulationWorker(QObject):
         target: tuple[float, float],
         ignored_student_id: int | None = None,
     ) -> list[tuple[float, float]]:
-        pathfinder = GridPathFinder(
-            width=float(self.width),
-            height=float(self.height),
-            obstacles=self._navigation_obstacles(),
-            doorways=self._navigation_doorways(),
-            congestion_points=self._navigation_congestion_points(ignored_student_id),
-        )
+        pathfinder = self._navigation_pathfinder()
+        pathfinder.set_congestion_points(self._navigation_congestion_points(ignored_student_id))
         foot_start = self._foot_point_from_position(start[0], start[1])
         foot_target = self._foot_point_from_position(target[0], target[1])
         foot_path = pathfinder.find_path(foot_start, foot_target)
         return self._compact_path([(x, y - 14.0) for x, y in foot_path])
+
+    def _navigation_pathfinder(self) -> GridPathFinder:
+        if self._navigation_pathfinder_cache is None:
+            self._navigation_pathfinder_cache = GridPathFinder(
+                width=float(self.width),
+                height=float(self.height),
+                obstacles=self._navigation_obstacles(),
+                doorways=self._navigation_doorways(),
+            )
+        return self._navigation_pathfinder_cache
 
     def _navigation_obstacles(self) -> list[NavRect]:
         if self._navigation_obstacle_cache is None:
@@ -1310,7 +1317,9 @@ class SimulationWorker(QObject):
 
         old_x, old_y = student.x, student.y
         target_distance = distance(student.x, student.y, student.target_x, student.target_y)
-        if target_distance <= max(4.0, speed * game_delta * 0.7):
+        step_distance = speed * game_delta
+        arrival_radius = 3.0 if not student.path else 5.5
+        if target_distance <= max(arrival_radius, step_distance):
             student.x, student.y = student.target_x, student.target_y
             arrived = True
         else:
@@ -1319,7 +1328,7 @@ class SimulationWorker(QObject):
                 student.y,
                 student.target_x,
                 student.target_y,
-                speed * game_delta,
+                step_distance,
             )
             if self._is_static_walkable_point(next_x, next_y):
                 student.x = next_x
@@ -1330,7 +1339,7 @@ class SimulationWorker(QObject):
                 arrived = False
             student.x = max(28.0, min(self.width - 28.0, student.x))
             student.y = max(28.0, min(self.height - 28.0, student.y))
-            arrived = arrived or distance(student.x, student.y, student.target_x, student.target_y) <= 5.0
+            arrived = arrived or distance(student.x, student.y, student.target_x, student.target_y) <= arrival_radius
 
         moved = distance(old_x, old_y, student.x, student.y)
         student.actual_speed = moved / game_delta if game_delta > 0 else 0.0
