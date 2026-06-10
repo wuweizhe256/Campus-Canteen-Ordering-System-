@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from math import ceil
+from math import ceil, hypot
 from typing import Any
 
-from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import QElapsedTimer, QPointF, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPolygonF
 from PyQt6.QtWidgets import QWidget
 
@@ -12,6 +12,8 @@ from utils.fonts import ui_font
 
 class CanvasWidget(QWidget):
     zoomChanged = pyqtSignal(float)
+    _STUDENT_MOVE_ANIMATION_MS = 90
+    _STUDENT_TELEPORT_DISTANCE = 180.0
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -23,10 +25,17 @@ class CanvasWidget(QWidget):
         self._pan_offset = QPointF(0.0, 0.0)
         self._drag_start: QPointF | None = None
         self._hover_scene_pos: tuple[float, float] | None = None
+        self._student_animations: dict[int, dict[str, float]] = {}
+        self._student_animation_clock = QElapsedTimer()
+        self._student_animation_timer = QTimer(self)
+        self._student_animation_timer.setInterval(16)
+        self._student_animation_timer.timeout.connect(self._advance_student_animation)
         self.setMouseTracking(True)
 
     def set_frame(self, frame: dict) -> None:
-        self.frame = self._frame_with_p1_fallback(frame)
+        adapted = self._frame_with_p1_fallback(frame)
+        self._update_student_animations(adapted)
+        self.frame = adapted
         self.update()
 
     def set_show_paths(self, show_paths: bool) -> None:
@@ -130,6 +139,153 @@ class CanvasWidget(QWidget):
         status = str(normalized.get("status") or "queued")
         normalized["status"] = status if status in {"queued", "cooking", "done", "cancelled"} else "queued"
         return normalized
+
+    def _update_student_animations(self, next_frame: dict) -> None:
+        next_students = [
+            student
+            for student in next_frame.get("students", [])
+            if isinstance(student, dict) and student.get("id") is not None
+        ]
+        if not next_students:
+            self._student_animations.clear()
+            self._student_animation_timer.stop()
+            self._student_animation_clock.invalidate()
+            return
+
+        previous_students = {}
+        if isinstance(self.frame, dict):
+            previous_students = {
+                student.get("id"): student
+                for student in self.frame.get("students", [])
+                if isinstance(student, dict) and student.get("id") is not None
+            }
+
+        progress = self._student_animation_progress()
+        animations: dict[int, dict[str, float]] = {}
+        for student in next_students:
+            student_id = int(student.get("id"))
+            target_x = self._number(student.get("x"), 0.0)
+            target_y = self._number(student.get("y"), 0.0)
+            target_facing_x = max(-1.0, min(1.0, self._number(student.get("facing_x"), 1.0)))
+            target_facing_y = max(-1.0, min(1.0, self._number(student.get("facing_y"), 0.0)))
+
+            previous_student = previous_students.get(student.get("id"))
+            if previous_student is None:
+                start_x = target_x
+                start_y = target_y
+                start_facing_x = target_facing_x
+                start_facing_y = target_facing_y
+            else:
+                start_x, start_y = self._interpolated_student_position(student_id, previous_student, progress)
+                start_facing_x = self._interpolated_student_value(
+                    student_id,
+                    previous_student,
+                    progress,
+                    "facing_x",
+                    1.0,
+                )
+                start_facing_y = self._interpolated_student_value(
+                    student_id,
+                    previous_student,
+                    progress,
+                    "facing_y",
+                    0.0,
+                )
+                if hypot(target_x - start_x, target_y - start_y) > self._STUDENT_TELEPORT_DISTANCE:
+                    start_x = target_x
+                    start_y = target_y
+                    start_facing_x = target_facing_x
+                    start_facing_y = target_facing_y
+
+            animations[student_id] = {
+                "start_x": start_x,
+                "start_y": start_y,
+                "target_x": target_x,
+                "target_y": target_y,
+                "start_facing_x": start_facing_x,
+                "start_facing_y": start_facing_y,
+                "target_facing_x": target_facing_x,
+                "target_facing_y": target_facing_y,
+            }
+
+        self._student_animations = animations
+        self._student_animation_clock.restart()
+        self._student_animation_timer.start()
+
+    def _advance_student_animation(self) -> None:
+        if self._student_animation_progress() >= 1.0:
+            self._student_animation_timer.stop()
+        self.update()
+
+    def _student_animation_progress(self) -> float:
+        if not self._student_animation_clock.isValid():
+            return 1.0
+        elapsed = self._student_animation_clock.elapsed()
+        return max(0.0, min(1.0, elapsed / self._STUDENT_MOVE_ANIMATION_MS))
+
+    def _interpolated_student_position(
+        self,
+        student_id: int,
+        fallback_student: dict,
+        progress: float | None = None,
+    ) -> tuple[float, float]:
+        animation = self._student_animations.get(student_id)
+        if animation is None:
+            return (
+                self._number(fallback_student.get("x"), 0.0),
+                self._number(fallback_student.get("y"), 0.0),
+            )
+        if progress is None:
+            progress = self._student_animation_progress()
+        eased = self._ease_out_cubic(progress)
+        x = animation["start_x"] + (animation["target_x"] - animation["start_x"]) * eased
+        y = animation["start_y"] + (animation["target_y"] - animation["start_y"]) * eased
+        return x, y
+
+    def _interpolated_student_value(
+        self,
+        student_id: int,
+        fallback_student: dict,
+        progress: float,
+        key: str,
+        default: float,
+    ) -> float:
+        animation = self._student_animations.get(student_id)
+        if animation is None:
+            return self._number(fallback_student.get(key), default)
+        eased = self._ease_out_cubic(progress)
+        start = animation.get(f"start_{key}", default)
+        target = animation.get(f"target_{key}", default)
+        return start + (target - start) * eased
+
+    def _student_render_data(self, student: dict) -> dict:
+        student_id = student.get("id")
+        if student_id is None:
+            return student
+        render_student = dict(student)
+        progress = self._student_animation_progress()
+        x, y = self._interpolated_student_position(int(student_id), student, progress)
+        render_student["x"] = x
+        render_student["y"] = y
+        render_student["facing_x"] = self._interpolated_student_value(
+            int(student_id),
+            student,
+            progress,
+            "facing_x",
+            self._number(student.get("facing_x"), 1.0),
+        )
+        render_student["facing_y"] = self._interpolated_student_value(
+            int(student_id),
+            student,
+            progress,
+            "facing_y",
+            self._number(student.get("facing_y"), 0.0),
+        )
+        return render_student
+
+    def _ease_out_cubic(self, value: float) -> float:
+        value = max(0.0, min(1.0, value))
+        return 1.0 - (1.0 - value) ** 3
 
     def set_view_zoom(self, zoom: float) -> None:
         zoom = max(0.6, min(1.8, zoom))
@@ -948,7 +1104,11 @@ class CanvasWidget(QWidget):
         return [(-51, -40), (35, -40), (-51, -4), (35, -4), (-51, 32), (35, 32)][:seat_count]
 
     def _draw_students(self, painter: QPainter) -> None:
-        students = [student for student in self.frame.get("students", []) if isinstance(student, dict)]
+        students = [
+            self._student_render_data(student)
+            for student in self.frame.get("students", [])
+            if isinstance(student, dict)
+        ]
         students.sort(key=lambda item: self._number(item.get("y"), 0.0))
         for student in students:
             self._draw_pig(painter, student)
