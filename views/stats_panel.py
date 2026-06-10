@@ -6,6 +6,7 @@ from PyQt6.QtCore import QRectF, Qt
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QDialog,
     QFrame,
     QHeaderView,
     QLabel,
@@ -430,15 +431,129 @@ class QueueHeatmap(QWidget):
             painter.drawRect(QRectF(left + index * segment, top, segment + 1, 8))
 
 
+def _draw_trend_lines(
+    painter: QPainter,
+    chart: QRectF,
+    history: list[dict[str, float | None]],
+) -> None:
+    """共享的折线图核心绘图逻辑，供内嵌图表和弹窗复用。"""
+    if len(history) < 2:
+        painter.setPen(QColor("#64748b"))
+        painter.setFont(ui_font(9))
+        painter.drawText(chart, Qt.AlignmentFlag.AlignCenter, "运行后显示趋势")
+        return
+
+    wait_values = [item["avg_wait_time"] for item in history if item.get("avg_wait_time") is not None]
+    active_values = [item["max_active_students"] for item in history if item.get("max_active_students") is not None]
+    congestion_values = [item["congestion_index"] for item in history if item.get("congestion_index") is not None]
+    stuck_values = [item["stuck_student_count"] for item in history if item.get("stuck_student_count") is not None]
+    max_wait = max(1.0, max(wait_values) if wait_values else 1.0)
+    max_active = max(1.0, max(active_values) if active_values else 1.0)
+    max_congestion = max(0.15, max(congestion_values) if congestion_values else 0.15)
+    max_stuck = max(1.0, max(stuck_values) if stuck_values else 1.0)
+
+    _draw_single_line(painter, chart, history, "avg_wait_time", max_wait, QColor("#0ea5e9"))
+    _draw_single_line(painter, chart, history, "max_active_students", max_active, QColor("#f59e0b"))
+    _draw_single_line(painter, chart, history, "congestion_index", max_congestion, QColor("#ef4444"))
+    _draw_single_line(painter, chart, history, "stuck_student_count", max_stuck, QColor("#f97316"))
+
+
+def _draw_single_line(
+    painter: QPainter,
+    chart: QRectF,
+    history: list[dict[str, float | None]],
+    key: str,
+    maximum: float,
+    color: QColor,
+) -> None:
+    points: list[tuple[float, float]] = []
+    total = max(1, len(history) - 1)
+    for index, item in enumerate(history):
+        value = item.get(key)
+        if value is None:
+            continue
+        x = chart.left() + chart.width() * index / total
+        y = chart.bottom() - chart.height() * max(0.0, min(1.0, float(value) / maximum))
+        points.append((x, y))
+    if len(points) < 2:
+        return
+
+    painter.setPen(QPen(color, 2.5))
+    for start, end in zip(points, points[1:]):
+        painter.drawLine(int(start[0]), int(start[1]), int(end[0]), int(end[1]))
+
+    painter.setBrush(color)
+    painter.setPen(Qt.PenStyle.NoPen)
+    for x, y in points[-4:]:
+        painter.drawEllipse(QRectF(x - 3, y - 3, 6, 6))
+
+
+def _draw_y_axis(painter: QPainter, chart: QRectF) -> None:
+    """在图表左侧绘制归一化纵轴刻度标签 (0% ~ 100%)。"""
+    painter.setPen(QColor("#94a3b8"))
+    painter.setFont(ui_font(7))
+    labels = ["100%", "67%", "33%", "0%"]
+    for i in range(4):
+        y = chart.top() + i * chart.height() / 3
+        label = labels[i]
+        # 刻度短线
+        painter.drawLine(int(chart.left() - 5), int(y), int(chart.left()), int(y))
+        # 标签
+        label_rect = QRectF(chart.left() - 34, y - 8, 30, 16)
+        painter.drawText(label_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, label)
+
+
+def _draw_trend_legend(painter: QPainter, width: int, height: int) -> None:
+    y = height - 28
+    items = [
+        ("等待", QColor("#0ea5e9")),
+        ("人数", QColor("#f59e0b")),
+        ("拥堵", QColor("#ef4444")),
+        ("卡住", QColor("#f97316")),
+    ]
+    item_count = len(items)
+    block_width = 72
+    total_width = item_count * block_width
+    start_x = (width - total_width) // 2
+    x = start_x if start_x > 16 else 18
+    painter.setFont(ui_font(8))
+    for label, color in items:
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+        painter.drawRoundedRect(QRectF(x, y + 4, 18, 6), 3, 3)
+        painter.setPen(QColor("#475569"))
+        painter.drawText(QRectF(x + 24, y - 2, 44, 18), Qt.AlignmentFlag.AlignLeft, label)
+        x += block_width
+
+
 class TrendChart(QWidget):
+    """内嵌的趋势折线图，点击可弹出实时同步的放大窗口。"""
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setMinimumHeight(280)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.history: list[dict[str, float | None]] = []
+        self._popup: TrendChartPopup | None = None
 
     def set_history(self, history: list[dict[str, float | None]]) -> None:
         self.history = list(history)
         self.update()
+        if self._popup is not None:
+            self._popup._chart.history = self.history
+            self._popup._chart.update()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt override
+        if event.button() == Qt.MouseButton.LeftButton and len(self.history) >= 2:
+            if self._popup is not None:
+                self._popup.close()
+            self._popup = TrendChartPopup(self.history, self.window())
+            self._popup.finished.connect(self._on_popup_closed)
+            self._popup.show()
+        super().mousePressEvent(event)
+
+    def _on_popup_closed(self) -> None:
+        self._popup = None
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
         painter = _card_painter(self)
@@ -452,74 +567,56 @@ class TrendChart(QWidget):
             y = chart.top() + index * chart.height() / 3
             painter.drawLine(int(chart.left()), int(y), int(chart.right()), int(y))
 
-        if len(self.history) < 2:
-            painter.setPen(QColor("#64748b"))
-            painter.setFont(ui_font(9))
-            painter.drawText(chart, Qt.AlignmentFlag.AlignCenter, "运行后显示趋势")
-            self._draw_legend(painter)
-            return
+        _draw_y_axis(painter, chart)
+        _draw_trend_lines(painter, chart, self.history)
+        _draw_trend_legend(painter, self.width(), self.height())
 
-        wait_values = [item["avg_wait_time"] for item in self.history if item.get("avg_wait_time") is not None]
-        active_values = [item["max_active_students"] for item in self.history if item.get("max_active_students") is not None]
-        congestion_values = [item["congestion_index"] for item in self.history if item.get("congestion_index") is not None]
-        stuck_values = [item["stuck_student_count"] for item in self.history if item.get("stuck_student_count") is not None]
-        max_wait = max(1.0, max(wait_values) if wait_values else 1.0)
-        max_active = max(1.0, max(active_values) if active_values else 1.0)
-        max_congestion = max(0.15, max(congestion_values) if congestion_values else 0.15)
-        max_stuck = max(1.0, max(stuck_values) if stuck_values else 1.0)
 
-        self._draw_line(painter, chart, "avg_wait_time", max_wait, QColor("#0ea5e9"))
-        self._draw_line(painter, chart, "max_active_students", max_active, QColor("#f59e0b"))
-        self._draw_line(painter, chart, "congestion_index", max_congestion, QColor("#ef4444"))
-        self._draw_line(painter, chart, "stuck_student_count", max_stuck, QColor("#f97316"))
-        self._draw_legend(painter)
+class TrendChartPopup(QDialog):
+    """点击折线图后弹出的实时同步放大趋势图窗口。"""
 
-    def _draw_line(
-        self,
-        painter: QPainter,
-        chart: QRectF,
-        key: str,
-        maximum: float,
-        color: QColor,
-    ) -> None:
-        points: list[tuple[float, float]] = []
-        total = max(1, len(self.history) - 1)
-        for index, item in enumerate(self.history):
-            value = item.get(key)
-            if value is None:
-                continue
-            x = chart.left() + chart.width() * index / total
-            y = chart.bottom() - chart.height() * max(0.0, min(1.0, float(value) / maximum))
-            points.append((x, y))
-        if len(points) < 2:
-            return
+    def __init__(self, history: list[dict[str, float | None]], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("趋势图 — 等待、人数与拥堵放大")
+        self.setMinimumSize(720, 440)
+        self.resize(880, 500)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
 
-        painter.setPen(QPen(color, 2.5))
-        for start, end in zip(points, points[1:]):
-            painter.drawLine(int(start[0]), int(start[1]), int(end[0]), int(end[1]))
+        self._chart = _PopupChart(history)
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._chart)
+        self.setLayout(layout)
 
-        painter.setBrush(color)
+
+class _PopupChart(QWidget):
+    """弹窗内部的大尺寸趋势图绘制组件，持有共享 history 引用实现实时更新。"""
+
+    def __init__(self, history: list[dict[str, float | None]], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.history = history
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(QColor("#ffffff"))
         painter.setPen(Qt.PenStyle.NoPen)
-        for x, y in points[-4:]:
-            painter.drawEllipse(QRectF(x - 3, y - 3, 6, 6))
+        painter.drawRect(self.rect())
 
-    def _draw_legend(self, painter: QPainter) -> None:
-        y = self.height() - 28
-        items = [
-            ("等待", QColor("#0ea5e9")),
-            ("人数", QColor("#f59e0b")),
-            ("拥堵", QColor("#ef4444")),
-            ("卡住", QColor("#f97316")),
-        ]
-        x = 18
-        painter.setFont(ui_font(8))
-        for label, color in items:
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(color)
-            painter.drawRoundedRect(QRectF(x, y + 4, 18, 6), 3, 3)
-            painter.setPen(QColor("#475569"))
-            painter.drawText(QRectF(x + 24, y - 2, 44, 18), Qt.AlignmentFlag.AlignLeft, label)
-            x += 72
+        title_rect = QRectF(24, 20, self.width() - 48, 28)
+        painter.setPen(QColor("#0f172a"))
+        painter.setFont(ui_font(14, QFont.Weight.Bold))
+        painter.drawText(title_rect, Qt.AlignmentFlag.AlignLeft, "等待、人数与拥堵趋势")
+
+        chart = QRectF(48, 68, self.width() - 80, self.height() - 120)
+        painter.setPen(QPen(QColor("#e2e8f0"), 1))
+        for index in range(4):
+            y = chart.top() + index * chart.height() / 3
+            painter.drawLine(int(chart.left()), int(y), int(chart.right()), int(y))
+
+        _draw_y_axis(painter, chart)
+        _draw_trend_lines(painter, chart, self.history)
+        _draw_trend_legend(painter, self.width(), self.height())
 
 
 def _card() -> QFrame:
