@@ -466,6 +466,9 @@ class CanvasWidget(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor("#d6c8b8"))
         painter.drawRoundedRect(QRectF(34, 34, width - 68, 84), 12, 12)
+        painter.setBrush(QColor("#c8b8a7"))
+        painter.drawRoundedRect(QRectF(34, 34, 10, height - 68), 5, 5)
+        painter.drawRoundedRect(QRectF(width - 44, 34, 10, height - 68), 5, 5)
         painter.setBrush(QColor("#d8e5ce"))
         painter.drawRoundedRect(QRectF(60, self._number(self.frame.get("height"), 800.0) - 96, width - 120, 48), 14, 14)
         painter.setPen(QPen(QColor("#a98f78"), 3))
@@ -573,21 +576,23 @@ class CanvasWidget(QWidget):
     def _draw_door(self, painter: QPainter) -> None:
         entrances = self._entrance_frames()
         for entrance in entrances:
-            rect = self._rect_frame(entrance, default_width=82.0, default_height=54.0)
+            rect = self._rect_frame(entrance, default_width=44.0, default_height=76.0)
             if rect is None:
                 continue
             x, y, width, height, _ = rect
-            weight = self._number(entrance.get("weight") if isinstance(entrance, dict) else None, 1.0)
             entrance_id = int(self._number(entrance.get("id") if isinstance(entrance, dict) else 0, 0))
 
-            self._draw_shadow(painter, x, y + height * 0.42, width, 28, QColor(30, 64, 175, 45))
-            self._draw_iso_box(painter, x, y, width, height, 18, QColor("#bfdbfe"), QColor("#60a5fa"), QColor("#1d4ed8"))
-            painter.setFont(ui_font(10, QFont.Weight.Bold))
-            painter.setPen(QColor("#1e3a8a"))
             label = "入口" if len(entrances) == 1 else f"入口 {entrance_id + 1}"
-            painter.drawText(QRectF(x - width / 2, y - 12, width, 24), Qt.AlignmentFlag.AlignCenter, label)
-            painter.setFont(ui_font(7, QFont.Weight.Bold))
-            painter.drawText(QRectF(x - width / 2, y + height * 0.2, width, 16), Qt.AlignmentFlag.AlignCenter, f"权重 {weight:g}")
+            self._draw_wall_doorway(
+                painter,
+                y,
+                width,
+                height,
+                side="left",
+                label=label,
+                detail="",
+                accent=QColor("#2563eb"),
+            )
 
     def _entrance_frames(self) -> list[dict[str, Any]]:
         entrances = self.frame.get("entrances") if self.frame else None
@@ -603,8 +608,8 @@ class CanvasWidget(QWidget):
                 "id": 0,
                 "x": point[0],
                 "y": point[1],
-                "width": 82.0,
-                "height": 54.0,
+                "width": 44.0,
+                "height": 76.0,
                 "weight": 1.0,
             }
         ]
@@ -623,8 +628,8 @@ class CanvasWidget(QWidget):
                 "id": 0,
                 "x": point[0],
                 "y": point[1],
-                "width": 116.0,
-                "height": 70.0,
+                "width": 44.0,
+                "height": 76.0,
                 "is_congested": False,
             }
         ]
@@ -682,24 +687,83 @@ class CanvasWidget(QWidget):
     def _draw_exit(self, painter: QPainter) -> None:
         exits = self._exit_frames()
         for exit_frame in exits:
-            rect = self._rect_frame(exit_frame, default_width=116.0, default_height=70.0)
+            rect = self._rect_frame(exit_frame, default_width=44.0, default_height=76.0)
             if rect is None:
                 continue
-            x, y, width, height, congested = rect
+            _, y, width, height, congested = rect
             exit_id = int(self._number(exit_frame.get("id") if isinstance(exit_frame, dict) else 0, 0))
             edge = QColor("#b45309" if congested else "#15803d")
-            top = QColor("#fed7aa" if congested else "#bbf7d0")
-            side = QColor("#fb923c" if congested else "#86efac")
 
-            self._draw_shadow(painter, x, y + height * 0.37, width, 36, QColor(22, 101, 52, 45))
-            self._draw_iso_box(painter, x, y, width, height, 20, top, side, edge)
-            painter.setFont(ui_font(10, QFont.Weight.Bold))
-            painter.setPen(edge.darker(115))
             label = "出口" if len(exits) == 1 else f"出口 {exit_id + 1}"
-            painter.drawText(QRectF(x - width / 2, y - 12, width, 24), Qt.AlignmentFlag.AlignCenter, label)
-            if congested:
-                painter.setFont(ui_font(7, QFont.Weight.Bold))
-                painter.drawText(QRectF(x - width / 2, y + height * 0.2, width, 16), Qt.AlignmentFlag.AlignCenter, "拥堵")
+            self._draw_wall_doorway(
+                painter,
+                y,
+                width,
+                height,
+                side="right",
+                label=label,
+                detail="拥堵" if congested else "",
+                accent=edge,
+            )
+
+    def _draw_wall_doorway(
+        self,
+        painter: QPainter,
+        y: float,
+        width: float,
+        height: float,
+        *,
+        side: str,
+        label: str,
+        detail: str,
+        accent: QColor,
+    ) -> None:
+        frame_width, _ = self._frame_size()
+        marker_height = max(38.0, min(48.0, height * 0.58))
+        marker_width = max(7.0, min(10.0, width * 0.22))
+        top = y - marker_height / 2.0
+        wall_x = 34.0 if side == "left" else frame_width - 44.0
+        marker_x = wall_x + 1.5 if side == "left" else wall_x + 10.0 - marker_width - 1.5
+        inside_direction = 1.0 if side == "left" else -1.0
+        sign_width = 34.0 if len(label) <= 3 else 42.0
+        sign_x = wall_x + 11.0 if side == "left" else wall_x - sign_width - 1.0
+        sign_y = top - 8.0
+        threshold_y = y + marker_height / 2.0 + 2.0
+        threshold_start = wall_x + 9.0 if side == "left" else wall_x + 1.0
+        threshold_end = threshold_start + inside_direction * 18.0
+
+        shadow = QColor(51, 65, 85, 28)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(shadow)
+        painter.drawRect(QRectF(marker_x + inside_direction * 2.0, top + 4.0, marker_width + 5.0, marker_height - 2.0))
+
+        painter.setPen(QPen(QColor("#8a7a67"), 1.0))
+        painter.setBrush(QColor("#f1e6d4"))
+        painter.drawRoundedRect(QRectF(marker_x, top, marker_width, marker_height), 2, 2)
+        painter.setPen(QPen(QColor("#6f5f4e"), 1.1))
+        center_x = marker_x + marker_width / 2.0
+        painter.drawLine(int(center_x), int(top + 4.0), int(center_x), int(top + marker_height - 4.0))
+        painter.setPen(QPen(accent, 1.4))
+        painter.drawLine(int(marker_x + 2.0), int(top + 4.0), int(marker_x + marker_width - 2.0), int(top + 4.0))
+        painter.drawLine(int(marker_x + 2.0), int(top + marker_height - 4.0), int(marker_x + marker_width - 2.0), int(top + marker_height - 4.0))
+
+        painter.setPen(QPen(QColor("#9aa692"), 1.2))
+        painter.drawLine(int(threshold_start), int(threshold_y), int(threshold_end), int(threshold_y))
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(255, 255, 255, 215))
+        painter.drawRoundedRect(QRectF(sign_x, sign_y, sign_width, 12.0), 3, 3)
+        painter.setPen(accent.darker(115))
+        painter.setFont(ui_font(6, QFont.Weight.Bold))
+        painter.drawText(QRectF(sign_x + 2.0, sign_y - 0.5, sign_width - 4.0, 12.0), Qt.AlignmentFlag.AlignCenter, label)
+        if detail:
+            painter.setPen(accent.darker(105))
+            painter.setFont(ui_font(5, QFont.Weight.Bold))
+            painter.drawText(
+                QRectF(sign_x + 2.0, threshold_y + 2.0, sign_width - 4.0, 9.0),
+                Qt.AlignmentFlag.AlignCenter,
+                detail,
+            )
 
     def _draw_stalls(self, painter: QPainter) -> None:
         painter.setFont(ui_font(8))
@@ -1207,25 +1271,49 @@ class CanvasWidget(QWidget):
             painter.drawArc(QRectF(x - 6, y + 6, 12, 8), 20 * 16, 140 * 16)
 
     def _draw_tray_return_points(self, painter: QPainter) -> None:
+        frame_width, _ = self._frame_size()
+        wall_x = frame_width - 44.0
         for point in self.frame.get("tray_return_points", []):
-            rect = self._rect_frame(point, default_width=120.0, default_height=70.0)
+            rect = self._rect_frame(point, default_width=52.0, default_height=96.0)
             if rect is None:
                 continue
-            x, y, width, height, congested = rect
+            _, y, width, height, congested = rect
             edge = QColor("#0f766e" if not congested else "#b45309")
-            top = QColor("#99f6e4" if not congested else "#fed7aa")
-            side = QColor("#14b8a6" if not congested else "#fb923c")
-            self._draw_shadow(painter, x, y + height * 0.34, width * 0.9, 30, QColor(15, 118, 110, 48))
-            self._draw_iso_box(painter, x, y, width, height * 0.58, 24, top, side, edge)
-            painter.setPen(QPen(edge.darker(125), 2))
-            painter.setBrush(QColor("#0f172a"))
-            painter.drawRoundedRect(QRectF(x - width * 0.22, y - 3, width * 0.44, 12), 5, 5)
-            painter.setFont(ui_font(9, QFont.Weight.Bold))
-            painter.setPen(QColor("#115e59" if not congested else "#9a3412"))
-            painter.drawText(QRectF(x - width / 2, y - height * 0.42, width, 20), Qt.AlignmentFlag.AlignCenter, "碗筷回收")
-            painter.setPen(QPen(QColor("#475569"), 1.2))
+            fill = QColor("#d8f3ea" if not congested else "#fde7c7")
+            slot = QColor("#0f3f46" if not congested else "#7c2d12")
+            panel_height = max(66.0, min(86.0, height * 0.82))
+            panel_width = max(30.0, min(38.0, width * 0.72))
+            left = wall_x - panel_width + 7.0
+            top = y - panel_height / 2.0
+
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(51, 65, 85, 28))
+            painter.drawRect(QRectF(left - 8.0, top + 8.0, panel_width + 8.0, panel_height - 4.0))
+
+            painter.setPen(QPen(edge.darker(120), 1.2))
+            painter.setBrush(fill)
+            painter.drawRoundedRect(QRectF(left, top, panel_width, panel_height), 4, 4)
+            painter.setPen(QPen(QColor("#94a3a0"), 1.0))
+            painter.drawLine(int(left + 4.0), int(top + 9.0), int(left + panel_width - 4.0), int(top + 9.0))
+
+            painter.setPen(QPen(edge.darker(125), 1.4))
+            painter.setBrush(slot)
+            painter.drawRoundedRect(QRectF(left + 6.0, y - 9.0, panel_width - 12.0, 8.0), 4, 4)
+
+            painter.setPen(QPen(QColor("#475569"), 1.0))
+            painter.setBrush(QColor(255, 255, 255, 145))
             for index in range(3):
-                painter.drawRoundedRect(QRectF(x + width * 0.25, y - 4 + index * 7, 24, 6), 3, 3)
+                bowl_top = y + 6.0 + index * 9.0
+                painter.drawArc(QRectF(left + 8.0, bowl_top, panel_width - 16.0, 8.0), 180 * 16, 180 * 16)
+
+            label_width = 58.0
+            label_left = left - label_width - 2.0
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(255, 255, 255, 218))
+            painter.drawRoundedRect(QRectF(label_left, top - 2.0, label_width, 15.0), 4, 4)
+            painter.setFont(ui_font(7, QFont.Weight.Bold))
+            painter.setPen(QColor("#115e59" if not congested else "#9a3412"))
+            painter.drawText(QRectF(label_left + 3.0, top - 2.0, label_width - 6.0, 15.0), Qt.AlignmentFlag.AlignCenter, "碗筷回收")
 
     def _draw_stats_panel(self, painter: QPainter) -> None:
         stats = self.frame.get("stats") or {}

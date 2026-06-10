@@ -26,10 +26,10 @@ class StatsPanel(QWidget):
         self.setMaximumWidth(410)
         self.setObjectName("StatsPanel")
         self.history: list[dict[str, float | None]] = []
+        self._font_scale = 1.0
 
         self.title = QLabel("实时运营看板")
         self.title.setObjectName("StatsTitle")
-        self.title.setFont(ui_font(13, QFont.Weight.Bold))
         self.subtitle = QLabel("拥堵、队列、座位与通行效率实时概览")
         self.subtitle.setObjectName("StatsSubtitle")
 
@@ -83,7 +83,23 @@ class StatsPanel(QWidget):
         root.addWidget(self.scroll)
         self.setLayout(root)
 
+        self._apply_style()
+        self.set_frame({})
+
+    def apply_font_scale(self, scale: float) -> None:
+        self._font_scale = max(0.8, min(1.6, float(scale)))
+        self._apply_style()
+        self.update()
+        self.gauge_panel.update()
+        self.table_type_panel.update()
+        self.heatmap.update()
+        self.trend.update()
+
+    def _apply_style(self) -> None:
+        self.title.setFont(ui_font(13, QFont.Weight.Bold))
         font_family = stylesheet_font_family()
+        subtitle_size = max(8, round(9 * self._font_scale))
+        table_size = max(8, round(9 * self._font_scale))
         style = """
             QWidget#StatsPanel {
                 background: #fff7ed;
@@ -100,7 +116,7 @@ class StatsPanel(QWidget):
             }
             QLabel#StatsSubtitle {
                 color: #64748b;
-                font: 9pt "Microsoft YaHei UI";
+                font: __SUBTITLE_SIZE__pt "Microsoft YaHei UI";
                 padding-bottom: 2px;
             }
             QFrame#StatsCard {
@@ -113,7 +129,7 @@ class StatsPanel(QWidget):
                 alternate-background-color: #f8fafc;
                 border: 0;
                 color: #0f172a;
-                font: 9pt "Microsoft YaHei UI";
+                font: __TABLE_SIZE__pt "Microsoft YaHei UI";
             }
             QHeaderView::section {
                 background: #eaf1f8;
@@ -145,8 +161,11 @@ class StatsPanel(QWidget):
                 height: 0;
             }
             """
-        self.setStyleSheet(style.replace("Microsoft YaHei UI", font_family))
-        self.set_frame({})
+        self.setStyleSheet(
+            style.replace("__SUBTITLE_SIZE__", str(subtitle_size))
+            .replace("__TABLE_SIZE__", str(table_size))
+            .replace("Microsoft YaHei UI", font_family)
+        )
 
     def set_frame(self, frame: dict | None) -> None:
         frame = frame or {}

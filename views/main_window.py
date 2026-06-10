@@ -4,6 +4,7 @@ from dataclasses import replace
 
 from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QHBoxLayout,
     QLabel,
@@ -16,9 +17,10 @@ from PyQt6.QtWidgets import (
 )
 
 from models.entities import RunSummary, SimulationConfig
-from utils.fonts import stylesheet_font_family
+from utils.fonts import set_ui_font_scale, stylesheet_font_family, ui_font
 from views.canvas_widget import CanvasWidget
 from views.config_dialog import ConfigDialog
+from views.settings_dialog import SettingsDialog
 from views.stats_panel import StatsPanel
 
 
@@ -34,6 +36,9 @@ class MainWindow(QMainWindow):
         self.resize(1480, 860)
         self._running = False
         self._paused = False
+        self._font_point_size = 10
+        self._font_scale = 1.0
+        self.settings_dialog: SettingsDialog | None = None
 
         self.canvas = CanvasWidget()
         self.stats_panel = StatsPanel()
@@ -73,6 +78,8 @@ class MainWindow(QMainWindow):
         self.zoom_slider.setToolTip("调整左侧食堂演示画布缩放比例")
         self.reset_view_button = QPushButton("重置视图")
         self.reset_view_button.setObjectName("SecondaryButton")
+        self.settings_button = QPushButton("设置")
+        self.settings_button.setObjectName("SecondaryButton")
 
         self.start_button.clicked.connect(self._open_config_dialog)
         self.pause_button.clicked.connect(self._toggle_pause)
@@ -83,6 +90,7 @@ class MainWindow(QMainWindow):
         self.zoom_slider.valueChanged.connect(self._zoom_slider_changed)
         self.canvas.zoomChanged.connect(self._canvas_zoom_changed)
         self.reset_view_button.clicked.connect(self.canvas.reset_view)
+        self.settings_button.clicked.connect(self._open_settings_dialog)
 
         top_bar = QHBoxLayout()
         top_bar.setContentsMargins(18, 12, 18, 12)
@@ -100,6 +108,7 @@ class MainWindow(QMainWindow):
         top_bar.addWidget(self.zoom_label)
         top_bar.addWidget(self.zoom_slider)
         top_bar.addWidget(self.reset_view_button)
+        top_bar.addWidget(self.settings_button)
         top_bar.addSpacing(18)
         top_bar.addWidget(self.status_label, 1)
 
@@ -131,6 +140,60 @@ class MainWindow(QMainWindow):
         dialog = ConfigDialog(self)
         if dialog.exec():
             self.start_simulation(dialog.config())
+
+    def _open_settings_dialog(self) -> None:
+        if self.settings_dialog is None:
+            self.settings_dialog = SettingsDialog(
+                self,
+                current_resolution=(self.width(), self.height()),
+                current_font_size=self._font_point_size,
+            )
+            self.settings_dialog.settingsApplied.connect(self._apply_window_settings)
+            self.settings_dialog.finished.connect(self._settings_dialog_closed)
+
+        self.settings_dialog.show()
+        self.settings_dialog.raise_()
+        self.settings_dialog.activateWindow()
+        self._position_settings_dialog()
+
+    def _settings_dialog_closed(self, *_args) -> None:
+        self.settings_dialog = None
+
+    @pyqtSlot(tuple, int)
+    def _apply_window_settings(self, resolution: tuple[int, int], font_size: int) -> None:
+        width, height = resolution
+        if self.isMaximized():
+            self.showNormal()
+        self.resize(width, height)
+
+        self._font_point_size = font_size
+        self._font_scale = font_size / 10.0
+        set_ui_font_scale(self._font_scale)
+        app = QApplication.instance()
+        if app is not None:
+            app.setFont(ui_font(10))
+        self._apply_style()
+        self.stats_panel.apply_font_scale(self._font_scale)
+        self.canvas.update()
+        self.status_label.setText(f"设置已应用：{width} x {height}，字体 {font_size} pt")
+        self._position_settings_dialog()
+
+    def _position_settings_dialog(self) -> None:
+        if self.settings_dialog is None:
+            return
+        anchor = self.settings_button.mapToGlobal(self.settings_button.rect().bottomRight())
+        self.settings_dialog.move(
+            anchor.x() - self.settings_dialog.width(),
+            anchor.y() + 8,
+        )
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        self._position_settings_dialog()
+
+    def moveEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().moveEvent(event)
+        self._position_settings_dialog()
 
     def start_simulation(self, config: SimulationConfig) -> None:
         config = replace(config, time_scale=float(self.time_scale_slider.value()))
@@ -205,6 +268,9 @@ class MainWindow(QMainWindow):
 
     def _apply_style(self) -> None:
         font_family = stylesheet_font_family()
+        title_size = max(11, round(15 * self._font_scale))
+        toolbar_size = max(8, round(10 * self._font_scale))
+        status_size = max(8, round(9 * self._font_scale))
         style = """
             QWidget#Root {
                 background: #e7efe2;
@@ -216,12 +282,12 @@ class MainWindow(QMainWindow):
             }
             QLabel#AppTitle {
                 color: #0f172a;
-                font: 700 15pt "Microsoft YaHei UI";
+                font: 700 __TITLE_SIZE__pt "Microsoft YaHei UI";
                 padding-right: 6px;
             }
             QLabel#ToolbarLabel {
                 color: #334155;
-                font: 700 10pt "Microsoft YaHei UI";
+                font: 700 __TOOLBAR_SIZE__pt "Microsoft YaHei UI";
             }
             QLabel#StatusBadge {
                 color: #0f172a;
@@ -229,14 +295,14 @@ class MainWindow(QMainWindow):
                 border: 1px solid #cbd5e1;
                 border-radius: 12px;
                 padding: 5px 12px;
-                font: 9pt "Microsoft YaHei UI";
+                font: __STATUS_SIZE__pt "Microsoft YaHei UI";
             }
             QPushButton {
                 border: 0;
                 border-radius: 8px;
                 padding: 8px 18px;
                 min-width: 78px;
-                font: 700 10pt "Microsoft YaHei UI";
+                font: 700 __TOOLBAR_SIZE__pt "Microsoft YaHei UI";
             }
             QPushButton#PrimaryButton {
                 color: #ffffff;
@@ -265,7 +331,7 @@ class MainWindow(QMainWindow):
             }
             QCheckBox#PathToggle {
                 color: #0f172a;
-                font: 10pt "Microsoft YaHei UI";
+                font: __TOOLBAR_SIZE__pt "Microsoft YaHei UI";
                 spacing: 8px;
             }
             QCheckBox#PathToggle::indicator {
@@ -297,4 +363,9 @@ class MainWindow(QMainWindow):
                 border: 2px solid #0f766e;
             }
             """
-        self.setStyleSheet(style.replace("Microsoft YaHei UI", font_family))
+        self.setStyleSheet(
+            style.replace("__TITLE_SIZE__", str(title_size))
+            .replace("__TOOLBAR_SIZE__", str(toolbar_size))
+            .replace("__STATUS_SIZE__", str(status_size))
+            .replace("Microsoft YaHei UI", font_family)
+        )
