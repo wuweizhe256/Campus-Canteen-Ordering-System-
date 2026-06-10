@@ -12,6 +12,7 @@ from utils.fonts import ui_font
 
 class CanvasWidget(QWidget):
     zoomChanged = pyqtSignal(float)
+    stallClicked = pyqtSignal(dict)
     _STUDENT_MOVE_ANIMATION_MS = 90
     _STUDENT_TELEPORT_DISTANCE = 180.0
 
@@ -24,6 +25,7 @@ class CanvasWidget(QWidget):
         self.view_zoom = 1.0
         self._pan_offset = QPointF(0.0, 0.0)
         self._drag_start: QPointF | None = None
+        self._click_start: QPointF | None = None
         self._hover_scene_pos: tuple[float, float] | None = None
         self._student_animations: dict[int, dict[str, float]] = {}
         self._student_animation_clock = QElapsedTimer()
@@ -346,6 +348,8 @@ class CanvasWidget(QWidget):
         super().wheelEvent(event)
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt override
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._click_start = event.position()
         if event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.MiddleButton) and self.view_zoom > 1.0:
             self._drag_start = event.position()
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
@@ -368,12 +372,27 @@ class CanvasWidget(QWidget):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt override
-        if self._drag_start is not None and event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.MiddleButton):
+        was_drag = self._drag_start is not None and event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.MiddleButton)
+        if was_drag:
             self._drag_start = None
             self.unsetCursor()
             event.accept()
+
+        if self._click_start is not None and event.button() == Qt.MouseButton.LeftButton:
+            delta = event.position() - self._click_start
+            self._click_start = None
+            if delta.manhattanLength() < 5:
+                self._update_hover_scene_pos(event.position())
+                if self._hover_scene_pos is not None:
+                    stall = self._hit_stall(*self._hover_scene_pos)
+                    if stall is not None:
+                        self.stallClicked.emit(stall)
+            if not was_drag:
+                event.accept()
             return
-        super().mouseReleaseEvent(event)
+
+        if not was_drag:
+            super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 - Qt override
         if event.button() == Qt.MouseButton.LeftButton:
@@ -1034,6 +1053,21 @@ class CanvasWidget(QWidget):
             return False
         x, y = self._hover_scene_pos
         return rect.contains(QPointF(x, y))
+
+    def _hit_stall(self, scene_x: float, scene_y: float) -> dict | None:
+        """返回被点击的 stall 帧数据 dict，未命中则返回 None。"""
+        for stall in self.frame.get("stalls", []):
+            if not isinstance(stall, dict):
+                continue
+            point = self._point((stall.get("x"), stall.get("y")))
+            if point is None:
+                continue
+            x, y = point
+            # 命中区域: 从菜品面板顶部到等距盒子底部 + 状态徽章
+            hit_rect = QRectF(x - 52, y - 82, 104, 132)
+            if hit_rect.contains(QPointF(scene_x, scene_y)):
+                return stall
+        return None
 
     def _order_status_name(self, status: str) -> str:
         names = {

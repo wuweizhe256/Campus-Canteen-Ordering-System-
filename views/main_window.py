@@ -21,6 +21,7 @@ from utils.fonts import set_ui_font_scale, stylesheet_font_family, ui_font
 from views.canvas_widget import CanvasWidget
 from views.config_dialog import ConfigDialog
 from views.settings_dialog import SettingsDialog
+from views.stall_info_popup import StallInfoPopup
 from views.stats_panel import StatsPanel
 
 
@@ -39,6 +40,7 @@ class MainWindow(QMainWindow):
         self._font_point_size = 10
         self._font_scale = 1.0
         self.settings_dialog: SettingsDialog | None = None
+        self._stall_popup: StallInfoPopup | None = None
 
         self.canvas = CanvasWidget()
         self.stats_panel = StatsPanel()
@@ -89,6 +91,7 @@ class MainWindow(QMainWindow):
         self.obstacle_checkbox.toggled.connect(self.canvas.set_show_obstacles)
         self.zoom_slider.valueChanged.connect(self._zoom_slider_changed)
         self.canvas.zoomChanged.connect(self._canvas_zoom_changed)
+        self.canvas.stallClicked.connect(self._show_stall_popup)
         self.reset_view_button.clicked.connect(self.canvas.reset_view)
         self.settings_button.clicked.connect(self._open_settings_dialog)
 
@@ -158,6 +161,23 @@ class MainWindow(QMainWindow):
 
     def _settings_dialog_closed(self, *_args) -> None:
         self.settings_dialog = None
+
+    def _show_stall_popup(self, stall: dict) -> None:
+        if self._stall_popup is not None:
+            self._stall_popup.close()
+        self._stall_popup = StallInfoPopup(stall, self)
+        self._stall_popup.finished.connect(self._stall_popup_closed)
+        # 定位到鼠标附近
+        from PyQt6.QtGui import QCursor
+        cursor_pos = QCursor.pos()
+        self._stall_popup.move(
+            cursor_pos.x() + 16,
+            cursor_pos.y() + 16,
+        )
+        self._stall_popup.show()
+
+    def _stall_popup_closed(self) -> None:
+        self._stall_popup = None
 
     @pyqtSlot(tuple, int)
     def _apply_window_settings(self, resolution: tuple[int, int], font_size: int) -> None:
@@ -239,6 +259,16 @@ class MainWindow(QMainWindow):
     def update_frame(self, frame: dict) -> None:
         self.canvas.set_frame(frame)
         self.stats_panel.set_frame(frame)
+        self._refresh_stall_popup(frame)
+
+    def _refresh_stall_popup(self, frame: dict) -> None:
+        if self._stall_popup is None:
+            return
+        popup_id = self._stall_popup.stall_id()
+        for stall in frame.get("stalls", []):
+            if isinstance(stall, dict) and stall.get("id") == popup_id:
+                self._stall_popup.update_stall(stall)
+                return
 
     @pyqtSlot(str)
     def set_status(self, status: str) -> None:
