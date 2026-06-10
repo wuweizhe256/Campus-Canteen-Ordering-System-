@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from heapq import heappop, heappush
+from os import cpu_count
 from typing import Iterable
 
 
@@ -83,7 +85,48 @@ class GridPathFinder:
         self.congestion_points = tuple(congestion_points)
         self.congestion_costs = self._build_congestion_costs()
 
-    def find_path(self, start: Point, target: Point) -> list[Point]:
+    def find_path(
+        self,
+        start: Point,
+        target: Point,
+        congestion_points: Iterable[Point] | None = None,
+    ) -> list[Point]:
+        congestion_costs = (
+            self.congestion_costs
+            if congestion_points is None
+            else self._build_congestion_costs(congestion_points)
+        )
+        return self._find_path(start, target, congestion_costs)
+
+    def find_paths_parallel(
+        self,
+        requests: Iterable[tuple[Point, Point, Iterable[Point]]],
+        max_workers: int | None = None,
+    ) -> list[list[Point]]:
+        materialized = [
+            (start, target, tuple(congestion_points))
+            for start, target, congestion_points in requests
+        ]
+        if len(materialized) <= 1:
+            return [
+                self.find_path(start, target, congestion_points)
+                for start, target, congestion_points in materialized
+            ]
+
+        worker_count = max_workers or min(len(materialized), max(2, cpu_count() or 2))
+        with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="astar") as executor:
+            return list(executor.map(self._find_path_request, materialized))
+
+    def _find_path_request(self, request: tuple[Point, Point, tuple[Point, ...]]) -> list[Point]:
+        start, target, congestion_points = request
+        return self.find_path(start, target, congestion_points)
+
+    def _find_path(
+        self,
+        start: Point,
+        target: Point,
+        congestion_costs: dict[Cell, float],
+    ) -> list[Point]:
         start_cell = self._nearest_passable_cell(self.point_to_cell(start))
         target_cell = self._nearest_passable_cell(self.point_to_cell(target))
         if start_cell is None or target_cell is None:
@@ -91,7 +134,7 @@ class GridPathFinder:
         if start_cell == target_cell:
             return [target]
 
-        came_from = self._astar(start_cell, target_cell)
+        came_from = self._astar(start_cell, target_cell, congestion_costs)
         if target_cell not in came_from:
             return [target]
 
@@ -113,7 +156,12 @@ class GridPathFinder:
     def is_walkable_point(self, point: Point) -> bool:
         return self._is_passable_point(point[0], point[1])
 
-    def _astar(self, start: Cell, target: Cell) -> dict[Cell, Cell | None]:
+    def _astar(
+        self,
+        start: Cell,
+        target: Cell,
+        congestion_costs: dict[Cell, float],
+    ) -> dict[Cell, Cell | None]:
         frontier: list[tuple[float, int, float, Cell]] = []
         heappush(frontier, (0.0, 0, 0.0, start))
         came_from: dict[Cell, Cell | None] = {start: None}
@@ -128,7 +176,7 @@ class GridPathFinder:
                 break
 
             for neighbor, move_cost in self._neighbors(current):
-                new_cost = cost_so_far[current] + move_cost + self._cell_cost(neighbor)
+                new_cost = cost_so_far[current] + move_cost + self._cell_cost(neighbor, congestion_costs)
                 if neighbor not in cost_so_far or new_cost < cost_so_far[neighbor]:
                     cost_so_far[neighbor] = new_cost
                     sequence += 1
@@ -230,12 +278,13 @@ class GridPathFinder:
                     return cell
         return None
 
-    def _cell_cost(self, cell: Cell) -> float:
-        return self.congestion_costs.get(cell, 0.0)
+    def _cell_cost(self, cell: Cell, congestion_costs: dict[Cell, float]) -> float:
+        return congestion_costs.get(cell, 0.0)
 
-    def _build_congestion_costs(self) -> dict[Cell, float]:
+    def _build_congestion_costs(self, congestion_points: Iterable[Point] | None = None) -> dict[Cell, float]:
         costs: dict[Cell, float] = {}
-        for point in self.congestion_points:
+        points = self.congestion_points if congestion_points is None else congestion_points
+        for point in points:
             row, col = self.point_to_cell(point)
             for d_row in range(-2, 3):
                 for d_col in range(-2, 3):
@@ -284,21 +333,14 @@ class GridPathFinder:
         return smoothed
 
     def _has_line_of_sight(self, start: Point, end: Point) -> bool:
-        start_cell = self.point_to_cell(start)
-        end_cell = self.point_to_cell(end)
-        row_delta = end_cell[0] - start_cell[0]
-        col_delta = end_cell[1] - start_cell[1]
-        steps = max(1, max(abs(row_delta), abs(col_delta)) * 2)
-        previous_cell: Cell | None = None
+        dx = end[0] - start[0]
+        dy = end[1] - start[1]
+        length = (dx * dx + dy * dy) ** 0.5
+        steps = max(1, int(length / max(4.0, self.cell_size / 3.0)))
         for index in range(1, steps + 1):
             ratio = index / steps
-            cell = (
-                round(start_cell[0] + row_delta * ratio),
-                round(start_cell[1] + col_delta * ratio),
-            )
-            if cell == previous_cell:
-                continue
-            previous_cell = cell
-            if not self._is_passable_cell(cell):
+            x = start[0] + dx * ratio
+            y = start[1] + dy * ratio
+            if not self._is_passable_point(x, y):
                 return False
         return True

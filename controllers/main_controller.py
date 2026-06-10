@@ -3,7 +3,7 @@ from __future__ import annotations
 from PyQt6.QtCore import QObject, Qt, QThread, pyqtSignal, pyqtSlot
 
 from models.entities import SimulationConfig
-from models.simulation_engine import SimulationWorker
+from models.simulation_worker import SimulationWorker
 from views.main_window import MainWindow
 
 

@@ -10,7 +10,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from models.entities import Dish, Entrance, SimulationConfig, Student
-from models.simulation_engine import SimulationWorker
+from models.simulation_engine import SimulationEngine
+
+
+FRAME_INTERVAL_SECONDS = 0.016
 
 
 @dataclass
@@ -171,6 +174,14 @@ class FrameDrivenRecorder:
         )
 
 
+def run_engine_frames(engine: SimulationEngine, recorder: FrameDrivenRecorder) -> None:
+    engine.initialize()
+    game_delta = max(0.001, FRAME_INTERVAL_SECONDS * engine.time_scale)
+    while not engine.is_finished:
+        recorder.feed(engine.step(game_delta))
+    recorder.feed(engine.build_frame())
+
+
 def run_self_test() -> None:
     config = SimulationConfig(
         sim_minutes=3,
@@ -183,11 +194,10 @@ def run_self_test() -> None:
         companion_pair_ratio=0.35,
         companion_multi_ratio=0.2,
     )
-    worker = SimulationWorker(config)
+    engine = SimulationEngine(config)
     recorder = FrameDrivenRecorder(table_count=config.table_count)
 
-    worker.frameReady.connect(recorder.feed)
-    worker.run()
+    run_engine_frames(engine, recorder)
     metrics = recorder.build_metrics()
 
     print("=== Backend Self Test (Frame-driven) ===")
@@ -285,7 +295,7 @@ def print_p1_flow_snapshot(recorder: FrameDrivenRecorder) -> None:
     print(f"student_rechoice_sample: {dict(list(changed_choices.items())[:8])}")
 
 
-class LowStockSimulationWorker(SimulationWorker):
+class LowStockSimulationEngine(SimulationEngine):
     def _build_stall_dishes(self, stall_index: int) -> list[Dish]:
         dishes = super()._build_stall_dishes(stall_index)
         for dish in dishes:
@@ -330,11 +340,10 @@ def run_p1_sold_out_self_test() -> None:
         companion_pair_ratio=0.0,
         companion_multi_ratio=0.0,
     )
-    worker = LowStockSimulationWorker(config)
+    engine = LowStockSimulationEngine(config)
     recorder = FrameDrivenRecorder(table_count=config.table_count)
 
-    worker.frameReady.connect(recorder.feed)
-    worker.run()
+    run_engine_frames(engine, recorder)
 
     print("=== P1 Low Stock Sold-out Check ===")
     print_p1_snapshot(recorder.last_frame)

@@ -2,12 +2,9 @@ from __future__ import annotations
 
 import json
 import random
-import time
 from math import hypot
 from pathlib import Path
 from typing import Any
-
-from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
 
 from models.data_recorder import DataRecorder, EventRecordP0
 from models.entities import (
@@ -30,16 +27,16 @@ from utils.helpers import clamp, distance, manhattan_2d, move_towards
 
 MENU_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "menu.json"
 MAX_SEAT_WAIT_SECONDS = 180.0
+STALL_COOK_TIME_MIN_SECONDS = 1.0 * 60.0
+STALL_COOK_TIME_MAX_SECONDS = 3.0 * 60.0
+EATING_TIME_MIN_SECONDS = 5.0 * 60.0
+EATING_TIME_MAX_SECONDS = 25.0 * 60.0
+EATING_TIME_MEAN_SECONDS = (EATING_TIME_MIN_SECONDS + EATING_TIME_MAX_SECONDS) / 2.0
+EATING_TIME_STDDEV_SECONDS = (EATING_TIME_MAX_SECONDS - EATING_TIME_MIN_SECONDS) / 6.0
 
 
-class SimulationWorker(QObject):
-    frameReady = pyqtSignal(object)
-    statusChanged = pyqtSignal(str)
-    finished = pyqtSignal(object)
-    errorOccurred = pyqtSignal(object)
-
+class SimulationEngine:
     def __init__(self, config: SimulationConfig) -> None:
-        super().__init__()
         self.config = config
         self.time_scale = config.time_scale
         self.rng = random.Random(config.seed)
@@ -49,7 +46,7 @@ class SimulationWorker(QObject):
         self.queue_walkway_y = 156.0
         self.top_walkway_y = 260.0
         self.bottom_walkway_y = 724.0
-        self.door = (58.0, 112.0)
+        self.door = (58.0, 156.0)
         self.exit = (1224.0, 710.0)
         self.entrances: list[Entrance] = []
         self.entrance_flow_counts: dict[int, int] = {}
@@ -70,69 +67,55 @@ class SimulationWorker(QObject):
         self.data_recorder = DataRecorder()
         self.menu_config, self.issues = _load_menu_config(MENU_CONFIG_PATH)
         self._navigation_obstacle_cache: list[NavRect] | None = None
-        self._navigation_pathfinder_cache: GridPathFinder | None = None
         self._navigation_doorway_cache: list[Doorway] | None = None
+        self._navigation_pathfinder_cache: GridPathFinder | None = None
         self._stop_requested = False
         self._paused = False
 
-    @pyqtSlot()
-    def run(self) -> None:
-        try:
-            self._initialize()
-            self.statusChanged.emit("运行中")
-            last_real_time = time.perf_counter()
+    def initialize(self) -> None:
+        self._initialize()
 
-            while not self._stop_requested and self.game_time < self.config.duration_game_seconds:
-                now = time.perf_counter()
-                if self._paused:
-                    last_real_time = now
-                    QThread.msleep(40)
-                    continue
+    def step(self, game_delta: float) -> dict[str, Any]:
+        if self.is_finished:
+            return self._build_frame()
 
-                real_delta = now - last_real_time
-                last_real_time = now
-                game_delta = real_delta * self.time_scale
+        game_delta = max(0.0, float(game_delta))
+        self.game_time = min(self.config.duration_game_seconds, self.game_time + game_delta)
+        self._spawn_due_students()
+        self._complete_ready_food()
+        self._update_students(game_delta)
+        self._separate_students(game_delta)
+        self._refresh_orders_and_stalls()
+        self._record_queue_samples()
+        self._record_runtime_sample()
+        self.max_active_students_seen = max(
+            self.max_active_students_seen,
+            self._active_student_count(),
+        )
+        return self._build_frame()
 
-                self.game_time += game_delta
-                self._spawn_due_students()
-                self._complete_ready_food()
-                self._update_students(game_delta)
-                self._separate_students(game_delta)
-                self._refresh_orders_and_stalls()
-                self._record_queue_samples()
-                self._record_runtime_sample()
-                self.max_active_students_seen = max(
-                    self.max_active_students_seen,
-                    self._active_student_count(),
-                )
-                self.frameReady.emit(self._build_frame())
-                QThread.msleep(16)
+    def build_frame(self) -> dict[str, Any]:
+        return self._build_frame()
 
-            status = "已停止" if self._stop_requested else "已结束"
-            self.statusChanged.emit(status)
-            self.frameReady.emit(self._build_frame())
-            self.finished.emit(
-                RunSummary(
-                    status=status,
-                    game_time=min(self.game_time, self.config.duration_game_seconds),
-                    spawned_students=self.spawned_students,
-                    finished_eating_students=self.finished_eating_students,
-                    active_students=self._active_student_count(),
-                )
-            )
-        except Exception as exc:  # pragma: no cover - delivered to UI at runtime
-            self.errorOccurred.emit(exc)
+    def summary(self, status: str) -> RunSummary:
+        return RunSummary(
+            status=status,
+            game_time=min(self.game_time, self.config.duration_game_seconds),
+            spawned_students=self.spawned_students,
+            finished_eating_students=self.finished_eating_students,
+            active_students=self._active_student_count(),
+        )
 
-    @pyqtSlot()
+    @property
+    def is_finished(self) -> bool:
+        return self.game_time >= self.config.duration_game_seconds
+
     def stop(self) -> None:
         self._stop_requested = True
 
-    @pyqtSlot(bool)
     def set_paused(self, paused: bool) -> None:
         self._paused = paused
-        self.statusChanged.emit("已暂停" if paused else "运行中")
 
-    @pyqtSlot(float)
     def set_time_scale(self, time_scale: float) -> None:
         self.time_scale = max(1.0, min(24.0, time_scale))
 
@@ -152,8 +135,8 @@ class SimulationWorker(QObject):
         self.finished_eating_students = 0
         self.max_active_students_seen = 0
         self._navigation_obstacle_cache = None
-        self._navigation_pathfinder_cache = None
         self._navigation_doorway_cache = None
+        self._navigation_pathfinder_cache = None
         self.entrance_flow_counts = {entrance.id: 0 for entrance in self.entrances}
         self.exit_flow_counts = {exit_area.id: 0 for exit_area in self.exits}
         self.data_recorder = DataRecorder(
@@ -165,9 +148,9 @@ class SimulationWorker(QObject):
     def _build_entrances(self) -> None:
         weights = list(self.config.entrance_weights or ())
         default_positions = [
-            (0, 58.0, 112.0, 96.0, 104.0),
-            (1, 58.0, 310.0, 96.0, 104.0),
-            (2, 58.0, 560.0, 96.0, 104.0),
+            (0, 58.0, 156.0, 44.0, 76.0),
+            (1, 58.0, 354.0, 44.0, 76.0),
+            (2, 58.0, 604.0, 44.0, 76.0),
         ]
         if not weights:
             weights = [1.0]
@@ -184,14 +167,14 @@ class SimulationWorker(QObject):
             if index < len(weights)
         ]
         if not self.entrances or all(entrance.weight <= 0 for entrance in self.entrances):
-            self.entrances = [Entrance(0, self.door[0], self.door[1], 96.0, 104.0, 1.0)]
+            self.entrances = [Entrance(0, self.door[0], self.door[1], 44.0, 76.0, 1.0)]
         self.door = (self.entrances[0].x, self.entrances[0].y)
 
     def _build_exits(self) -> None:
         self.exits = [
-            Exit(0, 1224.0, 710.0, 116.0, 116.0),
-            Exit(1, 1224.0, 430.0, 116.0, 116.0),
-            Exit(2, 1224.0, 180.0, 116.0, 116.0),
+            Exit(0, 1224.0, 710.0, 44.0, 76.0),
+            Exit(1, 1224.0, 430.0, 44.0, 76.0),
+            Exit(2, 1224.0, 180.0, 44.0, 76.0),
         ]
         self.exit = (self.exits[0].x, self.exits[0].y)
 
@@ -203,6 +186,9 @@ class SimulationWorker(QObject):
         gap = 0.0 if count == 1 else (right - left) / (count - 1)
         for index in range(count):
             dishes = self._build_stall_dishes(index)
+            cook_time = self.rng.uniform(STALL_COOK_TIME_MIN_SECONDS, STALL_COOK_TIME_MAX_SECONDS)
+            for dish in dishes:
+                dish.cook_time = cook_time
             status = StallStatus.OPEN if dishes else StallStatus.SOLD_OUT
             self.stalls.append(
                 Stall(
@@ -211,7 +197,7 @@ class SimulationWorker(QObject):
                     y=86.0,
                     meat_ratio=self.rng.uniform(0.0, 1.0),
                     veg_ratio=self.rng.uniform(0.0, 1.0),
-                    cook_time=self.rng.uniform(12.0, 28.0),
+                    cook_time=cook_time,
                     status=status,
                     dishes=dishes,
                 )
@@ -269,7 +255,7 @@ class SimulationWorker(QObject):
 
     def _build_tray_return_points(self) -> None:
         self.tray_return_points = [
-            (self.width - 82.0, 548.0, 136.0, 96.0),
+            (self.width - 70.0, 548.0, 52.0, 96.0),
         ]
 
     def _record_layout_events(self) -> None:
@@ -430,6 +416,7 @@ class SimulationWorker(QObject):
             veg_pref=veg_pref,
             appetite=self.rng.uniform(0.8, 1.8),
             eat_speed=self.rng.uniform(0.028, 0.075),
+            eating_duration=self._sample_eating_time(),
             hesitation_time=self.rng.uniform(10.0, 28.0),
             table_walk_time=self.rng.uniform(35.0, 70.0),
             spawn_time=self.game_time,
@@ -445,6 +432,13 @@ class SimulationWorker(QObject):
         )
         student.decision_done_at = self.game_time + student.hesitation_time
         return student
+
+    def _sample_eating_time(self) -> float:
+        for _ in range(100):
+            value = self.rng.gauss(EATING_TIME_MEAN_SECONDS, EATING_TIME_STDDEV_SECONDS)
+            if EATING_TIME_MIN_SECONDS <= value <= EATING_TIME_MAX_SECONDS:
+                return value
+        return clamp(value, EATING_TIME_MIN_SECONDS, EATING_TIME_MAX_SECONDS)
 
     def _register_student(
         self,
@@ -561,7 +555,7 @@ class SimulationWorker(QObject):
         corridor_y = (student.y + self.queue_walkway_y) / 2.0
         corridor_density = self._density_near(corridor_x, corridor_y, 120.0)
         congestion_cost = self._density_near(stall.x, stall.y + 110.0, 105.0) * 0.35
-        cook_cost = dish.cook_time * 0.015
+        cook_cost = stall.cook_time * 0.015
         price_cost = dish.price * student.preferences.get("price_sensitivity", 0.5) * 0.04
         return (
             queue_cost
@@ -663,6 +657,7 @@ class SimulationWorker(QObject):
 
     def _update_students(self, game_delta: float) -> None:
         to_remove: list[int] = []
+        self._start_due_queue_paths_parallel()
         for student in list(self.students.values()):
             if student.state == StudentState.DECIDING:
                 if self.game_time >= student.decision_done_at:
@@ -685,6 +680,7 @@ class SimulationWorker(QObject):
             elif student.state == StudentState.MOVING_TO_SEAT:
                 arrived = self._move_student(student, game_delta, student.table_walk_speed)
                 if arrived:
+                    self._snap_student_to_reserved_seat(student)
                     self._occupy_reserved_seat(student)
                     if not self._student_has_occupied_seat(student):
                         self.issues.append(f"student {student.id} reached seat without a valid occupied reservation")
@@ -705,6 +701,7 @@ class SimulationWorker(QObject):
                         student,
                         from_state=previous_state,
                         to_state=StudentState.MOVING_TO_TRAY_RETURN,
+                        game_time=student.eating_done_at,
                     )
                     self._release_seat(student)
                     self._set_tray_return_path(student)
@@ -773,7 +770,19 @@ class SimulationWorker(QObject):
             index = stall.queue.index(student.id)
         else:
             index = len(stall.queue)
-        return stall.x, stall.y + 76.0 + index * 24.0
+        return self._queue_slot_position(stall, index)
+
+    def _queue_slot_position(self, stall: Stall, index: int) -> tuple[float, float]:
+        if index <= 6:
+            return stall.x, stall.y + 76.0 + index * 24.0
+
+        overflow_index = index - 7
+        side = -1.0 if overflow_index % 2 == 0 else 1.0
+        lane = overflow_index // 2 + 1
+        x = stall.x + side * lane * 32.0
+        y = min(self.top_walkway_y + 46.0, self.bottom_walkway_y - 80.0)
+        x = max(64.0, min(self.width - 64.0, x))
+        return self._nearest_static_walkable_position(x, y)
 
     def _start_queue_path(self, student: Student) -> None:
         target = self._queue_target_position(student)
@@ -819,7 +828,7 @@ class SimulationWorker(QObject):
             student.state = StudentState.QUEUED
             return
         started_at = max(self.game_time, stall.next_food_ready_time)
-        ready_at = started_at + dish.cook_time
+        ready_at = started_at + stall.cook_time
         order = Order(
             id=self.next_order_id,
             student_id=student.id,
@@ -955,7 +964,8 @@ class SimulationWorker(QObject):
         best: tuple[float, Table, int, float, float] | None = None
         for table, seat_index in free:
             seat_x, seat_y = self._seat_position(table, seat_index)
-            estimated_walk_distance = self._estimated_walk_distance(student.x, student.y, seat_x, seat_y)
+            access_x, access_y = self._seat_access_position(table, seat_index)
+            estimated_walk_distance = self._estimated_walk_distance(student.x, student.y, access_x, access_y)
             table_density = self._density_near(table.x, table.y, 92.0)
             tray_distance = distance(seat_x, seat_y, *self._nearest_tray_return_center(seat_x, seat_y))
             occupied_bias = table.occupied_count * 18.0
@@ -1025,6 +1035,18 @@ class SimulationWorker(QObject):
         if seat.student_id == student.id and seat.status == SeatStatus.RESERVED:
             seat.status = SeatStatus.OCCUPIED
 
+    def _snap_student_to_reserved_seat(self, student: Student) -> None:
+        if student.table_id is None or student.seat_index is None:
+            return
+        table = self.tables[student.table_id]
+        seat_x, seat_y = self._seat_position(table, student.seat_index)
+        student.x = seat_x
+        student.y = seat_y
+        student.target_x = seat_x
+        student.target_y = seat_y
+        student.path.clear()
+        self._complete_path_tracking(student)
+
     def _student_has_occupied_seat(self, student: Student) -> bool:
         if student.table_id is None or student.seat_index is None:
             return False
@@ -1083,7 +1105,52 @@ class SimulationWorker(QObject):
         seat_x: float,
         seat_y: float,
     ) -> list[tuple[float, float]]:
-        return self._build_navigation_path((start_x, start_y), (seat_x, seat_y))
+        return self._build_navigation_path((start_x, start_y), self._seat_access_position(table, seat_index))
+
+    def _seat_access_position(self, table: Table, seat_index: int) -> tuple[float, float]:
+        seat_x, seat_y = self._seat_position(table, seat_index)
+        side_x = self._adjacent_aisle_x(table, seat_index)
+        access_y = self._seat_access_y(table, seat_index)
+        if abs(seat_y - table.y) <= 8.0:
+            candidates = [
+                (side_x, seat_y),
+                (side_x, access_y),
+                (seat_x, access_y),
+            ]
+        else:
+            candidates = [
+                (seat_x, access_y),
+                (side_x, seat_y),
+                (side_x, access_y),
+            ]
+        for candidate in candidates:
+            if self._is_static_walkable_point(candidate[0], candidate[1]):
+                return candidate
+        return self._nearest_static_walkable_position(candidates[0][0], candidates[0][1])
+
+    def _nearest_static_walkable_position(self, x: float, y: float) -> tuple[float, float]:
+        x = max(64.0, min(self.width - 64.0, x))
+        y = max(64.0, min(self.height - 64.0, y))
+        if self._is_static_walkable_point(x, y):
+            return x, y
+
+        for radius in (18.0, 36.0, 54.0, 72.0, 96.0, 128.0):
+            candidates = [
+                (x + radius, y),
+                (x - radius, y),
+                (x, y + radius),
+                (x, y - radius),
+                (x + radius, y + radius),
+                (x + radius, y - radius),
+                (x - radius, y + radius),
+                (x - radius, y - radius),
+            ]
+            for candidate_x, candidate_y in candidates:
+                candidate_x = max(64.0, min(self.width - 64.0, candidate_x))
+                candidate_y = max(64.0, min(self.height - 64.0, candidate_y))
+                if self._is_static_walkable_point(candidate_x, candidate_y):
+                    return candidate_x, candidate_y
+        return x, y
 
     def _set_exit_path(self, student: Student) -> None:
         exit_area = self._choose_exit(student)
@@ -1181,6 +1248,28 @@ class SimulationWorker(QObject):
         self._set_path(student, path)
         self._start_path_tracking(student, path, start=start, kind=student.state.value)
 
+    def _start_due_queue_paths_parallel(self) -> None:
+        students: list[Student] = []
+        requests: list[tuple[tuple[float, float], tuple[float, float], int | None]] = []
+        for student in self.students.values():
+            if student.state != StudentState.DECIDING or self.game_time < student.decision_done_at:
+                continue
+            target = self._queue_target_position(student)
+            if target is None or student.stall_id is None:
+                continue
+            student.state = StudentState.MOVING_TO_QUEUE
+            students.append(student)
+            requests.append(((student.x, student.y), target, student.id))
+
+        if not requests:
+            return
+
+        paths = self._build_navigation_paths_parallel(requests)
+        for student, request, path in zip(students, requests, paths):
+            start, _, _ = request
+            self._set_path(student, path)
+            self._start_path_tracking(student, path, start=start, kind=student.state.value)
+
     def _build_navigation_path(
         self,
         start: tuple[float, float],
@@ -1188,11 +1277,35 @@ class SimulationWorker(QObject):
         ignored_student_id: int | None = None,
     ) -> list[tuple[float, float]]:
         pathfinder = self._navigation_pathfinder()
-        pathfinder.set_congestion_points(self._navigation_congestion_points(ignored_student_id))
         foot_start = self._foot_point_from_position(start[0], start[1])
         foot_target = self._foot_point_from_position(target[0], target[1])
-        foot_path = pathfinder.find_path(foot_start, foot_target)
+        foot_path = pathfinder.find_path(
+            foot_start,
+            foot_target,
+            self._navigation_congestion_points(ignored_student_id),
+        )
         return self._compact_path([(x, y - 14.0) for x, y in foot_path])
+
+    def _build_navigation_paths_parallel(
+        self,
+        requests: list[tuple[tuple[float, float], tuple[float, float], int | None]],
+    ) -> list[list[tuple[float, float]]]:
+        if not requests:
+            return []
+
+        pathfinder = self._navigation_pathfinder()
+        foot_requests = [
+            (
+                self._foot_point_from_position(start[0], start[1]),
+                self._foot_point_from_position(target[0], target[1]),
+                self._navigation_congestion_points(ignored_student_id),
+            )
+            for start, target, ignored_student_id in requests
+        ]
+        return [
+            self._compact_path([(x, y - 14.0) for x, y in foot_path])
+            for foot_path in pathfinder.find_paths_parallel(foot_requests)
+        ]
 
     def _navigation_pathfinder(self) -> GridPathFinder:
         if self._navigation_pathfinder_cache is None:
@@ -1830,6 +1943,12 @@ class SimulationWorker(QObject):
             "reroute_count": student.reroute_count,
             "facing_x": student.facing_x,
             "facing_y": student.facing_y,
+            "eating_duration": student.eating_time,
+            "eating_remaining": (
+                max(0.0, student.eating_done_at - self.game_time)
+                if student.eating_done_at is not None
+                else None
+            ),
         }
 
     def _stall_cook_remaining(self, stall: Stall) -> float:
@@ -1840,10 +1959,7 @@ class SimulationWorker(QObject):
     def _stall_cook_progress(self, stall: Stall) -> float:
         if not stall.ready_times:
             return 0.0
-        _, _, order_id = stall.ready_times[0]
-        order = self._order_by_id(stall, order_id)
-        dish = self._dish_by_id(stall, order.dish_id) if order is not None else None
-        cook_time = dish.cook_time if dish is not None else stall.cook_time
+        cook_time = stall.cook_time
         if cook_time <= 0:
             return 0.0
         remaining = self._stall_cook_remaining(stall)

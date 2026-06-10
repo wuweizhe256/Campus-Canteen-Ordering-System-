@@ -112,6 +112,7 @@ class Student:
     decision_done_at: float = 0.0
     food_ready_at: float | None = None
     eating_done_at: float | None = None
+    eating_duration: float | None = None
     walk_speed: float = 14.0
     table_walk_speed: float = 12.0
     path: list[tuple[float, float]] = field(default_factory=list)
@@ -135,6 +136,8 @@ class Student:
 
     @property
     def eating_time(self) -> float:
+        if self.eating_duration is not None:
+            return self.eating_duration
         return self.appetite / self.eat_speed
 
 

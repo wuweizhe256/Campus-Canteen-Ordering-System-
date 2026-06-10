@@ -1382,6 +1382,7 @@ class CanvasWidget(QWidget):
         painter.setFont(ui_font(8))
         lines = [
             f"avg_wait_time: {self._format_seconds(stats.get('avg_wait_time'))}",
+            f"avg_eating_time: {self._format_seconds(stats.get('avg_eating_time'))}",
             f"avg_total_time: {self._format_seconds(stats.get('avg_total_time'))}",
             f"max_active_students: {self._display_value(stats.get('max_active_students'))}",
             f"seat_utilization: {self._format_percent(stats.get('seat_utilization'))}",

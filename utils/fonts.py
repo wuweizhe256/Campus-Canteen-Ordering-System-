@@ -19,6 +19,8 @@ PREFERRED_UI_FONT_FAMILIES = (
     "DengXian",
 )
 
+_UI_FONT_SCALE = 1.0
+
 BUNDLED_FONT_CANDIDATES = (
     Path("/mnt/c/Windows/Fonts/msyh.ttc"),
     Path("/mnt/c/Windows/Fonts/msyhbd.ttc"),
@@ -55,6 +57,7 @@ def preferred_ui_font_family() -> str:
 
 
 def ui_font(point_size: int, weight: QFont.Weight | None = None) -> QFont:
+    point_size = max(1, round(point_size * _UI_FONT_SCALE))
     if weight is None:
         return QFont(preferred_ui_font_family(), point_size)
     return QFont(preferred_ui_font_family(), point_size, weight)
@@ -62,3 +65,8 @@ def ui_font(point_size: int, weight: QFont.Weight | None = None) -> QFont:
 
 def stylesheet_font_family() -> str:
     return preferred_ui_font_family().replace('"', '\\"')
+
+
+def set_ui_font_scale(scale: float) -> None:
+    global _UI_FONT_SCALE
+    _UI_FONT_SCALE = max(0.8, min(1.6, float(scale)))

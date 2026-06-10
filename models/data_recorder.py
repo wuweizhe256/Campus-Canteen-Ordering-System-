@@ -190,6 +190,7 @@ class PathCongestionStats:
 @dataclass(frozen=True)
 class StatsFrameP0:
     avg_wait_time: float | None
+    avg_eating_time: float | None
     avg_total_time: float | None
     max_active_students: int
     stall_queue_stats: list[StallQueueStats]
@@ -220,6 +221,7 @@ class StatsFrameP0:
     def to_dict(self) -> dict[str, Any]:
         return {
             "avg_wait_time": self.avg_wait_time,
+            "avg_eating_time": self.avg_eating_time,
             "avg_total_time": self.avg_total_time,
             "max_active_students": self.max_active_students,
             "stall_queue_stats": [item.to_dict() for item in self.stall_queue_stats],
@@ -404,6 +406,7 @@ class DataRecorder:
     def build_stats(self, current_time: float | None = None) -> StatsFrameP0:
         events = sorted(self.events, key=_event_sort_key)
         avg_wait_time = self._average_duration_by_student("queue_started", "food_ready")
+        avg_eating_time = self._average_duration_by_student("eating_started", "eating_finished")
         avg_total_time = self._average_duration_by_student("student_spawned", "student_left")
         max_active_students = self._max_active_students(events)
         stall_queue_stats = self._stall_queue_stats(events)
@@ -413,6 +416,7 @@ class DataRecorder:
         runtime = self.runtime_samples[-1] if self.runtime_samples else None
         return StatsFrameP0(
             avg_wait_time=avg_wait_time,
+            avg_eating_time=avg_eating_time,
             avg_total_time=avg_total_time,
             max_active_students=max_active_students,
             stall_queue_stats=stall_queue_stats,

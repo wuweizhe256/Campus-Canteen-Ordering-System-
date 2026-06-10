@@ -205,7 +205,8 @@ class StatsPanel(QWidget):
 
         rows = [
             ("平均等待时间", _format_seconds(stats.get("avg_wait_time"))),
-            ("平均就餐总耗时", _format_seconds(stats.get("avg_total_time"))),
+            ("平均实际用餐时间", _format_seconds(stats.get("avg_eating_time"))),
+            ("平均在场总耗时", _format_seconds(stats.get("avg_total_time"))),
             ("场内最大人数", _display_value(stats.get("max_active_students"))),
             ("座位利用率", _format_percent(stats.get("seat_utilization"))),
             ("平均移动速度", _format_speed(stats.get("avg_move_speed"))),
@@ -252,7 +253,7 @@ class GaugePanel(QWidget):
 
         gauges = [
             ("等待", _number(self.stats.get("avg_wait_time"), None), 120.0, "s", QColor("#0ea5e9")),
-            ("总耗时", _number(self.stats.get("avg_total_time"), None), 600.0, "s", QColor("#8b5cf6")),
+            ("在场", _number(self.stats.get("avg_total_time"), None), 600.0, "s", QColor("#8b5cf6")),
             ("座位", _number(self.stats.get("seat_utilization"), None), 1.0, "%", QColor("#14b8a6")),
             ("人数", _number(self.stats.get("max_active_students"), None), 120.0, "人", QColor("#f59e0b")),
             ("拥堵", _number(self.stats.get("congestion_index"), None), 1.0, "%", QColor("#ef4444")),
