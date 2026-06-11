@@ -1906,6 +1906,16 @@ class SimulationEngine:
 
     def _order_frame(self, order: Order) -> dict[str, Any]:
         status = order.status.value if isinstance(order.status, OrderStatus) else str(order.status)
+        estimated_finished_at = order.finished_at
+        remaining = (
+            max(0.0, estimated_finished_at - self.game_time)
+            if estimated_finished_at is not None and status != OrderStatus.DONE.value
+            else 0.0
+        )
+        progress = 1.0 if status == OrderStatus.DONE.value else 0.0
+        if order.started_at is not None and estimated_finished_at is not None:
+            total = max(0.001, estimated_finished_at - order.started_at)
+            progress = max(0.0, min(1.0, (self.game_time - order.started_at) / total))
         return {
             "id": order.id,
             "student_id": order.student_id,
@@ -1914,6 +1924,9 @@ class SimulationEngine:
             "created_at": float(order.created_at),
             "started_at": order.started_at,
             "finished_at": order.finished_at if status == OrderStatus.DONE.value else None,
+            "estimated_finished_at": estimated_finished_at,
+            "remaining": remaining,
+            "progress": progress,
             "status": status,
         }
 

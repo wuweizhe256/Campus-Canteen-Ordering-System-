@@ -8,8 +8,10 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
     QDialog,
     QFrame,
+    QHBoxLayout,
     QHeaderView,
     QLabel,
+    QProgressBar,
     QScrollArea,
     QTableWidget,
     QTableWidgetItem,
@@ -231,7 +233,7 @@ class StatsPanel(QWidget):
 
         self.gauge_panel.set_stats(stats)
         self.table_type_panel.set_data(_table_type_utilization(frame, stats))
-        self.heatmap.set_stats(stats)
+        self.heatmap.set_frame(frame)
         self.trend.set_history(self.history)
 
 
@@ -362,11 +364,42 @@ class QueueHeatmap(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setMinimumHeight(260)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.stats: dict[str, Any] = {}
+        self.frame: dict[str, Any] = {}
+        self._cell_rects: list[tuple[QRectF, int]] = []
+        self._popup: QueueDetailPopup | None = None
 
     def set_stats(self, stats: dict[str, Any]) -> None:
         self.stats = stats
         self.update()
+
+    def set_frame(self, frame: dict[str, Any]) -> None:
+        self.frame = frame if isinstance(frame, dict) else {}
+        stats = self.frame.get("stats") or {}
+        self.stats = stats if isinstance(stats, dict) else {}
+        self.update()
+        if self._popup is not None:
+            self._popup.update_frame(self.frame)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt override
+        if event.button() == Qt.MouseButton.LeftButton:
+            pos = event.position()
+            for rect, stall_id in self._cell_rects:
+                if rect.contains(pos):
+                    self._open_detail(stall_id)
+                    break
+        super().mousePressEvent(event)
+
+    def _open_detail(self, stall_id: int) -> None:
+        if self._popup is not None:
+            self._popup.close()
+        self._popup = QueueDetailPopup(stall_id, self.frame, self.window())
+        self._popup.finished.connect(self._on_popup_closed)
+        self._popup.show()
+
+    def _on_popup_closed(self) -> None:
+        self._popup = None
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
         painter = _card_painter(self)
@@ -374,15 +407,8 @@ class QueueHeatmap(QWidget):
         painter.setFont(ui_font(10, QFont.Weight.Bold))
         painter.drawText(QRectF(16, 14, self.width() - 32, 20), Qt.AlignmentFlag.AlignLeft, "窗口队列热力图")
 
-        queue_stats = self.stats.get("stall_queue_stats") or []
-        values = [
-            (
-                int(_number(item.get("stall_id"), 0)),
-                int(_number(item.get("max_queue_length"), 0)),
-            )
-            for item in queue_stats
-            if isinstance(item, dict)
-        ]
+        self._cell_rects = []
+        values = self._heatmap_values()
         if not values:
             painter.setPen(QColor("#64748b"))
             painter.setFont(ui_font(9))
@@ -407,6 +433,7 @@ class QueueHeatmap(QWidget):
                 cell_width,
                 cell_height,
             )
+            self._cell_rects.append((QRectF(rect), stall_id))
             color = _heat_color(value / max_value)
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(color)
@@ -419,6 +446,31 @@ class QueueHeatmap(QWidget):
 
         self._draw_legend(painter, 16, self.height() - 32, self.width() - 32)
 
+    def _heatmap_values(self) -> list[tuple[int, int]]:
+        max_by_stall: dict[int, int] = {}
+        queue_stats = self.stats.get("stall_queue_stats") or []
+        if isinstance(queue_stats, list):
+            for item in queue_stats:
+                if not isinstance(item, dict):
+                    continue
+                stall_id = int(_number(item.get("stall_id"), 0) or 0)
+                max_by_stall[stall_id] = int(_number(item.get("max_queue_length"), 0) or 0)
+
+        current_by_stall: dict[int, int] = {}
+        stalls = self.frame.get("stalls") or []
+        if isinstance(stalls, list):
+            for stall in stalls:
+                if not isinstance(stall, dict):
+                    continue
+                stall_id = int(_number(stall.get("id"), 0) or 0)
+                current_by_stall[stall_id] = int(_number(stall.get("queue_count"), 0) or 0)
+
+        stall_ids = sorted(set(max_by_stall) | set(current_by_stall))
+        return [
+            (stall_id, max(max_by_stall.get(stall_id, 0), current_by_stall.get(stall_id, 0)))
+            for stall_id in stall_ids
+        ]
+
     def _draw_legend(self, painter: QPainter, left: float, top: float, width: float) -> None:
         painter.setFont(ui_font(8))
         painter.setPen(QColor("#64748b"))
@@ -430,6 +482,223 @@ class QueueHeatmap(QWidget):
         for index in range(steps):
             painter.setBrush(_heat_color(index / max(1, steps - 1)))
             painter.drawRect(QRectF(left + index * segment, top, segment + 1, 8))
+
+
+class QueueDetailPopup(QDialog):
+    def __init__(self, stall_id: int, frame: dict[str, Any], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._stall_id = stall_id
+        self._frame = frame if isinstance(frame, dict) else {}
+        self._metric_labels: dict[str, QLabel] = {}
+        self._orders_scroll: QScrollArea | None = None
+
+        self.setWindowTitle(f"窗口 {stall_id + 1} 队列详情")
+        self.setMinimumSize(420, 520)
+        self.resize(460, 600)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+
+        root = QVBoxLayout()
+        root.setContentsMargins(18, 18, 18, 18)
+        root.setSpacing(12)
+
+        title = QLabel(f"窗口 {stall_id + 1} 队列详情")
+        title.setFont(ui_font(14, QFont.Weight.Bold))
+        title.setStyleSheet("color: #0f172a;")
+        root.addWidget(title)
+
+        metrics = QHBoxLayout()
+        metrics.setSpacing(8)
+        for key, label in (
+            ("queue", "当前队列"),
+            ("max", "历史最大"),
+            ("queued", "排队"),
+            ("cooking", "出餐中"),
+        ):
+            metrics.addWidget(self._metric_card(key, label))
+        root.addLayout(metrics)
+
+        subtitle = QLabel("学生订单")
+        subtitle.setFont(ui_font(10, QFont.Weight.Bold))
+        subtitle.setStyleSheet("color: #334155; padding-top: 2px;")
+        root.addWidget(subtitle)
+
+        self._orders_scroll = QScrollArea()
+        self._orders_scroll.setWidgetResizable(True)
+        self._orders_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._orders_scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        root.addWidget(self._orders_scroll, 1)
+
+        self.setLayout(root)
+        self._apply_style()
+        self._refresh()
+
+    def stall_id(self) -> int:
+        return self._stall_id
+
+    def update_frame(self, frame: dict[str, Any]) -> None:
+        self._frame = frame if isinstance(frame, dict) else {}
+        self._refresh()
+
+    def _apply_style(self) -> None:
+        self.setStyleSheet(
+            """
+            QDialog {
+                background: #ffffff;
+            }
+            QFrame#QueueMetricCard {
+                background: #f8fafc;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+            }
+            QFrame#QueueOrderCard {
+                background: #ffffff;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+            }
+            QProgressBar {
+                background: #e2e8f0;
+                border: 0;
+                border-radius: 5px;
+                height: 10px;
+            }
+            QProgressBar::chunk {
+                background: #0ea5e9;
+                border-radius: 5px;
+            }
+            """
+        )
+
+    def _metric_card(self, key: str, label: str) -> QFrame:
+        card = QFrame()
+        card.setObjectName("QueueMetricCard")
+        layout = QVBoxLayout()
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(3)
+
+        name = QLabel(label)
+        name.setFont(ui_font(8))
+        name.setStyleSheet("color: #64748b;")
+        value = QLabel("-")
+        value.setFont(ui_font(13, QFont.Weight.Bold))
+        value.setStyleSheet("color: #0f172a;")
+        value.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._metric_labels[key] = value
+
+        layout.addWidget(name)
+        layout.addWidget(value)
+        card.setLayout(layout)
+        return card
+
+    def _refresh(self) -> None:
+        stall = _stall_by_id(self._frame, self._stall_id) or {}
+        orders = _active_orders_for_stall(self._frame, self._stall_id)
+        queued_count = sum(1 for order in orders if _effective_order_status(order, self._frame) == "queued")
+        cooking_count = sum(1 for order in orders if _effective_order_status(order, self._frame) == "cooking")
+        current_queue = int(_number(stall.get("queue_count"), len(orders)) or 0)
+        max_queue = _queue_stat_max(self._frame, self._stall_id)
+
+        self._set_metric("queue", current_queue)
+        self._set_metric("max", max_queue if max_queue is not None else "-")
+        self._set_metric("queued", queued_count)
+        self._set_metric("cooking", cooking_count)
+
+        if self._orders_scroll is not None:
+            self._orders_scroll.setWidget(self._orders_content(stall, orders))
+
+    def _set_metric(self, key: str, value: object) -> None:
+        label = self._metric_labels.get(key)
+        if label is not None:
+            label.setText(str(value))
+
+    def _orders_content(self, stall: dict[str, Any], orders: list[dict[str, Any]]) -> QWidget:
+        container = QWidget()
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        if not orders:
+            empty = QLabel("当前没有等待取餐的学生")
+            empty.setFont(ui_font(10))
+            empty.setStyleSheet("color: #94a3b8; padding: 30px;")
+            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(empty)
+            layout.addStretch()
+            container.setLayout(layout)
+            return container
+
+        dish_names = _dish_names(stall)
+        students = _students_by_id(self._frame)
+        for order in orders:
+            layout.addWidget(self._order_card(order, dish_names, students))
+        layout.addStretch()
+        container.setLayout(layout)
+        return container
+
+    def _order_card(
+        self,
+        order: dict[str, Any],
+        dish_names: dict[int, str],
+        students: dict[int, dict[str, Any]],
+    ) -> QFrame:
+        card = QFrame()
+        card.setObjectName("QueueOrderCard")
+        layout = QVBoxLayout()
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(8)
+
+        student_id = int(_number(order.get("student_id"), 0) or 0)
+        dish_id = int(_number(order.get("dish_id"), 0) or 0)
+        dish_name = dish_names.get(dish_id, f"菜品 {dish_id}" if dish_id else "-")
+        status = _effective_order_status(order, self._frame)
+        remaining = _order_remaining(order, self._frame)
+        progress = _order_progress(order, self._frame)
+        student = students.get(student_id, {})
+        state = _student_state_label(str(student.get("state") or ""))
+
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        student_label = QLabel(f"S{student_id}")
+        student_label.setFont(ui_font(11, QFont.Weight.Bold))
+        student_label.setStyleSheet("color: #0f172a;")
+        top.addWidget(student_label)
+        dish_label = QLabel(dish_name)
+        dish_label.setFont(ui_font(10, QFont.Weight.Bold))
+        dish_label.setStyleSheet("color: #334155;")
+        top.addWidget(dish_label, 1)
+        status_label = QLabel(_order_status_label(status))
+        status_label.setFont(ui_font(9, QFont.Weight.Bold))
+        status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        status_label.setStyleSheet(_order_status_style(status))
+        top.addWidget(status_label)
+        layout.addLayout(top)
+
+        progress_bar = QProgressBar()
+        progress_bar.setRange(0, 1000)
+        progress_bar.setValue(int(progress * 1000))
+        progress_bar.setTextVisible(False)
+        layout.addWidget(progress_bar)
+
+        detail = QHBoxLayout()
+        detail.setSpacing(8)
+        if status == "done":
+            wait_text = "已可取餐"
+        elif remaining is None:
+            wait_text = "等待出餐排程"
+        else:
+            wait_text = f"还需 {_format_seconds(remaining)}"
+        left = QLabel(wait_text)
+        left.setFont(ui_font(9))
+        left.setStyleSheet("color: #475569;")
+        detail.addWidget(left)
+        detail.addStretch()
+        right = QLabel(state or f"订单 #{_display_value(order.get('id'))}")
+        right.setFont(ui_font(9))
+        right.setStyleSheet("color: #64748b;")
+        detail.addWidget(right)
+        layout.addLayout(detail)
+
+        card.setLayout(layout)
+        return card
 
 
 def _draw_trend_lines(
@@ -651,6 +920,198 @@ def _heat_color(ratio: float) -> QColor:
         int(165 + (68 - 165) * t),
         int(233 + (68 - 233) * t),
     )
+
+
+def _stall_by_id(frame: dict[str, Any], stall_id: int) -> dict[str, Any] | None:
+    stalls = frame.get("stalls") or []
+    if not isinstance(stalls, list):
+        return None
+    for stall in stalls:
+        if isinstance(stall, dict) and int(_number(stall.get("id"), -1) or -1) == stall_id:
+            return stall
+    return None
+
+
+def _queue_stat_max(frame: dict[str, Any], stall_id: int) -> int | None:
+    stats = frame.get("stats") or {}
+    if not isinstance(stats, dict):
+        return None
+    queue_stats = stats.get("stall_queue_stats") or []
+    if not isinstance(queue_stats, list):
+        return None
+    for item in queue_stats:
+        if not isinstance(item, dict):
+            continue
+        if int(_number(item.get("stall_id"), -1) or -1) == stall_id:
+            return int(_number(item.get("max_queue_length"), 0) or 0)
+    return None
+
+
+def _active_orders_for_stall(frame: dict[str, Any], stall_id: int) -> list[dict[str, Any]]:
+    stall = _stall_by_id(frame, stall_id) or {}
+    raw_orders = stall.get("orders") or []
+    orders: list[dict[str, Any]] = []
+    seen_students: set[int] = set()
+    if isinstance(raw_orders, list):
+        for order in raw_orders:
+            if not isinstance(order, dict):
+                continue
+            normalized = dict(order)
+            status = _effective_order_status(normalized, frame)
+            if status not in {"queued", "cooking"}:
+                continue
+            normalized["status"] = status
+            student_id = int(_number(order.get("student_id"), 0) or 0)
+            if student_id:
+                seen_students.add(student_id)
+            orders.append(normalized)
+
+    students = frame.get("students") or []
+    if isinstance(students, list):
+        for student in students:
+            if not isinstance(student, dict):
+                continue
+            student_stall_id = _number(student.get("stall_id"), None)
+            if student_stall_id is None or int(student_stall_id) != stall_id:
+                continue
+            state = str(student.get("state") or "")
+            if state not in {"moving_to_queue", "queued"}:
+                continue
+            student_id = int(_number(student.get("id"), 0) or 0)
+            if not student_id or student_id in seen_students:
+                continue
+            orders.append(
+                {
+                    "id": student.get("order_id"),
+                    "student_id": student_id,
+                    "stall_id": stall_id,
+                    "dish_id": student.get("dish_id"),
+                    "status": "queued",
+                    "remaining": None,
+                    "progress": 0.0,
+                }
+            )
+
+    return sorted(
+        orders,
+        key=lambda order: (
+            _order_sort_rank(_effective_order_status(order, frame)),
+            _number(order.get("estimated_finished_at"), float("inf")) or float("inf"),
+            _number(order.get("student_id"), 0) or 0,
+        ),
+    )
+
+
+def _effective_order_status(order: dict[str, Any], frame: dict[str, Any]) -> str:
+    status = str(order.get("status") or "").lower()
+    if status.startswith("orderstatus."):
+        status = status.split(".", 1)[1]
+    if status == "done" or status == "cancelled":
+        return status
+
+    game_time = _number(frame.get("game_time"), None)
+    started_at = _number(order.get("started_at"), None)
+    estimated_finished_at = _number(order.get("estimated_finished_at", order.get("finished_at")), None)
+    progress = _number(order.get("progress"), None)
+    if started_at is not None and game_time is not None:
+        if estimated_finished_at is None or game_time < estimated_finished_at:
+            if game_time >= started_at:
+                return "cooking"
+    if progress is not None and progress > 0.0 and (estimated_finished_at is None or status != "done"):
+        return "cooking"
+    if status in {"queued", "cooking"}:
+        return status
+    return "queued"
+
+
+def _order_remaining(order: dict[str, Any], frame: dict[str, Any]) -> float | None:
+    remaining = _number(order.get("remaining"), None)
+    if remaining is not None:
+        return max(0.0, remaining)
+    game_time = _number(frame.get("game_time"), None)
+    estimated_finished_at = _number(order.get("estimated_finished_at", order.get("finished_at")), None)
+    if game_time is None or estimated_finished_at is None:
+        return None
+    return max(0.0, estimated_finished_at - game_time)
+
+
+def _order_progress(order: dict[str, Any], frame: dict[str, Any]) -> float:
+    progress = _number(order.get("progress"), None)
+    if progress is not None and progress > 0.0:
+        return max(0.0, min(1.0, progress))
+    started_at = _number(order.get("started_at"), None)
+    estimated_finished_at = _number(order.get("estimated_finished_at", order.get("finished_at")), None)
+    game_time = _number(frame.get("game_time"), None)
+    if started_at is None or estimated_finished_at is None or game_time is None:
+        return 0.0
+    total = max(0.001, estimated_finished_at - started_at)
+    return max(0.0, min(1.0, (game_time - started_at) / total))
+
+
+def _order_sort_rank(status: str) -> int:
+    return {"cooking": 0, "queued": 1, "done": 2, "cancelled": 3}.get(status, 4)
+
+
+def _dish_names(stall: dict[str, Any]) -> dict[int, str]:
+    dishes = stall.get("dishes") or []
+    names: dict[int, str] = {}
+    if not isinstance(dishes, list):
+        return names
+    for dish in dishes:
+        if not isinstance(dish, dict):
+            continue
+        dish_id = _number(dish.get("id"), None)
+        if dish_id is None:
+            continue
+        names[int(dish_id)] = str(dish.get("name") or f"菜品 {int(dish_id)}")
+    return names
+
+
+def _students_by_id(frame: dict[str, Any]) -> dict[int, dict[str, Any]]:
+    students = frame.get("students") or []
+    result: dict[int, dict[str, Any]] = {}
+    if not isinstance(students, list):
+        return result
+    for student in students:
+        if not isinstance(student, dict):
+            continue
+        student_id = _number(student.get("id"), None)
+        if student_id is not None:
+            result[int(student_id)] = student
+    return result
+
+
+def _order_status_label(status: str) -> str:
+    return {
+        "queued": "排队",
+        "cooking": "制作",
+        "done": "完成",
+        "cancelled": "取消",
+    }.get(status, status or "-")
+
+
+def _order_status_style(status: str) -> str:
+    fg, bg = {
+        "queued": ("#1d4ed8", "#dbeafe"),
+        "cooking": ("#c2410c", "#ffedd5"),
+        "done": ("#15803d", "#dcfce7"),
+        "cancelled": ("#475569", "#f1f5f9"),
+    }.get(status, ("#475569", "#f1f5f9"))
+    return f"color: {fg}; background: {bg}; border-radius: 6px; padding: 3px 8px;"
+
+
+def _student_state_label(state: str) -> str:
+    return {
+        "deciding": "选择中",
+        "moving_to_queue": "前往窗口",
+        "queued": "队列中",
+        "searching_seat": "找座位",
+        "waiting_seat": "等座位",
+        "moving_to_seat": "前往座位",
+        "eating": "用餐中",
+        "moving_to_tray_return": "去回收口",
+        "leaving": "离场中",
+    }.get(state, "")
 
 
 def _table_type_utilization(
