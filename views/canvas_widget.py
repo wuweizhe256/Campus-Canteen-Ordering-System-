@@ -531,7 +531,12 @@ class CanvasWidget(QWidget):
 
         painter.setPen(QPen(QColor(220, 38, 38, 145), 1.6))
         painter.setBrush(QColor(248, 113, 113, 35))
-        obstacle_frames = self.frame.get("obstacles") or self.frame.get("collision_boxes") or []
+        obstacle_frames = list(self.frame.get("obstacles") or [])
+        obstacle_frames.extend(
+            box
+            for box in self.frame.get("collision_boxes", [])
+            if isinstance(box, dict) and str(box.get("kind") or "") != "static"
+        )
         for box in obstacle_frames:
             rect = self._obstacle_rect_frame(box)
             if rect is None:
@@ -682,15 +687,16 @@ class CanvasWidget(QWidget):
                 if None in (left, top, right, bottom):
                     continue
                 rects.append((left, top, right, bottom, str(obstacle.get("kind") or "obstacle")))
-            if rects:
-                return rects
 
         for box in self.frame.get("collision_boxes", []) if self.frame else []:
+            if isinstance(box, dict) and str(box.get("kind") or "") == "static" and rects:
+                continue
             rect = self._rect_frame(box, default_width=1.0, default_height=1.0)
             if rect is None:
                 continue
             x, y, width, height, _ = rect
-            rects.append((x - width / 2, y - height / 2, x + width / 2, y + height / 2, "collision"))
+            kind = str(box.get("kind") or "collision") if isinstance(box, dict) else "collision"
+            rects.append((x - width / 2, y - height / 2, x + width / 2, y + height / 2, kind))
         return rects
 
     def _obstacle_color(self, kind: str) -> QColor:
@@ -700,6 +706,8 @@ class CanvasWidget(QWidget):
             "stall": QColor("#dc2626"),
             "window": QColor("#dc2626"),
             "collision": QColor("#ef4444"),
+            "static": QColor("#ef4444"),
+            "student": QColor("#ef4444"),
         }
         return colors.get(kind, QColor("#ef4444"))
 

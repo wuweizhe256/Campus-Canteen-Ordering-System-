@@ -33,6 +33,11 @@ EATING_TIME_MIN_SECONDS = 5.0 * 60.0
 EATING_TIME_MAX_SECONDS = 25.0 * 60.0
 EATING_TIME_MEAN_SECONDS = (EATING_TIME_MIN_SECONDS + EATING_TIME_MAX_SECONDS) / 2.0
 EATING_TIME_STDDEV_SECONDS = (EATING_TIME_MAX_SECONDS - EATING_TIME_MIN_SECONDS) / 6.0
+STUDENT_COLLISION_WIDTH = 22.0
+STUDENT_COLLISION_HEIGHT = 18.0
+STUDENT_COLLISION_FOOT_OFFSET_Y = 14.0
+STUDENT_COLLISION_PADDING = 2.0
+LOCAL_AVOIDANCE_REROUTE_SECONDS = 6.0
 
 
 class SimulationEngine:
@@ -550,7 +555,6 @@ class SimulationEngine:
     def _stall_choice_cost(self, student: Student, stall: Stall, dish: Dish) -> float:
         wait_tolerance = max(0.1, student.preferences.get("wait_tolerance", 0.5))
         queue_cost = len(stall.queue) * (1.1 - wait_tolerance) * 0.75
-        travel_cost = distance(student.x, student.y, stall.x, self.queue_walkway_y) * 0.004
         corridor_x = (student.x + stall.x) / 2.0
         corridor_y = (student.y + self.queue_walkway_y) / 2.0
         corridor_density = self._density_near(corridor_x, corridor_y, 120.0)
@@ -559,7 +563,6 @@ class SimulationEngine:
         price_cost = dish.price * student.preferences.get("price_sensitivity", 0.5) * 0.04
         return (
             queue_cost
-            + travel_cost
             + congestion_cost
             + corridor_density * 0.28
             + cook_cost
@@ -666,6 +669,7 @@ class SimulationEngine:
                 else:
                     self._wander_near_door(student, game_delta)
             elif student.state == StudentState.MOVING_TO_QUEUE:
+                self._refresh_moving_queue_target(student)
                 arrived = self._move_student(student, game_delta, student.walk_speed)
                 if arrived:
                     self._join_stall_queue(student)
@@ -769,8 +773,28 @@ class SimulationEngine:
         if student.id in stall.queue:
             index = stall.queue.index(student.id)
         else:
-            index = len(stall.queue)
+            index = len(stall.queue) + self._inbound_queue_rank(student)
         return self._queue_slot_position(stall, index)
+
+    def _inbound_queue_rank(self, student: Student) -> int:
+        if student.stall_id is None:
+            return 0
+        inbound = [
+            candidate
+            for candidate in self.students.values()
+            if candidate.stall_id == student.stall_id
+            and candidate.state == StudentState.MOVING_TO_QUEUE
+            and candidate.id not in self.stalls[student.stall_id].queue
+        ]
+        inbound.sort(key=self._inbound_queue_sort_key)
+        for index, candidate in enumerate(inbound):
+            if candidate.id == student.id:
+                return index
+        return len(inbound)
+
+    def _inbound_queue_sort_key(self, student: Student) -> tuple[float, float, int]:
+        path_started_at = student.path_started_at if student.path_started_at is not None else self.game_time
+        return path_started_at, student.spawn_time, student.id
 
     def _queue_slot_position(self, stall: Stall, index: int) -> tuple[float, float]:
         if index <= 6:
@@ -789,6 +813,27 @@ class SimulationEngine:
         if target is None or student.stall_id is None:
             return
         self._set_navigation_path(student, target)
+
+    def _refresh_moving_queue_target(self, student: Student) -> None:
+        target = self._queue_target_position(student)
+        if target is None:
+            return
+
+        target_x, target_y = target
+        if not student.path:
+            student.target_x = target_x
+            student.target_y = target_y
+            return
+
+        current_end_x, current_end_y = student.path[-1]
+        target_shift = distance(current_end_x, current_end_y, target_x, target_y)
+        if target_shift <= 4.0:
+            return
+
+        student.path[-1] = target
+        if len(student.path) == 1:
+            student.target_x = target_x
+            student.target_y = target_y
 
     def _queue_approach_y(self, student: Student) -> float:
         if student.y >= 470.0:
@@ -1254,11 +1299,15 @@ class SimulationEngine:
         for student in self.students.values():
             if student.state != StudentState.DECIDING or self.game_time < student.decision_done_at:
                 continue
-            target = self._queue_target_position(student)
-            if target is None or student.stall_id is None:
+            if student.stall_id is None:
                 continue
             student.state = StudentState.MOVING_TO_QUEUE
             students.append(student)
+
+        for student in students:
+            target = self._queue_target_position(student)
+            if target is None:
+                continue
             requests.append(((student.x, student.y), target, student.id))
 
         if not requests:
@@ -1283,8 +1332,9 @@ class SimulationEngine:
             foot_start,
             foot_target,
             self._navigation_congestion_points(ignored_student_id),
+            self._navigation_dynamic_obstacles(ignored_student_id, foot_start, foot_target),
         )
-        return self._compact_path([(x, y - 14.0) for x, y in foot_path])
+        return self._compact_path([(x, y - STUDENT_COLLISION_FOOT_OFFSET_Y) for x, y in foot_path])
 
     def _build_navigation_paths_parallel(
         self,
@@ -1299,11 +1349,16 @@ class SimulationEngine:
                 self._foot_point_from_position(start[0], start[1]),
                 self._foot_point_from_position(target[0], target[1]),
                 self._navigation_congestion_points(ignored_student_id),
+                self._navigation_dynamic_obstacles(
+                    ignored_student_id,
+                    self._foot_point_from_position(start[0], start[1]),
+                    self._foot_point_from_position(target[0], target[1]),
+                ),
             )
             for start, target, ignored_student_id in requests
         ]
         return [
-            self._compact_path([(x, y - 14.0) for x, y in foot_path])
+            self._compact_path([(x, y - STUDENT_COLLISION_FOOT_OFFSET_Y) for x, y in foot_path])
             for foot_path in pathfinder.find_paths_parallel(foot_requests)
         ]
 
@@ -1351,6 +1406,31 @@ class SimulationEngine:
             if student.id != ignored_student_id
             and student.state not in (StudentState.QUEUED, StudentState.EATING, StudentState.DONE)
         ]
+
+    def _navigation_dynamic_obstacles(
+        self,
+        ignored_student_id: int | None = None,
+        start: tuple[float, float] | None = None,
+        target: tuple[float, float] | None = None,
+    ) -> list[NavRect]:
+        bounds: tuple[float, float, float, float] | None = None
+        if start is not None and target is not None:
+            padding = 140.0
+            bounds = (
+                min(start[0], target[0]) - padding,
+                min(start[1], target[1]) - padding,
+                max(start[0], target[0]) + padding,
+                max(start[1], target[1]) + padding,
+            )
+
+        obstacles: list[NavRect] = []
+        for student in self._collision_students(ignored_student_id):
+            left, top, right, bottom = self._student_collision_rect(student)
+            if bounds is not None and not self._rects_overlap((left, top, right, bottom), bounds):
+                continue
+            kind = "queued_student" if student.state == StudentState.QUEUED else "student"
+            obstacles.append(NavRect(left, top, right, bottom, kind))
+        return obstacles
 
     def _set_path(self, student: Student, path: list[tuple[float, float]]) -> None:
         student.path = self._compact_path(path)
@@ -1419,10 +1499,118 @@ class SimulationEngine:
         return max(1.0, total)
 
     def _student_foot_point(self, student: Student) -> tuple[float, float]:
-        return student.x, student.y + 14.0
+        return student.x, student.y + STUDENT_COLLISION_FOOT_OFFSET_Y
 
     def _foot_point_from_position(self, x: float, y: float) -> tuple[float, float]:
-        return x, y + 14.0
+        return x, y + STUDENT_COLLISION_FOOT_OFFSET_Y
+
+    def _student_uses_collision_box(self, student: Student) -> bool:
+        return student.state not in (StudentState.EATING, StudentState.DONE)
+
+    def _collision_students(self, ignored_student_id: int | None = None) -> list[Student]:
+        return [
+            student
+            for student in self.students.values()
+            if student.id != ignored_student_id and self._student_uses_collision_box(student)
+        ]
+
+    def _student_collision_rect(self, student: Student) -> tuple[float, float, float, float]:
+        return self._student_collision_rect_from_position(student.x, student.y)
+
+    def _student_collision_rect_from_position(self, x: float, y: float) -> tuple[float, float, float, float]:
+        foot_x, foot_y = self._foot_point_from_position(x, y)
+        half_width = STUDENT_COLLISION_WIDTH / 2.0
+        half_height = STUDENT_COLLISION_HEIGHT / 2.0
+        return (
+            foot_x - half_width,
+            foot_y - half_height,
+            foot_x + half_width,
+            foot_y + half_height,
+        )
+
+    def _student_collision_blocked(
+        self,
+        student: Student,
+        x: float,
+        y: float,
+        ignored_student_ids: set[int] | None = None,
+    ) -> bool:
+        if not self._student_uses_collision_box(student):
+            return False
+        ignored_student_ids = ignored_student_ids or set()
+        foot_x, foot_y = self._foot_point_from_position(x, y)
+        current_foot_x, current_foot_y = self._student_foot_point(student)
+        padded_width = STUDENT_COLLISION_WIDTH + STUDENT_COLLISION_PADDING
+        padded_height = STUDENT_COLLISION_HEIGHT + STUDENT_COLLISION_PADDING
+        for other in self._collision_students(student.id):
+            if other.id in ignored_student_ids:
+                continue
+            other_foot_x, other_foot_y = self._student_foot_point(other)
+            candidate_dx = abs(foot_x - other_foot_x)
+            candidate_dy = abs(foot_y - other_foot_y)
+            if candidate_dx >= padded_width or candidate_dy >= padded_height:
+                continue
+
+            current_dx = abs(current_foot_x - other_foot_x)
+            current_dy = abs(current_foot_y - other_foot_y)
+            candidate_core_overlap = (
+                candidate_dx < STUDENT_COLLISION_WIDTH
+                and candidate_dy < STUDENT_COLLISION_HEIGHT
+            )
+            current_core_overlap = (
+                current_dx < STUDENT_COLLISION_WIDTH
+                and current_dy < STUDENT_COLLISION_HEIGHT
+            )
+            candidate_pressure = min(padded_width - candidate_dx, padded_height - candidate_dy)
+            current_pressure = min(
+                max(0.0, padded_width - current_dx),
+                max(0.0, padded_height - current_dy),
+            )
+            if not candidate_core_overlap and candidate_pressure <= current_pressure + 0.1:
+                continue
+            if current_core_overlap and candidate_core_overlap and candidate_pressure <= current_pressure + 0.1:
+                continue
+            if candidate_core_overlap or candidate_pressure > current_pressure + 0.1:
+                return True
+        return False
+
+    def _can_place_student_at(
+        self,
+        student: Student,
+        x: float,
+        y: float,
+        ignored_student_ids: set[int] | None = None,
+    ) -> bool:
+        return (
+            self._is_static_walkable_point(x, y)
+            and not self._student_collision_blocked(student, x, y, ignored_student_ids)
+        )
+
+    def _try_place_student_at(
+        self,
+        student: Student,
+        x: float,
+        y: float,
+        ignored_student_ids: set[int] | None = None,
+    ) -> bool:
+        x = max(28.0, min(self.width - 28.0, x))
+        y = max(28.0, min(self.height - 28.0, y))
+        if not self._can_place_student_at(student, x, y, ignored_student_ids):
+            return False
+        student.x = x
+        student.y = y
+        return True
+
+    def _rects_overlap(
+        self,
+        first: tuple[float, float, float, float],
+        second: tuple[float, float, float, float],
+        padding: float = 0.0,
+    ) -> bool:
+        return (
+            min(first[2], second[2]) + padding > max(first[0], second[0])
+            and min(first[3], second[3]) + padding > max(first[1], second[1])
+        )
 
     def _move_student(self, student: Student, game_delta: float, speed: float) -> bool:
         if student.path:
@@ -1432,9 +1620,25 @@ class SimulationEngine:
         target_distance = distance(student.x, student.y, student.target_x, student.target_y)
         step_distance = speed * game_delta
         arrival_radius = 3.0 if not student.path else 5.5
+        blocked_by_dynamic_student = False
+        used_local_avoidance = False
         if target_distance <= max(arrival_radius, step_distance):
-            student.x, student.y = student.target_x, student.target_y
-            arrived = True
+            arrived = self._try_place_student_at(student, student.target_x, student.target_y)
+            if arrived:
+                student.x, student.y = student.target_x, student.target_y
+            else:
+                target_is_static_walkable = self._is_static_walkable_point(
+                    student.target_x,
+                    student.target_y,
+                )
+                if target_is_static_walkable:
+                    blocked_by_dynamic_student = True
+                    if self._try_local_avoidance_step(student, step_distance):
+                        blocked_by_dynamic_student = False
+                        used_local_avoidance = True
+                else:
+                    self._reroute_student(student)
+                arrived = False
         else:
             next_x, next_y, arrived = move_towards(
                 student.x,
@@ -1443,10 +1647,20 @@ class SimulationEngine:
                 student.target_y,
                 step_distance,
             )
-            if self._is_static_walkable_point(next_x, next_y):
-                student.x = next_x
-                student.y = next_y
-            elif self._reroute_student(student):
+            if self._try_place_student_at(student, next_x, next_y):
+                pass
+            elif self._is_static_walkable_point(next_x, next_y):
+                arrived = False
+                if self._is_entrance_release_step(student, next_x, next_y):
+                    student.x = next_x
+                    student.y = next_y
+                else:
+                    blocked_by_dynamic_student = True
+                if blocked_by_dynamic_student and self._try_local_avoidance_step(student, step_distance):
+                    blocked_by_dynamic_student = False
+                    used_local_avoidance = True
+            elif self.game_time >= student.detour_until and self._reroute_student(student):
+                student.detour_until = self.game_time + 2.0
                 arrived = False
             else:
                 arrived = False
@@ -1463,8 +1677,23 @@ class SimulationEngine:
             student.stuck_time += game_delta
         else:
             student.stuck_time = max(0.0, student.stuck_time - game_delta * 1.8)
+        if used_local_avoidance:
+            student.local_avoidance_time += game_delta
+        else:
+            student.local_avoidance_time = max(0.0, student.local_avoidance_time - game_delta * 2.0)
         student.last_x = student.x
         student.last_y = student.y
+
+        if student.local_avoidance_time >= LOCAL_AVOIDANCE_REROUTE_SECONDS:
+            if self._reroute_student(student):
+                student.reroute_count += 1
+                student.detour_until = self.game_time + 2.0
+            student.local_avoidance_time = 0.0
+            student.stuck_time = 0.0
+            return False
+
+        if blocked_by_dynamic_student and student.stuck_time >= 1.6:
+            self._try_start_detour(student, self._collision_students())
 
         if arrived and student.path:
             student.path.pop(0)
@@ -1475,21 +1704,71 @@ class SimulationEngine:
             self._complete_path_tracking(student)
         return arrived
 
+    def _is_entrance_release_step(self, student: Student, x: float, y: float) -> bool:
+        if student.state != StudentState.MOVING_TO_QUEUE or x <= student.x:
+            return False
+        current_foot_x, current_foot_y = self._student_foot_point(student)
+        next_foot_x, next_foot_y = self._foot_point_from_position(x, y)
+        if current_foot_x > 96.0 or next_foot_x > 116.0:
+            return False
+        return any(
+            abs(current_foot_y - entrance.y) <= entrance.height * 0.85
+            or abs(next_foot_y - entrance.y) <= entrance.height * 0.85
+            for entrance in self.entrances
+        )
+
+    def _try_local_avoidance_step(self, student: Student, step_distance: float) -> bool:
+        if student.state in (StudentState.QUEUED, StudentState.EATING, StudentState.DONE):
+            return False
+
+        dx = student.target_x - student.x
+        dy = student.target_y - student.y
+        gap = (dx * dx + dy * dy) ** 0.5
+        if gap < 1.0:
+            dx, dy, gap = student.facing_x, student.facing_y, 1.0
+
+        forward_x = dx / gap
+        forward_y = dy / gap
+        side_x = -forward_y
+        side_y = forward_x
+        side_step = min(10.0, max(4.0, step_distance * 1.25))
+        forward_step = min(step_distance, 4.0)
+        candidates: list[tuple[float, float]] = []
+        for side in (1.0, -1.0):
+            candidates.append(
+                (
+                    student.x + forward_x * forward_step + side_x * side * side_step,
+                    student.y + forward_y * forward_step + side_y * side * side_step,
+                )
+            )
+            candidates.append((student.x + side_x * side * side_step, student.y + side_y * side * side_step))
+        candidates.sort(key=lambda point: distance(point[0], point[1], student.target_x, student.target_y))
+
+        for candidate_x, candidate_y in candidates:
+            if self._try_place_student_at(student, candidate_x, candidate_y):
+                return True
+        return False
+
     def _separate_students(self, game_delta: float) -> None:
-        movable = [
-            student
-            for student in self.students.values()
-            if student.state not in (StudentState.EATING, StudentState.DONE)
-        ]
+        movable = self._collision_students()
         congestion_distance = 34.0
         crowded_ids: set[int] = set()
-        for index, first in enumerate(movable):
-            for second in movable[index + 1 :]:
+        for _ in range(4):
+            resolved_overlap = False
+            for first, second in self._nearby_student_pairs(movable):
                 first_foot_x, first_foot_y = self._student_foot_point(first)
                 second_foot_x, second_foot_y = self._student_foot_point(second)
-                if distance(first_foot_x, first_foot_y, second_foot_x, second_foot_y) < congestion_distance:
+                overlap = self._rects_overlap(
+                    self._student_collision_rect(first),
+                    self._student_collision_rect(second),
+                )
+                if overlap:
+                    resolved_overlap = self._resolve_student_overlap(first, second) or resolved_overlap
+                if overlap or distance(first_foot_x, first_foot_y, second_foot_x, second_foot_y) < congestion_distance:
                     crowded_ids.add(first.id)
                     crowded_ids.add(second.id)
+            if not resolved_overlap:
+                break
 
         for student in movable:
             if student.id in crowded_ids:
@@ -1499,9 +1778,100 @@ class SimulationEngine:
             else:
                 student.congestion_time = max(0.0, student.congestion_time - game_delta * 1.5)
 
-            if student.stuck_time >= 3.2 and student.congestion_time >= 1.2:
+            if student.stuck_time >= 1.6 and student.congestion_time >= 0.8:
                 self._try_start_detour(student, movable)
                 student.congestion_time = 0.0
+
+    def _nearby_student_pairs(self, students: list[Student]) -> list[tuple[Student, Student]]:
+        cell_size = 48.0
+        grid: dict[tuple[int, int], list[Student]] = {}
+        for student in students:
+            foot_x, foot_y = self._student_foot_point(student)
+            cell = (int(foot_x // cell_size), int(foot_y // cell_size))
+            grid.setdefault(cell, []).append(student)
+
+        pairs: list[tuple[Student, Student]] = []
+        seen: set[tuple[int, int]] = set()
+        for (cell_x, cell_y), bucket in grid.items():
+            for d_x in (-1, 0, 1):
+                for d_y in (-1, 0, 1):
+                    neighbor_bucket = grid.get((cell_x + d_x, cell_y + d_y))
+                    if not neighbor_bucket:
+                        continue
+                    for first in bucket:
+                        for second in neighbor_bucket:
+                            if first.id >= second.id:
+                                continue
+                            pair_key = (first.id, second.id)
+                            if pair_key in seen:
+                                continue
+                            seen.add(pair_key)
+                            pairs.append((first, second))
+        return pairs
+
+    def _resolve_student_overlap(self, first: Student, second: Student) -> bool:
+        first_rect = self._student_collision_rect(first)
+        second_rect = self._student_collision_rect(second)
+        overlap_x = min(first_rect[2], second_rect[2]) - max(first_rect[0], second_rect[0])
+        overlap_y = min(first_rect[3], second_rect[3]) - max(first_rect[1], second_rect[1])
+        if overlap_x <= 0.0 or overlap_y <= 0.0:
+            return False
+
+        first_foot_x, first_foot_y = self._student_foot_point(first)
+        second_foot_x, second_foot_y = self._student_foot_point(second)
+        near_left_edge = first_foot_x < 92.0 and second_foot_x < 92.0
+        if near_left_edge or overlap_x < overlap_y:
+            sign = 1.0 if second_foot_x >= first_foot_x else -1.0
+            offset_x = (overlap_x + STUDENT_COLLISION_PADDING) * sign
+            offset_y = 0.0
+        else:
+            sign = 1.0 if second_foot_y >= first_foot_y else -1.0
+            offset_x = 0.0
+            offset_y = (overlap_y + STUDENT_COLLISION_PADDING) * sign
+
+        first_weight, second_weight = self._separation_weights(first, second)
+        total_weight = first_weight + second_weight
+        if total_weight <= 0.0:
+            return False
+
+        first_share = first_weight / total_weight
+        second_share = second_weight / total_weight
+        moved = False
+        if first_share > 0.0:
+            moved = self._try_place_separated_student_at(
+                first,
+                first.x - offset_x * first_share,
+                first.y - offset_y * first_share,
+            ) or moved
+        if second_share > 0.0:
+            moved = self._try_place_separated_student_at(
+                second,
+                second.x + offset_x * second_share,
+                second.y + offset_y * second_share,
+            ) or moved
+        return moved
+
+    def _try_place_separated_student_at(self, student: Student, x: float, y: float) -> bool:
+        x = max(28.0, min(self.width - 28.0, x))
+        y = max(28.0, min(self.height - 28.0, y))
+        if not self._is_static_walkable_point(x, y):
+            return False
+        if distance(student.x, student.y, x, y) <= 0.01:
+            return False
+        student.x = x
+        student.y = y
+        return True
+
+    def _separation_weights(self, first: Student, second: Student) -> tuple[float, float]:
+        first_weight = 0.35 if first.state == StudentState.QUEUED else 1.0
+        second_weight = 0.35 if second.state == StudentState.QUEUED else 1.0
+        if first.state == StudentState.QUEUED and second.state != StudentState.QUEUED:
+            first_weight = 0.0
+            second_weight = 1.0
+        elif second.state == StudentState.QUEUED and first.state != StudentState.QUEUED:
+            first_weight = 1.0
+            second_weight = 0.0
+        return first_weight, second_weight
 
     def _avoid_static_obstacles(self, students: list[Student]) -> None:
         obstacles = self._obstacle_rects()
@@ -1565,22 +1935,22 @@ class SimulationEngine:
         if student.state in (StudentState.QUEUED, StudentState.EATING, StudentState.DONE):
             return
 
+        student.detour_until = self.game_time + 1.2
+        original_path = list(student.path) if student.path else [(student.target_x, student.target_y)]
+        candidate = self._find_detour_point(student, students)
+        if candidate is not None:
+            student.path = self._compact_path([candidate, *original_path])
+            student.target_x, student.target_y = student.path[0]
+            student.reroute_count += 1
+            student.detour_until = self.game_time + 4.0
+            student.stuck_time = 0.0
+            return
+
         if self._reroute_student(student):
             student.reroute_count += 1
             student.detour_until = self.game_time + 3.0
             student.stuck_time = 0.0
             return
-
-        original_path = list(student.path) if student.path else [(student.target_x, student.target_y)]
-        candidate = self._find_detour_point(student, students)
-        if candidate is None:
-            return
-
-        student.path = self._compact_path([candidate, *original_path])
-        student.target_x, student.target_y = student.path[0]
-        student.reroute_count += 1
-        student.detour_until = self.game_time + 4.0
-        student.stuck_time = 0.0
 
     def _reroute_student(self, student: Student) -> bool:
         if student.state == StudentState.MOVING_TO_QUEUE:
@@ -1618,8 +1988,14 @@ class SimulationEngine:
         forward_y = dy / gap
         candidates: list[tuple[float, float]] = []
         for side in (1.0, -1.0):
-            for side_step in (54.0, 78.0, 102.0):
-                candidates.append((student.x + nx * side * side_step, student.y + ny * side * side_step))
+            for forward_step in (0.0, 36.0, 72.0):
+                for side_step in (34.0, 54.0, 78.0, 102.0):
+                    candidates.append(
+                        (
+                            student.x + forward_x * forward_step + nx * side * side_step,
+                            student.y + forward_y * forward_step + ny * side * side_step,
+                        )
+                    )
 
         self.rng.shuffle(candidates)
         for point in candidates:
@@ -1639,13 +2015,18 @@ class SimulationEngine:
         if foot_x < margin or foot_x > self.width - margin or foot_y < margin or foot_y > self.height - margin:
             return False
         for left, top, right, bottom in self._obstacle_rects():
-            if left - 14.0 <= foot_x <= right + 14.0 and top - 14.0 <= foot_y <= bottom + 14.0:
+            if (
+                left - STUDENT_COLLISION_FOOT_OFFSET_Y <= foot_x <= right + STUDENT_COLLISION_FOOT_OFFSET_Y
+                and top - STUDENT_COLLISION_FOOT_OFFSET_Y <= foot_y <= bottom + STUDENT_COLLISION_FOOT_OFFSET_Y
+            ):
                 return False
+        candidate_rect = self._student_collision_rect_from_position(x, y)
         for other in students:
             if other.id == ignored_student_id:
                 continue
-            other_foot_x, other_foot_y = self._student_foot_point(other)
-            if distance(foot_x, foot_y, other_foot_x, other_foot_y) < 28.0:
+            if not self._student_uses_collision_box(other):
+                continue
+            if self._rects_overlap(candidate_rect, self._student_collision_rect(other), STUDENT_COLLISION_PADDING):
                 return False
         return True
 
@@ -1657,7 +2038,10 @@ class SimulationEngine:
         for item in self._obstacle_frames():
             if item["kind"] == "wall" and self._is_doorway_point(foot_x, foot_y):
                 continue
-            if item["left"] - 14.0 <= foot_x <= item["right"] + 14.0 and item["top"] - 14.0 <= foot_y <= item["bottom"] + 14.0:
+            if (
+                item["left"] - STUDENT_COLLISION_FOOT_OFFSET_Y <= foot_x <= item["right"] + STUDENT_COLLISION_FOOT_OFFSET_Y
+                and item["top"] - STUDENT_COLLISION_FOOT_OFFSET_Y <= foot_y <= item["bottom"] + STUDENT_COLLISION_FOOT_OFFSET_Y
+            ):
                 return False
         return True
 
@@ -1978,8 +2362,8 @@ class SimulationEngine:
         remaining = self._stall_cook_remaining(stall)
         return max(0.0, min(1.0, 1.0 - remaining / cook_time))
 
-    def _build_collision_boxes(self) -> list[dict[str, float]]:
-        boxes: list[dict[str, float]] = []
+    def _build_collision_boxes(self) -> list[dict[str, Any]]:
+        boxes: list[dict[str, Any]] = []
         for left, top, right, bottom in self._obstacle_rects():
             boxes.append(
                 {
@@ -1987,6 +2371,20 @@ class SimulationEngine:
                     "y": (top + bottom) / 2.0,
                     "width": right - left,
                     "height": bottom - top,
+                    "kind": "static",
+                }
+            )
+        for student in self._collision_students():
+            left, top, right, bottom = self._student_collision_rect(student)
+            boxes.append(
+                {
+                    "x": (left + right) / 2.0,
+                    "y": (top + bottom) / 2.0,
+                    "width": right - left,
+                    "height": bottom - top,
+                    "kind": "student",
+                    "student_id": student.id,
+                    "state": student.state.value if isinstance(student.state, StudentState) else str(student.state),
                 }
             )
         return boxes
