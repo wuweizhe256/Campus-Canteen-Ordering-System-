@@ -288,6 +288,48 @@ class DataRecorder:
         self.queue_samples: list[QueueLengthSample] = []
         self.runtime_samples: list[RuntimeStatsSample] = []
         self.issues: list[str] = []
+        self._student_first_events: dict[int, dict[str, EventRecordP0]] = defaultdict(dict)
+        self._student_duration_recorded: set[tuple[int, str, str]] = set()
+        self._student_duration_issue_recorded: set[tuple[int, str, str]] = set()
+        self._duration_totals: dict[str, float] = defaultdict(float)
+        self._duration_counts: dict[str, int] = defaultdict(int)
+        self._active_students = 0
+        self._max_active_students = 0
+        self._event_queue_current: dict[int, int] = defaultdict(int)
+        self._event_queue_max: dict[int, int] = {}
+        self._sampled_queue_max: dict[int, int] = {}
+        self._latest_runtime: RuntimeStatsSample | None = None
+        self._seat_open_starts: dict[tuple[int, int], EventRecordP0] = {}
+        self._seat_occupied_duration = 0.0
+        self._table_open_starts: dict[tuple[int, int], EventRecordP0] = {}
+        self._table_occupied_duration: dict[str, float] = defaultdict(float)
+        self._table_capacity_by_id: dict[int, tuple[str, int]] = {}
+        self._order_first_events: dict[int, dict[str, EventRecordP0]] = defaultdict(dict)
+        self._order_duration_recorded: set[tuple[int, str, str]] = set()
+        self._order_duration_issue_recorded: set[tuple[int, str, str]] = set()
+        self._order_duration_totals: dict[str, float] = defaultdict(float)
+        self._order_duration_counts: dict[str, int] = defaultdict(int)
+        self._completed_order_ids: set[int] = set()
+        self._cancelled_order_ids: set[int] = set()
+        self._dish_sales: dict[tuple[int, int | None], dict[str, float | int]] = {}
+        self._dish_sold_out: dict[tuple[int, int | None], int] = defaultdict(int)
+        self._dish_stock_latest: dict[tuple[int, int | None], EventRecordP0] = {}
+        self._group_sizes: dict[int, int] = {}
+        self._group_assignments: dict[int, dict[int, int]] = defaultdict(dict)
+        self._group_completion_status: dict[int, bool] = {}
+        self._completed_group_count = 0
+        self._same_table_group_count = 0
+        self._entrance_flow_counts: dict[int, int] = defaultdict(int)
+        self._exit_flow_counts: dict[int, int] = defaultdict(int)
+        self._path_length_total = 0.0
+        self._path_length_count = 0
+        self._path_duration_total = 0.0
+        self._path_duration_count = 0
+        self._path_congestion_total = 0.0
+        self._path_congestion_count = 0
+        self._path_sample_count = 0
+        self._completed_path_count = 0
+        self._blocked_path_count = 0
 
     def record_event(self, event: EventRecordP0 | dict[str, Any]) -> None:
         record = EventRecordP0.from_mapping(event) if isinstance(event, dict) else event
@@ -318,17 +360,21 @@ class DataRecorder:
             self.events_by_obstacle[record.obstacle_id].append(record)
         if record.table_id is not None and record.seat_index is not None:
             self.events_by_seat[(record.table_id, record.seat_index)].append(record)
+        self._accumulate_event(record)
 
     def feed_event(self, event: EventRecordP0 | dict[str, Any]) -> None:
         self.record_event(event)
 
     def record_queue_sample(self, game_time: float, stall_id: int, queue_length: int) -> None:
-        self.queue_samples.append(
-            QueueLengthSample(
-                game_time=float(game_time),
-                stall_id=int(stall_id),
-                queue_length=max(0, int(queue_length)),
-            )
+        sample = QueueLengthSample(
+            game_time=float(game_time),
+            stall_id=int(stall_id),
+            queue_length=max(0, int(queue_length)),
+        )
+        self.queue_samples.append(sample)
+        self._sampled_queue_max[sample.stall_id] = max(
+            self._sampled_queue_max.get(sample.stall_id, 0),
+            sample.queue_length,
         )
 
     def feed_queue_sample(self, game_time: float, stall_id: int, queue_length: int) -> None:
@@ -344,17 +390,17 @@ class DataRecorder:
         avg_queue_length: float | None,
         tray_return_queue_length: int,
     ) -> None:
-        self.runtime_samples.append(
-            RuntimeStatsSample(
-                game_time=float(game_time),
-                avg_move_speed=avg_move_speed,
-                congestion_index=max(0.0, float(congestion_index)),
-                stuck_student_count=max(0, int(stuck_student_count)),
-                reroute_count=max(0, int(reroute_count)),
-                avg_queue_length=avg_queue_length,
-                tray_return_queue_length=max(0, int(tray_return_queue_length)),
-            )
+        sample = RuntimeStatsSample(
+            game_time=float(game_time),
+            avg_move_speed=avg_move_speed,
+            congestion_index=max(0.0, float(congestion_index)),
+            stuck_student_count=max(0, int(stuck_student_count)),
+            reroute_count=max(0, int(reroute_count)),
+            avg_queue_length=avg_queue_length,
+            tray_return_queue_length=max(0, int(tray_return_queue_length)),
         )
+        self.runtime_samples.append(sample)
+        self._latest_runtime = sample
 
     def feed_runtime_sample(
         self,
@@ -404,45 +450,400 @@ class DataRecorder:
         return sorted(self.events_by_obstacle.get(obstacle_id, []), key=_event_sort_key)
 
     def build_stats(self, current_time: float | None = None) -> StatsFrameP0:
-        events = sorted(self.events, key=_event_sort_key)
-        avg_wait_time = self._average_duration_by_student("queue_started", "food_ready")
-        avg_eating_time = self._average_duration_by_student("eating_started", "eating_finished")
-        avg_total_time = self._average_duration_by_student("student_spawned", "student_left")
-        max_active_students = self._max_active_students(events)
-        stall_queue_stats = self._stall_queue_stats(events)
-        seat_utilization = self._seat_utilization(current_time)
-        order_timing_stats = self._order_timing_stats()
-        group_table_stats = self._group_table_stats()
-        runtime = self.runtime_samples[-1] if self.runtime_samples else None
+        runtime = self._latest_runtime
         return StatsFrameP0(
-            avg_wait_time=avg_wait_time,
-            avg_eating_time=avg_eating_time,
-            avg_total_time=avg_total_time,
-            max_active_students=max_active_students,
-            stall_queue_stats=stall_queue_stats,
-            seat_utilization=seat_utilization,
+            avg_wait_time=self._duration_average("wait"),
+            avg_eating_time=self._duration_average("eating"),
+            avg_total_time=self._duration_average("total"),
+            max_active_students=self._max_active_students,
+            stall_queue_stats=self._live_stall_queue_stats(),
+            seat_utilization=self._live_seat_utilization(current_time),
             avg_move_speed=runtime.avg_move_speed if runtime else None,
             congestion_index=runtime.congestion_index if runtime else 0.0,
             stuck_student_count=runtime.stuck_student_count if runtime else 0,
             reroute_count=runtime.reroute_count if runtime else 0,
             avg_queue_length=runtime.avg_queue_length if runtime else None,
             tray_return_queue_length=runtime.tray_return_queue_length if runtime else 0,
-            dish_sales_stats=self._dish_sales_stats(),
-            dish_sold_out_stats=self._dish_sold_out_stats(),
-            dish_stock_stats=self._dish_stock_stats(),
-            avg_order_wait_time=order_timing_stats["avg_order_wait_time"],
-            avg_order_cook_time=order_timing_stats["avg_order_cook_time"],
-            avg_order_total_time=order_timing_stats["avg_order_total_time"],
-            completed_order_count=order_timing_stats["completed_order_count"],
-            cancelled_order_count=order_timing_stats["cancelled_order_count"],
-            group_same_table_rate=group_table_stats["group_same_table_rate"],
-            completed_group_count=group_table_stats["completed_group_count"],
-            same_table_group_count=group_table_stats["same_table_group_count"],
-            table_type_utilization=self._table_type_utilization(current_time),
-            entrance_flow=self._flow_stats("entrance_used", "entrance_id"),
-            exit_flow=self._flow_stats("exit_used", "exit_id"),
-            path_congestion_stats=self._path_congestion_stats(),
+            dish_sales_stats=self._live_dish_sales_stats(),
+            dish_sold_out_stats=self._live_dish_sold_out_stats(),
+            dish_stock_stats=self._live_dish_stock_stats(),
+            avg_order_wait_time=self._order_duration_average("wait"),
+            avg_order_cook_time=self._order_duration_average("cook"),
+            avg_order_total_time=self._order_duration_average("total"),
+            completed_order_count=len(self._completed_order_ids),
+            cancelled_order_count=len(self._cancelled_order_ids),
+            group_same_table_rate=(
+                self._same_table_group_count / self._completed_group_count
+                if self._completed_group_count
+                else None
+            ),
+            completed_group_count=self._completed_group_count,
+            same_table_group_count=self._same_table_group_count,
+            table_type_utilization=self._live_table_type_utilization(current_time),
+            entrance_flow=self._live_flow_stats(self._entrance_flow_counts),
+            exit_flow=self._live_flow_stats(self._exit_flow_counts),
+            path_congestion_stats=self._live_path_congestion_stats(),
             issues=list(self.issues),
+        )
+
+    def _accumulate_event(self, event: EventRecordP0) -> None:
+        self._accumulate_student_event(event)
+        self._accumulate_queue_event(event)
+        self._accumulate_seat_event(event)
+        self._accumulate_order_event(event)
+        self._accumulate_dish_event(event)
+        self._accumulate_group_event(event)
+        self._accumulate_flow_event(event)
+        self._accumulate_path_event(event)
+        self._accumulate_table_capacity(event)
+
+    def _accumulate_student_event(self, event: EventRecordP0) -> None:
+        if event.student_id is None:
+            return
+        first_events = self._student_first_events[event.student_id]
+        if self._is_earlier_first_event(event, first_events.get(event.event_type)):
+            first_events[event.event_type] = event
+
+        if event.event_type == "student_spawned":
+            self._active_students += 1
+            self._max_active_students = max(self._max_active_students, self._active_students)
+        elif event.event_type == "student_left":
+            self._active_students = max(0, self._active_students - 1)
+
+        self._try_record_student_duration(event.student_id, "queue_started", "food_ready", "wait")
+        self._try_record_student_duration(event.student_id, "eating_started", "eating_finished", "eating")
+        self._try_record_student_duration(event.student_id, "student_spawned", "student_left", "total")
+
+    def _try_record_student_duration(
+        self,
+        student_id: int,
+        start_type: str,
+        end_type: str,
+        metric: str,
+    ) -> None:
+        key = (student_id, start_type, end_type)
+        if key in self._student_duration_recorded:
+            return
+        events = self._student_first_events.get(student_id, {})
+        start = events.get(start_type)
+        end = events.get(end_type)
+        if start is None or end is None:
+            return
+        if end.game_time < start.game_time:
+            if key not in self._student_duration_issue_recorded:
+                self.issues.append(
+                    f"negative duration for student {student_id}: {start_type}->{end_type}"
+                )
+                self._student_duration_issue_recorded.add(key)
+            return
+        self._duration_totals[metric] += end.game_time - start.game_time
+        self._duration_counts[metric] += 1
+        self._student_duration_recorded.add(key)
+
+    def _accumulate_queue_event(self, event: EventRecordP0) -> None:
+        if event.stall_id is None:
+            return
+        if event.event_type == "queue_started":
+            self._event_queue_current[event.stall_id] += 1
+            self._event_queue_max[event.stall_id] = max(
+                self._event_queue_max.get(event.stall_id, 0),
+                self._event_queue_current[event.stall_id],
+            )
+        elif event.event_type in ("food_ready", "student_left"):
+            self._event_queue_current[event.stall_id] = max(
+                0,
+                self._event_queue_current[event.stall_id] - 1,
+            )
+
+    def _accumulate_seat_event(self, event: EventRecordP0) -> None:
+        if event.table_id is None or event.seat_index is None:
+            return
+        seat_key = (event.table_id, event.seat_index)
+        if event.event_type == "eating_started":
+            self._seat_open_starts[seat_key] = event
+            if event.table_type is not None:
+                self._table_open_starts[seat_key] = event
+        elif event.event_type == "eating_finished":
+            open_start = self._seat_open_starts.pop(seat_key, None)
+            if open_start is not None:
+                duration = event.game_time - open_start.game_time
+                if duration < 0:
+                    self.issues.append(f"negative seat duration for seat {seat_key}")
+                else:
+                    self._seat_occupied_duration += duration
+
+            table_start = self._table_open_starts.pop(seat_key, None)
+            if table_start is not None:
+                table_type = table_start.table_type or event.table_type
+                if table_type is not None:
+                    duration = event.game_time - table_start.game_time
+                    if duration < 0:
+                        self.issues.append(f"negative table type duration for table_type {table_type}")
+                    else:
+                        self._table_occupied_duration[table_type] += duration
+
+    def _accumulate_order_event(self, event: EventRecordP0) -> None:
+        if event.order_id is None:
+            return
+        first_events = self._order_first_events[event.order_id]
+        if self._is_earlier_first_event(event, first_events.get(event.event_type)):
+            first_events[event.event_type] = event
+        if event.event_type == "order_completed":
+            self._completed_order_ids.add(event.order_id)
+        elif event.event_type == "order_cancelled":
+            self._cancelled_order_ids.add(event.order_id)
+
+        self._try_record_order_duration(event.order_id, "order_created", "order_started", "wait")
+        self._try_record_order_duration(event.order_id, "order_started", "order_completed", "cook")
+        self._try_record_order_duration(event.order_id, "order_created", "order_completed", "total")
+
+    def _try_record_order_duration(
+        self,
+        order_id: int,
+        start_type: str,
+        end_type: str,
+        metric: str,
+    ) -> None:
+        key = (order_id, start_type, end_type)
+        if key in self._order_duration_recorded:
+            return
+        events = self._order_first_events.get(order_id, {})
+        start = events.get(start_type)
+        end = events.get(end_type)
+        if start is None or end is None:
+            return
+        if end.game_time < start.game_time:
+            if key not in self._order_duration_issue_recorded:
+                self.issues.append(f"negative order duration for order {order_id}: {start_type}->{end_type}")
+                self._order_duration_issue_recorded.add(key)
+            return
+        self._order_duration_totals[metric] += end.game_time - start.game_time
+        self._order_duration_counts[metric] += 1
+        self._order_duration_recorded.add(key)
+
+    def _accumulate_dish_event(self, event: EventRecordP0) -> None:
+        if event.event_type == "order_completed":
+            self._record_dish_sale(event)
+        elif event.event_type == "dish_sold_out":
+            if event.dish_id is None:
+                self.issues.append("dish_sold_out missing dish_id")
+            else:
+                self._dish_sold_out[(event.dish_id, event.stall_id)] += 1
+
+        if event.event_type in {"dish_stock_changed", "dish_sold_out", "order_completed"}:
+            if event.dish_id is not None and event.stock_after is not None:
+                key = (event.dish_id, event.stall_id)
+                current = self._dish_stock_latest.get(key)
+                if current is None or _event_sort_key(event) >= _event_sort_key(current):
+                    self._dish_stock_latest[key] = event
+
+    def _record_dish_sale(self, event: EventRecordP0) -> None:
+        dish_id = event.dish_id
+        if dish_id is None and event.order_id is not None:
+            dish_id = _first_known_int(self.order_events(event.order_id), "dish_id")
+        if dish_id is None:
+            self.issues.append("order_completed missing dish_id")
+            return
+
+        stall_id = event.stall_id
+        if stall_id is None and event.order_id is not None:
+            stall_id = _first_known_int(self.order_events(event.order_id), "stall_id")
+        quantity = event.quantity
+        if quantity is None and event.order_id is not None:
+            quantity = _first_known_int(self.order_events(event.order_id), "quantity")
+        quantity = max(1, quantity or 1)
+        price = event.price
+        if price is None and event.order_id is not None:
+            price = _first_known_float(self.order_events(event.order_id), "price")
+
+        key = (dish_id, stall_id)
+        current = self._dish_sales.setdefault(key, {"sales_count": 0, "revenue": 0.0})
+        current["sales_count"] = int(current["sales_count"]) + quantity
+        current["revenue"] = float(current["revenue"]) + quantity * (price or 0.0)
+
+    def _accumulate_group_event(self, event: EventRecordP0) -> None:
+        if event.group_id is None:
+            return
+        if event.group_size is not None and event.group_id not in self._group_sizes:
+            self._group_sizes[event.group_id] = event.group_size
+        if event.event_type in {"seat_assigned", "eating_started"} and event.student_id is not None and event.table_id is not None:
+            self._group_assignments[event.group_id][event.student_id] = event.table_id
+        self._refresh_group_completion(event.group_id)
+
+    def _refresh_group_completion(self, group_id: int) -> None:
+        assignments = self._group_assignments.get(group_id, {})
+        expected_size = self._group_sizes.get(group_id) or len(assignments)
+        new_status: bool | None = None
+        if expected_size > 1 and len(assignments) >= expected_size:
+            new_status = len(set(assignments.values())) == 1
+
+        old_status = self._group_completion_status.get(group_id)
+        if old_status is not None:
+            self._completed_group_count -= 1
+            if old_status:
+                self._same_table_group_count -= 1
+        if new_status is not None:
+            self._group_completion_status[group_id] = new_status
+            self._completed_group_count += 1
+            if new_status:
+                self._same_table_group_count += 1
+        else:
+            self._group_completion_status.pop(group_id, None)
+
+    def _accumulate_flow_event(self, event: EventRecordP0) -> None:
+        if event.event_type == "entrance_used":
+            if event.entrance_id is None:
+                self.issues.append("entrance_used missing entrance_id")
+            else:
+                self._entrance_flow_counts[event.entrance_id] += 1
+        elif event.event_type == "exit_used":
+            if event.exit_id is None:
+                self.issues.append("exit_used missing exit_id")
+            else:
+                self._exit_flow_counts[event.exit_id] += 1
+
+    def _accumulate_path_event(self, event: EventRecordP0) -> None:
+        if event.event_type not in {"path_planned", "path_completed", "path_congestion_sample"}:
+            return
+        if event.path_length is not None and event.event_type in {"path_planned", "path_completed"}:
+            self._path_length_total += max(0.0, event.path_length)
+            self._path_length_count += 1
+        if event.path_duration is not None and event.event_type == "path_completed":
+            self._path_duration_total += max(0.0, event.path_duration)
+            self._path_duration_count += 1
+        if event.path_congestion_index is not None:
+            self._path_congestion_total += max(0.0, min(1.0, event.path_congestion_index))
+            self._path_congestion_count += 1
+        if event.event_type == "path_congestion_sample":
+            self._path_sample_count += 1
+        if event.event_type == "path_completed":
+            self._completed_path_count += 1
+        if event.path_blocked:
+            self._blocked_path_count += 1
+
+    def _accumulate_table_capacity(self, event: EventRecordP0) -> None:
+        if event.table_id is None or event.table_type is None:
+            return
+        seat_count = event.seat_count or _default_seat_count(event.table_type)
+        if seat_count is None:
+            return
+        self._table_capacity_by_id[event.table_id] = (event.table_type, max(0, seat_count))
+
+    def _is_earlier_first_event(self, event: EventRecordP0, current: EventRecordP0 | None) -> bool:
+        return current is None or _event_sort_key(event) < _event_sort_key(current)
+
+    def _duration_average(self, metric: str) -> float | None:
+        return _safe_average(self._duration_totals.get(metric, 0.0), self._duration_counts.get(metric, 0))
+
+    def _order_duration_average(self, metric: str) -> float | None:
+        return _safe_average(self._order_duration_totals.get(metric, 0.0), self._order_duration_counts.get(metric, 0))
+
+    def _live_stall_queue_stats(self) -> list[StallQueueStats]:
+        source = self._sampled_queue_max if self._sampled_queue_max else self._event_queue_max
+        return [
+            StallQueueStats(stall_id=stall_id, max_queue_length=max_length)
+            for stall_id, max_length in sorted(source.items())
+        ]
+
+    def _live_seat_utilization(self, current_time: float | None) -> float | None:
+        if self.total_seats is None or self.total_seats <= 0:
+            return None
+        denominator_duration = self.duration if self.duration is not None else current_time
+        if denominator_duration is None or denominator_duration <= 0:
+            return None
+
+        occupied_duration = self._seat_occupied_duration
+        if current_time is not None:
+            for seat_key, open_start in self._seat_open_starts.items():
+                if current_time >= open_start.game_time:
+                    occupied_duration += current_time - open_start.game_time
+                else:
+                    self.issues.append(f"negative seat duration for seat {seat_key}")
+
+        return _bounded_ratio(occupied_duration, self.total_seats * denominator_duration)
+
+    def _live_dish_sales_stats(self) -> list[DishSalesStats]:
+        return [
+            DishSalesStats(
+                dish_id=dish_id,
+                stall_id=stall_id,
+                sales_count=int(values["sales_count"]),
+                revenue=float(values["revenue"]),
+            )
+            for (dish_id, stall_id), values in sorted(
+                self._dish_sales.items(),
+                key=lambda item: (item[0][0], -1 if item[0][1] is None else item[0][1]),
+            )
+        ]
+
+    def _live_dish_sold_out_stats(self) -> list[DishSoldOutStats]:
+        return [
+            DishSoldOutStats(dish_id=dish_id, stall_id=stall_id, sold_out_count=count)
+            for (dish_id, stall_id), count in sorted(
+                self._dish_sold_out.items(),
+                key=lambda item: (item[0][0], -1 if item[0][1] is None else item[0][1]),
+            )
+        ]
+
+    def _live_dish_stock_stats(self) -> list[DishStockStats]:
+        return [
+            DishStockStats(dish_id=dish_id, stall_id=stall_id, stock=max(0, int(event.stock_after or 0)))
+            for (dish_id, stall_id), event in sorted(
+                self._dish_stock_latest.items(),
+                key=lambda item: (item[0][0], -1 if item[0][1] is None else item[0][1]),
+            )
+        ]
+
+    def _live_table_type_utilization(self, current_time: float | None) -> list[TableTypeUtilizationStats]:
+        denominator_duration = self.duration if self.duration is not None else current_time
+        if denominator_duration is None or denominator_duration <= 0:
+            return []
+
+        table_capacity = self._live_table_capacity_by_type()
+        occupied_duration = defaultdict(float, self._table_occupied_duration)
+        if current_time is not None:
+            for seat_key, open_start in self._table_open_starts.items():
+                table_type = open_start.table_type
+                if table_type is None:
+                    continue
+                if current_time >= open_start.game_time:
+                    occupied_duration[table_type] += current_time - open_start.game_time
+                else:
+                    self.issues.append(f"negative table type duration for table_type {table_type}")
+
+        table_types = set(table_capacity) | set(occupied_duration)
+        return [
+            TableTypeUtilizationStats(
+                table_type=table_type,
+                seat_count=table_capacity.get(table_type, 0),
+                utilization=_bounded_ratio(
+                    occupied_duration.get(table_type, 0.0),
+                    table_capacity.get(table_type, 0) * denominator_duration,
+                ),
+            )
+            for table_type in sorted(table_types)
+        ]
+
+    def _live_table_capacity_by_type(self) -> dict[str, int]:
+        capacity: dict[str, int] = defaultdict(int)
+        for table_type, seat_count in self._table_capacity_by_id.values():
+            capacity[table_type] += seat_count
+        return dict(capacity)
+
+    def _live_flow_stats(self, counts: dict[int, int]) -> list[FlowStats]:
+        return [
+            FlowStats(id=item_id, flow_count=flow_count)
+            for item_id, flow_count in sorted(counts.items())
+        ]
+
+    def _live_path_congestion_stats(self) -> PathCongestionStats:
+        return PathCongestionStats(
+            avg_path_length=_safe_average(self._path_length_total, self._path_length_count),
+            avg_path_duration=_safe_average(self._path_duration_total, self._path_duration_count),
+            avg_path_congestion_index=_safe_average(self._path_congestion_total, self._path_congestion_count),
+            path_sample_count=self._path_sample_count,
+            completed_path_count=self._completed_path_count,
+            blocked_path_count=self._blocked_path_count,
         )
 
     def _average_duration_by_student(self, start_type: str, end_type: str) -> float | None:
@@ -860,6 +1261,12 @@ def _average(values: list[float]) -> float | None:
     if not values:
         return None
     return sum(values) / len(values)
+
+
+def _safe_average(total: float, count: int) -> float | None:
+    if count <= 0:
+        return None
+    return total / count
 
 
 def _bounded_ratio(numerator: float, denominator: float) -> float | None:

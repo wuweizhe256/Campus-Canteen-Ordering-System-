@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QElapsedTimer, Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -32,6 +32,7 @@ class MainWindow(QMainWindow):
     stopRequested = pyqtSignal()
     pauseChanged = pyqtSignal(bool)
     timeScaleChanged = pyqtSignal(float)
+    _STATS_PANEL_UPDATE_INTERVAL_MS = 500
 
     def __init__(self) -> None:
         super().__init__()
@@ -45,6 +46,8 @@ class MainWindow(QMainWindow):
         self._stall_popup: StallInfoPopup | None = None
         self._table_popup: TableInfoPopup | None = None
         self._student_popup: StudentInfoPopup | None = None
+        self._stats_update_clock = QElapsedTimer()
+        self._stats_update_clock.invalidate()
 
         self.canvas = CanvasWidget()
         self.stats_panel = StatsPanel()
@@ -279,6 +282,7 @@ class MainWindow(QMainWindow):
         config = replace(config, time_scale=float(self.time_scale_slider.value()))
         self.path_checkbox.setChecked(config.show_path_debug_layer)
         self.obstacle_checkbox.setChecked(config.show_obstacle_layer)
+        self._stats_update_clock.invalidate()
         self._running = True
         self._paused = False
         self.start_button.setEnabled(False)
@@ -318,10 +322,22 @@ class MainWindow(QMainWindow):
     @pyqtSlot(object)
     def update_frame(self, frame: dict) -> None:
         self.canvas.set_frame(frame)
-        self.stats_panel.set_frame(frame)
+        if self._should_update_stats_panel():
+            self.stats_panel.set_frame(frame)
         self._refresh_stall_popup(frame)
         self._refresh_table_popup(frame)
         self._refresh_student_popup(frame)
+
+    def _should_update_stats_panel(self) -> bool:
+        if not self._running:
+            return True
+        if not self._stats_update_clock.isValid():
+            self._stats_update_clock.start()
+            return True
+        if self._stats_update_clock.elapsed() < self._STATS_PANEL_UPDATE_INTERVAL_MS:
+            return False
+        self._stats_update_clock.restart()
+        return True
 
     def _refresh_stall_popup(self, frame: dict) -> None:
         if self._stall_popup is None:
@@ -361,6 +377,7 @@ class MainWindow(QMainWindow):
     def simulation_finished(self, summary: RunSummary) -> None:
         self._running = False
         self._paused = False
+        self._stats_update_clock.invalidate()
         self.start_button.setEnabled(True)
         self.pause_button.setText("暂停")
         self.pause_button.setEnabled(False)

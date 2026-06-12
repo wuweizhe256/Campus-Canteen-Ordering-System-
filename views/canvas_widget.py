@@ -43,9 +43,10 @@ class CanvasWidget(QWidget):
 
     def set_frame(self, frame: dict) -> None:
         adapted = self._frame_with_p1_fallback(frame)
-        self._update_student_animations(adapted)
+        animation_drives_repaint = self._update_student_animations(adapted)
         self.frame = adapted
-        self.update()
+        if not animation_drives_repaint:
+            self.update()
 
     def set_show_paths(self, show_paths: bool) -> None:
         self.show_paths = show_paths
@@ -149,7 +150,7 @@ class CanvasWidget(QWidget):
         normalized["status"] = status if status in {"queued", "cooking", "done", "cancelled"} else "queued"
         return normalized
 
-    def _update_student_animations(self, next_frame: dict) -> None:
+    def _update_student_animations(self, next_frame: dict) -> bool:
         next_students = [
             student
             for student in next_frame.get("students", [])
@@ -159,7 +160,7 @@ class CanvasWidget(QWidget):
             self._student_animations.clear()
             self._student_animation_timer.stop()
             self._student_animation_clock.invalidate()
-            return
+            return False
 
         previous_students = {}
         if isinstance(self.frame, dict):
@@ -206,6 +207,13 @@ class CanvasWidget(QWidget):
                     start_facing_x = target_facing_x
                     start_facing_y = target_facing_y
 
+            if (
+                hypot(target_x - start_x, target_y - start_y) < 0.01
+                and abs(target_facing_x - start_facing_x) < 0.001
+                and abs(target_facing_y - start_facing_y) < 0.001
+            ):
+                continue
+
             animations[student_id] = {
                 "start_x": start_x,
                 "start_y": start_y,
@@ -218,8 +226,15 @@ class CanvasWidget(QWidget):
             }
 
         self._student_animations = animations
+        if not animations:
+            self._student_animation_timer.stop()
+            self._student_animation_clock.invalidate()
+            return False
+
         self._student_animation_clock.restart()
-        self._student_animation_timer.start()
+        if not self._student_animation_timer.isActive():
+            self._student_animation_timer.start()
+        return True
 
     def _advance_student_animation(self) -> None:
         if self._student_animation_progress() >= 1.0:
