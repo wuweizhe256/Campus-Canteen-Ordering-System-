@@ -37,6 +37,8 @@ class CanvasWidget(QWidget):
         self._student_animation_timer.timeout.connect(self._advance_student_animation)
         self._static_scene_cache: QPixmap | None = None
         self._static_scene_cache_key: tuple[int, int] | None = None
+        self._seated_students_cache: QPixmap | None = None
+        self._seated_students_cache_key: tuple[Any, ...] | None = None
         self.setMouseTracking(True)
 
     def set_frame(self, frame: dict) -> None:
@@ -312,11 +314,15 @@ class CanvasWidget(QWidget):
 
     def set_selected_student(self, student_id: int | None) -> None:
         self._selected_student_id = student_id
+        self._seated_students_cache = None
+        self._seated_students_cache_key = None
         self.update()
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
         self._static_scene_cache = None
         self._static_scene_cache_key = None
+        self._seated_students_cache = None
+        self._seated_students_cache_key = None
         super().resizeEvent(event)
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
@@ -1302,14 +1308,66 @@ class CanvasWidget(QWidget):
         return [(-51, -40), (35, -40), (-51, -4), (35, -4), (-51, 32), (35, 32)][:seat_count]
 
     def _draw_students(self, painter: QPainter) -> None:
+        self._draw_cached_seated_students(painter)
         students = [
             self._student_render_data(student)
             for student in self.frame.get("students", [])
-            if isinstance(student, dict)
+            if isinstance(student, dict) and not self._is_cacheable_seated_student(student)
         ]
         students.sort(key=lambda item: self._number(item.get("y"), 0.0))
         for student in students:
             self._draw_pig(painter, student)
+
+    def _draw_cached_seated_students(self, painter: QPainter) -> None:
+        if not self.frame:
+            return
+        seated_students = [
+            student
+            for student in self.frame.get("students", [])
+            if isinstance(student, dict) and self._is_cacheable_seated_student(student)
+        ]
+        if not seated_students:
+            self._seated_students_cache = None
+            self._seated_students_cache_key = None
+            return
+
+        width, height = self._frame_size()
+        cache_key = self._seated_students_key(seated_students, width, height)
+        if self._seated_students_cache is None or self._seated_students_cache_key != cache_key:
+            pixmap = QPixmap(int(width), int(height))
+            pixmap.fill(Qt.GlobalColor.transparent)
+            cache_painter = QPainter(pixmap)
+            cache_painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            for student in sorted(seated_students, key=lambda item: self._number(item.get("y"), 0.0)):
+                self._draw_pig(cache_painter, student)
+            cache_painter.end()
+            self._seated_students_cache = pixmap
+            self._seated_students_cache_key = cache_key
+        painter.drawPixmap(QRectF(0, 0, width, height), self._seated_students_cache, QRectF(0, 0, width, height))
+
+    def _is_cacheable_seated_student(self, student: dict) -> bool:
+        if str(student.get("state") or "") != "eating":
+            return False
+        return not self._is_selected_student(student)
+
+    def _seated_students_key(self, students: list[dict], width: float, height: float) -> tuple[Any, ...]:
+        return (
+            int(width),
+            int(height),
+            self._selected_student_id,
+            tuple(
+                (
+                    int(self._number(student.get("id"), 0)),
+                    round(self._number(student.get("x"), 0.0), 1),
+                    round(self._number(student.get("y"), 0.0), 1),
+                    round(self._number(student.get("facing_x"), 1.0), 2),
+                    round(self._number(student.get("facing_y"), 0.0), 2),
+                    student.get("group_id"),
+                    student.get("group_size"),
+                )
+                for student in sorted(students, key=lambda item: int(self._number(item.get("id"), 0)))
+            ),
+        )
 
     def _draw_pig(self, painter: QPainter, student: dict) -> None:
         point = self._point((student.get("x"), student.get("y")))
