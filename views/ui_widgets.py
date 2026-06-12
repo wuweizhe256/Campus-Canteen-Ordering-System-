@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 
-from PyQt6.QtCore import QPointF, QRect, QRectF, Qt
+from PyQt6.QtCore import QPointF, QRect, QRectF, QSize, Qt
 from PyQt6.QtGui import QColor, QCursor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import QSlider, QStyle, QStyleOptionSlider
 
@@ -161,9 +161,9 @@ def app_stylesheet() -> str:
             background: #efe3d3;
         }
         QSlider::handle:horizontal {
-            width: 42px;
-            height: 42px;
-            margin: -16px 0;
+            width: 36px;
+            height: 36px;
+            margin: -13px 0;
             border: 0;
             background: transparent;
         }
@@ -462,7 +462,15 @@ class PigSlider(QSlider):
     def __init__(self, orientation: Qt.Orientation, parent=None) -> None:
         super().__init__(orientation, parent)
         self.setMouseTracking(True)
-        self.setMinimumHeight(52)
+        self.setFixedHeight(48)
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        hint = super().sizeHint()
+        return QSize(hint.width(), 48)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        hint = super().minimumSizeHint()
+        return QSize(hint.width(), 48)
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
         super().paintEvent(event)
@@ -486,7 +494,7 @@ class PigSlider(QSlider):
             self,
         )
         center = rect.center()
-        size = 40
+        size = 36
         return QRect(center.x() - size // 2, center.y() - size // 2, size, size)
 
     def _draw_pig_handle(
@@ -500,8 +508,8 @@ class PigSlider(QSlider):
         draw_pig_head(
             painter,
             center.x(),
-            center.y() + 2,
-            1.05,
+            center.y() + 1,
+            0.96,
             fill="#F2A8BB" if not hovered else "#F4A8BB",
             expr="smile",
             pressed=pressed,

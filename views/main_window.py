@@ -75,12 +75,14 @@ class MainWindow(QMainWindow):
         self.status_label = QLabel("就绪")
         self.status_label.setObjectName("StatusBadge")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        self.status_label.setMinimumWidth(180)
         self.time_scale_label = QLabel("时间倍率 6x")
         self.time_scale_label.setObjectName("ToolbarLabel")
+        self.time_scale_label.setFixedWidth(82)
         self.time_scale_slider = PigSlider(Qt.Orientation.Horizontal)
         self.time_scale_slider.setRange(1, 24)
         self.time_scale_slider.setValue(6)
-        self.time_scale_slider.setFixedWidth(180)
+        self.time_scale_slider.setFixedWidth(150)
         self.time_scale_slider.setToolTip("调整仿真内时间和现实时间的比例")
         self.path_checkbox = QCheckBox("显示调试层")
         self.path_checkbox.setObjectName("PathToggle")
@@ -88,15 +90,18 @@ class MainWindow(QMainWindow):
         self.obstacle_checkbox.setObjectName("PathToggle")
         self.zoom_label = QLabel("画布缩放 100%")
         self.zoom_label.setObjectName("ToolbarLabel")
+        self.zoom_label.setFixedWidth(92)
         self.zoom_slider = PigSlider(Qt.Orientation.Horizontal)
         self.zoom_slider.setRange(60, 180)
         self.zoom_slider.setValue(100)
-        self.zoom_slider.setFixedWidth(130)
+        self.zoom_slider.setFixedWidth(112)
         self.zoom_slider.setToolTip("调整左侧食堂演示画布缩放比例")
         self.reset_view_button = QPushButton("重置视图")
         self.reset_view_button.setObjectName("SecondaryButton")
+        self.reset_view_button.setFixedWidth(92)
         self.settings_button = QPushButton("设置")
         self.settings_button.setObjectName("SecondaryButton")
+        self.settings_button.setFixedWidth(70)
 
         self.start_button.clicked.connect(self._open_config_dialog)
         self.pause_button.clicked.connect(self._toggle_pause)
@@ -155,9 +160,10 @@ class MainWindow(QMainWindow):
         cluster = QFrame()
         cluster.setObjectName("ToolbarCluster")
         cluster.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        cluster.setFixedHeight(64)
         layout = QHBoxLayout()
-        layout.setContentsMargins(10, 7, 10, 7)
-        layout.setSpacing(9)
+        layout.setContentsMargins(9, 6, 9, 6)
+        layout.setSpacing(7)
         for widget in widgets:
             layout.addWidget(widget)
         cluster.setLayout(layout)
@@ -509,8 +515,8 @@ class MainWindow(QMainWindow):
             QPushButton {
                 border: 1px solid transparent;
                 border-radius: 12px;
-                padding: 8px 17px;
-                min-width: 74px;
+                padding: 7px 12px;
+                min-width: 58px;
                 font: 800 __TOOLBAR_SIZE__pt "Microsoft YaHei UI";
             }
             QPushButton#PrimaryButton {
@@ -596,9 +602,9 @@ class MainWindow(QMainWindow):
                 background: #efe3d3;
             }
             QSlider::handle:horizontal {
-                width: 42px;
-                height: 42px;
-                margin: -16px 0;
+                width: 36px;
+                height: 36px;
+                margin: -13px 0;
                 border: 0;
                 background: transparent;
             }
