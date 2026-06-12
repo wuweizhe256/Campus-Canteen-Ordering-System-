@@ -1085,7 +1085,9 @@ class CanvasWidget(QWidget):
 
     def _hit_stall(self, scene_x: float, scene_y: float) -> dict | None:
         """返回被点击的 stall 帧数据 dict，未命中则返回 None。"""
-        for stall in self.frame.get("stalls", []):
+        if not self.frame:
+            return None
+        for stall in self.frame.get("stalls", []) or []:
             if not isinstance(stall, dict):
                 continue
             point = self._point((stall.get("x"), stall.get("y")))
