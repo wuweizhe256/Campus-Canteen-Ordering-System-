@@ -919,7 +919,6 @@ class CanvasWidget(QWidget):
                 queue_y = y + 76 + index * 24
                 self._draw_shadow(painter, queue_x, queue_y + 5, 18, 7, QColor(51, 65, 85, 42))
                 painter.drawEllipse(QRectF(queue_x - 6, queue_y - 6, 12, 12))
-            self._draw_stall_orders(painter, stall, x, y)
 
     def _draw_stall_dishes(self, painter: QPainter, stall: dict, x: float, y: float) -> None:
         dishes = self._stall_dishes(stall)
