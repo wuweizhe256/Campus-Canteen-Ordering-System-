@@ -222,6 +222,28 @@ class PathFindingThreadingTest(unittest.TestCase):
 
         self.assertIn("queued_student", {obstacle.kind for obstacle in obstacles})
 
+    def test_seated_students_do_not_need_navigation_work(self) -> None:
+        engine = SimulationEngine(
+            SimulationConfig(
+                sim_minutes=1,
+                stall_count=2,
+                table_count=2,
+                seed=20240610,
+                total_student_count=3,
+                max_active_students=3,
+            )
+        )
+        engine.initialize()
+        engine._spawn_group(3)
+        eating, queued, moving = list(engine.students.values())[:3]
+        eating.state = StudentState.EATING
+        queued.state = StudentState.QUEUED
+        moving.state = StudentState.MOVING_TO_QUEUE
+
+        self.assertFalse(engine._student_needs_navigation_work(eating))
+        self.assertFalse(engine._student_needs_navigation_work(queued))
+        self.assertTrue(engine._student_needs_navigation_work(moving))
+
     def test_move_student_avoids_committing_collision_overlap(self) -> None:
         engine = SimulationEngine(
             SimulationConfig(

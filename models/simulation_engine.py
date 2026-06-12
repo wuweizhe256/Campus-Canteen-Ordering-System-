@@ -74,6 +74,7 @@ class SimulationEngine:
         self._navigation_obstacle_cache: list[NavRect] | None = None
         self._navigation_doorway_cache: list[Doorway] | None = None
         self._navigation_pathfinder_cache: GridPathFinder | None = None
+        self._walk_paths_cache: list[dict[str, Any]] | None = None
         self._stop_requested = False
         self._paused = False
 
@@ -142,6 +143,7 @@ class SimulationEngine:
         self._navigation_obstacle_cache = None
         self._navigation_doorway_cache = None
         self._navigation_pathfinder_cache = None
+        self._walk_paths_cache = None
         self.entrance_flow_counts = {entrance.id: 0 for entrance in self.entrances}
         self.exit_flow_counts = {exit_area.id: 0 for exit_area in self.exits}
         self.data_recorder = DataRecorder(
@@ -2130,14 +2132,13 @@ class SimulationEngine:
 
     def _record_runtime_sample(self) -> None:
         active = [student for student in self.students.values() if student.state != StudentState.DONE]
-        moving = [
-            student
-            for student in active
-            if student.state not in (StudentState.EATING, StudentState.QUEUED)
-        ]
+        moving = [student for student in active if self._student_needs_navigation_work(student)]
         avg_move_speed = _average_float(student.actual_speed for student in moving) if moving else None
-        density_load = sum(max(0, self._neighbor_count(*self._student_foot_point(student), 58.0, student.id) - 1) for student in active)
-        congestion_index = min(1.0, density_load / max(1.0, len(active) * 3.0)) if active else 0.0
+        density_load = sum(
+            max(0, self._neighbor_count(*self._student_foot_point(student), 58.0, student.id) - 1)
+            for student in moving
+        )
+        congestion_index = min(1.0, density_load / max(1.0, len(moving) * 3.0)) if moving else 0.0
         stuck_student_count = sum(
             1
             for student in moving
@@ -2173,9 +2174,13 @@ class SimulationEngine:
             tray_return_queue_length,
         )
 
+    def _student_needs_navigation_work(self, student: Student) -> bool:
+        return student.state not in (StudentState.EATING, StudentState.QUEUED, StudentState.DONE)
+
     def _build_frame(self) -> dict[str, Any]:
         stats = self.data_recorder.build_stats(current_time=self.game_time).to_dict()
         issues = [*self.issues, *self.data_recorder.issues]
+        walk_paths = self._build_walk_paths()
         frame = {
             "game_time": min(self.game_time, self.config.duration_game_seconds),
             "duration": self.config.duration_game_seconds,
@@ -2203,8 +2208,8 @@ class SimulationEngine:
             "width": self.width,
             "height": self.height,
             "stats": stats,
-            "walk_paths": self._build_walk_paths(),
-            "path_debug_lines": self._build_walk_paths(),
+            "walk_paths": walk_paths,
+            "path_debug_lines": walk_paths,
             "obstacles": self._obstacle_frames(),
             "collision_boxes": self._build_collision_boxes(),
             "stalls": [self._stall_frame(stall) for stall in self.stalls],
@@ -2390,6 +2395,9 @@ class SimulationEngine:
         return boxes
 
     def _build_walk_paths(self) -> list[dict[str, Any]]:
+        if self._walk_paths_cache is not None:
+            return self._walk_paths_cache
+
         left = 70.0
         right = self.width - 40.0
         aisle_xs = sorted(
@@ -2427,6 +2435,7 @@ class SimulationEngine:
                     "points": [(aisle_x, self.top_walkway_y), (aisle_x, self.bottom_walkway_y)],
                 }
             )
+        self._walk_paths_cache = paths
         return paths
 
 

@@ -4,7 +4,7 @@ from math import ceil, hypot
 from typing import Any
 
 from PyQt6.QtCore import QElapsedTimer, QPointF, QRectF, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPolygonF
+from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPixmap, QPolygonF
 from PyQt6.QtWidgets import QWidget
 
 from utils.fonts import ui_font
@@ -13,8 +13,8 @@ from utils.fonts import ui_font
 class CanvasWidget(QWidget):
     zoomChanged = pyqtSignal(float)
     stallClicked = pyqtSignal(dict)
-    _STUDENT_MOVE_ANIMATION_MS = 90
-    _STUDENT_TELEPORT_DISTANCE = 180.0
+    _STUDENT_MOVE_ANIMATION_MS = 120
+    _STUDENT_TELEPORT_DISTANCE = 360.0
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -32,6 +32,8 @@ class CanvasWidget(QWidget):
         self._student_animation_timer = QTimer(self)
         self._student_animation_timer.setInterval(16)
         self._student_animation_timer.timeout.connect(self._advance_student_animation)
+        self._static_scene_cache: QPixmap | None = None
+        self._static_scene_cache_key: tuple[int, int] | None = None
         self.setMouseTracking(True)
 
     def set_frame(self, frame: dict) -> None:
@@ -305,6 +307,11 @@ class CanvasWidget(QWidget):
         self.zoomChanged.emit(self.view_zoom)
         self.update()
 
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        self._static_scene_cache = None
+        self._static_scene_cache_key = None
+        super().resizeEvent(event)
+
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -324,7 +331,7 @@ class CanvasWidget(QWidget):
         self._scene_origin = QPointF(x_offset, y_offset)
         self._scene_scale = scale
 
-        self._draw_floor(painter)
+        self._draw_static_scene(painter)
         if self.show_paths:
             self._draw_path_debug(painter)
         if self.show_obstacles:
@@ -336,6 +343,20 @@ class CanvasWidget(QWidget):
         self._draw_tables(painter)
         self._draw_students(painter)
         self._draw_header(painter)
+
+    def _draw_static_scene(self, painter: QPainter) -> None:
+        width, height = self._frame_size()
+        cache_key = (int(width), int(height))
+        if self._static_scene_cache is None or self._static_scene_cache_key != cache_key:
+            pixmap = QPixmap(cache_key[0], cache_key[1])
+            pixmap.fill(Qt.GlobalColor.transparent)
+            cache_painter = QPainter(pixmap)
+            cache_painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            self._draw_floor(cache_painter)
+            cache_painter.end()
+            self._static_scene_cache = pixmap
+            self._static_scene_cache_key = cache_key
+        painter.drawPixmap(QRectF(0, 0, width, height), self._static_scene_cache, QRectF(0, 0, width, height))
 
     def wheelEvent(self, event) -> None:  # noqa: N802 - Qt override
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
