@@ -86,7 +86,14 @@ class SimulationEngine:
             return self._build_frame()
 
         game_delta = max(0.0, float(game_delta))
-        self.game_time = min(self.config.duration_game_seconds, self.game_time + game_delta)
+        previous_game_time = self.game_time
+        next_game_time = min(self.config.duration_game_seconds, self.game_time + game_delta)
+        spawn_cutoff_time = self._student_spawn_cutoff_time()
+        if previous_game_time < spawn_cutoff_time < next_game_time:
+            self.game_time = spawn_cutoff_time
+            self._spawn_due_students()
+
+        self.game_time = next_game_time
         self._spawn_due_students()
         self._complete_ready_food()
         self._update_students(game_delta)
@@ -318,12 +325,21 @@ class SimulationEngine:
         if duration <= 0:
             return self.config.total_student_count
 
-        progress = clamp(self.game_time / duration, 0.0, 1.0)
+        spawn_duration = self._student_spawn_cutoff_time()
+        if spawn_duration <= 0:
+            return self.config.total_student_count
+        if self.game_time > spawn_duration:
+            return self.spawned_students
+
+        progress = clamp(self.game_time / spawn_duration, 0.0, 1.0)
         if progress <= 0.5:
             distribution = 2.0 * progress * progress
         else:
             distribution = 1.0 - 2.0 * (1.0 - progress) * (1.0 - progress)
         return min(self.config.total_student_count, round(distribution * self.config.total_student_count))
+
+    def _student_spawn_cutoff_time(self) -> float:
+        return self.config.duration_game_seconds / 2.0
 
     def _choose_group_size(self) -> int:
         roll = self.rng.random()

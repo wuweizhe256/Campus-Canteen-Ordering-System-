@@ -402,7 +402,8 @@ class PathFindingThreadingTest(unittest.TestCase):
     def test_default_load_avoids_persistent_student_box_overlap(self) -> None:
         engine = SimulationEngine(
             SimulationConfig(
-                sim_minutes=3,
+                # Spawning is limited to the first half, so this keeps a 3-minute arrival window.
+                sim_minutes=6,
                 stall_count=10,
                 table_count=24,
                 seed=20240522,
