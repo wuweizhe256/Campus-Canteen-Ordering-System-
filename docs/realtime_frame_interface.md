@@ -66,6 +66,7 @@ frame
   stalls
   tables
   students
+  student_details
 ```
 
 | 字段 | 类型 | 阶段 | 说明 |
@@ -86,7 +87,8 @@ frame
 | `collision_boxes` | `array<CollisionBoxFrame>` | `P0_current` | 调试用静态与学生碰撞盒 |
 | `stalls` | `array<StallFrameV0>` | `v0_current` | 窗口实时数据 |
 | `tables` | `array<TableFrameV0>` | `v0_current` | 餐桌实时数据 |
-| `students` | `array<StudentFrameV0>` | `v0_current` | 学生实时数据，已 `DONE` 的学生不会输出 |
+| `students` | `array<StudentFrameV0>` | `v0_current` | 学生实时数据，已 `DONE` 的学生不会输出；worker 高频运行帧中可为轻量学生帧 |
+| `student_details` | `array<StudentFrameV0>` | `P0_current` | 可选低频学生详情帧，用于弹窗、调试层和详情面板 |
 
 口径说明：
 
@@ -102,6 +104,12 @@ frame
 ```
 
 ### 2.3 学生 `StudentFrameV0`
+
+性能说明：
+
+- `SimulationEngine.build_frame()` 默认仍输出完整 `students`，用于兼容测试和直接调用。
+- `SimulationWorker` 高频运行帧会输出轻量 `students`，只保留画布和队列展示所需字段。
+- `SimulationWorker` 会低频附带 `student_details`，其中保留路径、偏好、用餐进度和寻路指标等完整详情。
 
 | 字段 | 类型 | 阶段 | 说明 |
 | --- | --- | --- | --- |

@@ -81,9 +81,18 @@ class SimulationEngine:
     def initialize(self) -> None:
         self._initialize()
 
-    def step(self, game_delta: float) -> dict[str, Any]:
+    def step(
+        self,
+        game_delta: float,
+        *,
+        lightweight_students: bool = False,
+        include_student_details: bool = False,
+    ) -> dict[str, Any]:
         if self.is_finished:
-            return self._build_frame()
+            return self._build_frame(
+                lightweight_students=lightweight_students,
+                include_student_details=include_student_details,
+            )
 
         game_delta = max(0.0, float(game_delta))
         previous_game_time = self.game_time
@@ -105,10 +114,21 @@ class SimulationEngine:
             self.max_active_students_seen,
             self._active_student_count(),
         )
-        return self._build_frame()
+        return self._build_frame(
+            lightweight_students=lightweight_students,
+            include_student_details=include_student_details,
+        )
 
-    def build_frame(self) -> dict[str, Any]:
-        return self._build_frame()
+    def build_frame(
+        self,
+        *,
+        lightweight_students: bool = False,
+        include_student_details: bool = False,
+    ) -> dict[str, Any]:
+        return self._build_frame(
+            lightweight_students=lightweight_students,
+            include_student_details=include_student_details,
+        )
 
     def summary(self, status: str) -> RunSummary:
         return RunSummary(
@@ -2193,10 +2213,20 @@ class SimulationEngine:
     def _student_needs_navigation_work(self, student: Student) -> bool:
         return student.state not in (StudentState.EATING, StudentState.QUEUED, StudentState.DONE)
 
-    def _build_frame(self) -> dict[str, Any]:
+    def _build_frame(
+        self,
+        *,
+        lightweight_students: bool = False,
+        include_student_details: bool = False,
+    ) -> dict[str, Any]:
         stats = self.data_recorder.build_stats(current_time=self.game_time).to_dict()
         issues = [*self.issues, *self.data_recorder.issues]
         walk_paths = self._build_walk_paths()
+        active_students = [
+            student
+            for student in self.students.values()
+            if student.state != StudentState.DONE
+        ]
         frame = {
             "game_time": min(self.game_time, self.config.duration_game_seconds),
             "duration": self.config.duration_game_seconds,
@@ -2231,11 +2261,15 @@ class SimulationEngine:
             "stalls": [self._stall_frame(stall) for stall in self.stalls],
             "tables": [self._table_frame(table) for table in self.tables],
             "students": [
-                self._student_frame(student)
-                for student in self.students.values()
-                if student.state != StudentState.DONE
+                self._student_render_frame(student) if lightweight_students else self._student_frame(student)
+                for student in active_students
             ],
         }
+        if include_student_details:
+            frame["student_details"] = [
+                self._student_frame(student)
+                for student in active_students
+            ]
         return frame
 
     def _entrance_frame(self, entrance: Entrance) -> dict[str, Any]:
@@ -2421,6 +2455,24 @@ class SimulationEngine:
             "remaining": remaining,
             "progress": progress,
             "status": status,
+        }
+
+    def _student_render_frame(self, student: Student) -> dict[str, Any]:
+        return {
+            "id": student.id,
+            "x": student.x,
+            "y": student.y,
+            "state": student.state.value if isinstance(student.state, StudentState) else str(student.state),
+            "stall_id": student.stall_id,
+            "order_id": student.order_id,
+            "dish_id": student.dish_id,
+            "group_id": student.group_id,
+            "group_size": student.group_size,
+            "table_id": student.table_id,
+            "seat_index": student.seat_index,
+            "facing_x": student.facing_x,
+            "facing_y": student.facing_y,
+            "stuck_time": student.stuck_time,
         }
 
     def _student_frame(self, student: Student) -> dict[str, Any]:

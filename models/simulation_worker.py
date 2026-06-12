@@ -13,6 +13,7 @@ class SimulationWorker(QObject):
     statusChanged = pyqtSignal(str)
     finished = pyqtSignal(object)
     errorOccurred = pyqtSignal(object)
+    _DETAIL_FRAME_INTERVAL_SECONDS = 0.5
 
     def __init__(self, config: SimulationConfig) -> None:
         super().__init__()
@@ -24,6 +25,7 @@ class SimulationWorker(QObject):
             self.engine.initialize()
             self.statusChanged.emit("运行中")
             last_real_time = time.perf_counter()
+            last_detail_frame_time = 0.0
 
             while not self.engine._stop_requested and not self.engine.is_finished:
                 now = time.perf_counter()
@@ -34,13 +36,20 @@ class SimulationWorker(QObject):
 
                 real_delta = now - last_real_time
                 last_real_time = now
-                frame = self.engine.step(real_delta * self.engine.time_scale)
+                include_details = now - last_detail_frame_time >= self._DETAIL_FRAME_INTERVAL_SECONDS
+                frame = self.engine.step(
+                    real_delta * self.engine.time_scale,
+                    lightweight_students=True,
+                    include_student_details=include_details,
+                )
+                if include_details:
+                    last_detail_frame_time = now
                 self.frameReady.emit(frame)
                 QThread.msleep(16)
 
             status = "已停止" if self.engine._stop_requested else "已结束"
             self.statusChanged.emit(status)
-            self.frameReady.emit(self.engine.build_frame())
+            self.frameReady.emit(self.engine.build_frame(include_student_details=True))
             self.finished.emit(self.engine.summary(status))
         except Exception as exc:  # pragma: no cover - delivered to UI at runtime
             self.errorOccurred.emit(exc)

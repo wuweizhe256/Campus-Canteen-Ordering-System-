@@ -170,6 +170,41 @@ class P2GroupSeatingTest(unittest.TestCase):
         self.assertIsNotNone(student_frame["dish_name"])
         self.assertEqual(student_frame["time_in_system"], 42.0)
 
+    def test_lightweight_student_frame_keeps_details_out_of_high_frequency_payload(self) -> None:
+        engine = SimulationEngine(
+            SimulationConfig(
+                sim_minutes=10,
+                table_count=1,
+                two_person_table_count=0,
+                four_person_table_count=1,
+                six_person_table_count=0,
+                seed=20240522,
+                total_student_count=1,
+                max_active_students=1,
+            )
+        )
+        engine.initialize()
+        engine._spawn_group(1)
+        student = next(iter(engine.students.values()))
+        student.state = StudentState.MOVING_TO_QUEUE
+        engine._start_queue_path(student)
+
+        frame = engine.build_frame(lightweight_students=True, include_student_details=True)
+
+        student_frame = frame["students"][0]
+        self.assertEqual(student_frame["id"], student.id)
+        self.assertEqual(student_frame["state"], "moving_to_queue")
+        self.assertIn("facing_x", student_frame)
+        self.assertNotIn("path", student_frame)
+        self.assertNotIn("preferences", student_frame)
+        self.assertNotIn("path_remaining_distance", student_frame)
+
+        detail_frame = frame["student_details"][0]
+        self.assertEqual(detail_frame["id"], student.id)
+        self.assertIn("path", detail_frame)
+        self.assertIn("preferences", detail_frame)
+        self.assertIn("path_remaining_distance", detail_frame)
+
     def test_long_queue_slots_stay_walkable(self) -> None:
         engine = SimulationEngine(SimulationConfig(stall_count=10, table_count=24, seed=20240522))
         engine.initialize()

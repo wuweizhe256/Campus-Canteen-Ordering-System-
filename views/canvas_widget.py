@@ -35,6 +35,7 @@ class CanvasWidget(QWidget):
         self._student_animation_timer = QTimer(self)
         self._student_animation_timer.setInterval(16)
         self._student_animation_timer.timeout.connect(self._advance_student_animation)
+        self._student_details_by_id: dict[int, dict] = {}
         self._static_scene_cache: QPixmap | None = None
         self._static_scene_cache_key: tuple[int, int] | None = None
         self._seated_students_cache: QPixmap | None = None
@@ -43,6 +44,7 @@ class CanvasWidget(QWidget):
 
     def set_frame(self, frame: dict) -> None:
         adapted = self._frame_with_p1_fallback(frame)
+        self._update_student_details_cache(adapted)
         animation_drives_repaint = self._update_student_animations(adapted)
         self.frame = adapted
         if not animation_drives_repaint:
@@ -306,6 +308,36 @@ class CanvasWidget(QWidget):
             self._number(student.get("facing_y"), 0.0),
         )
         return render_student
+
+    def _update_student_details_cache(self, frame: dict) -> None:
+        details = frame.get("student_details")
+        if isinstance(details, list):
+            for student in details:
+                if not isinstance(student, dict):
+                    continue
+                student_id = student.get("id")
+                if isinstance(student_id, (int, float)):
+                    self._student_details_by_id[int(student_id)] = student
+
+        active_ids = {
+            int(student.get("id"))
+            for student in frame.get("students", [])
+            if isinstance(student, dict) and isinstance(student.get("id"), (int, float))
+        }
+        stale_ids = set(self._student_details_by_id) - active_ids
+        for student_id in stale_ids:
+            self._student_details_by_id.pop(student_id, None)
+
+    def _student_detail_or_render(self, student: dict) -> dict:
+        student_id = student.get("id")
+        if not isinstance(student_id, (int, float)):
+            return student
+        detail = self._student_details_by_id.get(int(student_id))
+        if detail is None:
+            return student
+        merged = dict(detail)
+        merged.update(student)
+        return merged
 
     def _ease_out_cubic(self, value: float) -> float:
         value = max(0.0, min(1.0, value))
@@ -603,7 +635,8 @@ class CanvasWidget(QWidget):
             x, y, width, height, _ = rect
             painter.drawRoundedRect(QRectF(x - width / 2, y - height / 2, width, height), 5, 5)
 
-        for student in self.frame.get("students", []):
+        for raw_student in self.frame.get("students", []):
+            student = self._student_detail_or_render(raw_student) if isinstance(raw_student, dict) else raw_student
             if not isinstance(student, dict):
                 continue
             student_point = self._point((student.get("x"), student.get("y")))

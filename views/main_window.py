@@ -46,6 +46,7 @@ class MainWindow(QMainWindow):
         self._stall_popup: StallInfoPopup | None = None
         self._table_popup: TableInfoPopup | None = None
         self._student_popup: StudentInfoPopup | None = None
+        self._student_details_by_id: dict[int, dict] = {}
         self._stats_update_clock = QElapsedTimer()
         self._stats_update_clock.invalidate()
 
@@ -223,8 +224,9 @@ class MainWindow(QMainWindow):
         if self._student_popup is not None:
             self._student_popup.close()
         student_id = student.get("id")
-        self.canvas.set_selected_student(int(student_id) if isinstance(student_id, (int, float)) else None)
-        self._student_popup = StudentInfoPopup(student, self)
+        selected_id = int(student_id) if isinstance(student_id, (int, float)) else None
+        self.canvas.set_selected_student(selected_id)
+        self._student_popup = StudentInfoPopup(self._student_detail_or_render(student), self)
         self._student_popup.finished.connect(self._student_popup_closed)
         from PyQt6.QtGui import QCursor
         cursor_pos = QCursor.pos()
@@ -283,6 +285,7 @@ class MainWindow(QMainWindow):
         self.path_checkbox.setChecked(config.show_path_debug_layer)
         self.obstacle_checkbox.setChecked(config.show_obstacle_layer)
         self._stats_update_clock.invalidate()
+        self._student_details_by_id.clear()
         self._running = True
         self._paused = False
         self.start_button.setEnabled(False)
@@ -321,6 +324,7 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot(object)
     def update_frame(self, frame: dict) -> None:
+        self._update_student_details_cache(frame)
         self.canvas.set_frame(frame)
         if self._should_update_stats_panel():
             self.stats_panel.set_frame(frame)
@@ -361,13 +365,48 @@ class MainWindow(QMainWindow):
         if self._student_popup is None:
             return
         popup_id = self._student_popup.student_id()
+        active_student = None
         for student in frame.get("students", []):
             if isinstance(student, dict) and student.get("id") == popup_id:
-                self._student_popup.update_student(student)
-                self.canvas.set_selected_student(popup_id)
-                return
-        self._student_popup.update_student(None)
-        self.canvas.set_selected_student(None)
+                active_student = student
+                break
+        if active_student is None:
+            self._student_details_by_id.pop(popup_id, None)
+            self._student_popup.update_student(None)
+            self.canvas.set_selected_student(None)
+            return
+        self._student_popup.update_student(self._student_detail_or_render(active_student))
+        self.canvas.set_selected_student(popup_id)
+
+    def _update_student_details_cache(self, frame: dict) -> None:
+        details = frame.get("student_details")
+        if isinstance(details, list):
+            for student in details:
+                if not isinstance(student, dict):
+                    continue
+                student_id = student.get("id")
+                if isinstance(student_id, (int, float)):
+                    self._student_details_by_id[int(student_id)] = student
+
+        active_ids = {
+            int(student.get("id"))
+            for student in frame.get("students", [])
+            if isinstance(student, dict) and isinstance(student.get("id"), (int, float))
+        }
+        stale_ids = set(self._student_details_by_id) - active_ids
+        for student_id in stale_ids:
+            self._student_details_by_id.pop(student_id, None)
+
+    def _student_detail_or_render(self, student: dict) -> dict:
+        student_id = student.get("id")
+        if not isinstance(student_id, (int, float)):
+            return student
+        detail = self._student_details_by_id.get(int(student_id))
+        if detail is None:
+            return student
+        merged = dict(detail)
+        merged.update(student)
+        return merged
 
     @pyqtSlot(str)
     def set_status(self, status: str) -> None:
