@@ -402,7 +402,6 @@ class CanvasWidget(QWidget):
         self._draw_stalls(painter)
         self._draw_tables(painter)
         self._draw_students(painter)
-        self._draw_header(painter)
 
     def _draw_static_scene(self, painter: QPainter) -> None:
         width, height = self._frame_size()
@@ -585,7 +584,7 @@ class CanvasWidget(QWidget):
         painter.drawLine(50, 118, int(width - 50), 118)
         painter.setPen(QColor("#6b4f3d"))
         painter.setFont(ui_font(10, QFont.Weight.Bold))
-        painter.drawText(QRectF(70, 48, width - 140, 24), Qt.AlignmentFlag.AlignCenter, "靠墙出餐窗口区")
+        painter.drawText(QRectF(44, 44, 190, 24), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "靠墙出餐窗口区")
 
     def _draw_path_debug(self, painter: QPainter) -> None:
         painter.setFont(ui_font(8, QFont.Weight.Bold))
@@ -925,44 +924,82 @@ class CanvasWidget(QWidget):
         if not dishes:
             return
 
-        panel_width = 104.0
-        row_height = 16.0
+        panel_width = 144.0
+        row_height = 20.0
         visible_dishes = dishes[:2]
-        panel_height = 18.0 + len(visible_dishes) * row_height
+        panel_height = 20.0 + len(visible_dishes) * row_height
         left = x - panel_width / 2
-        top = y - 82.0
+        top = y - 76.0
 
         painter.setPen(QPen(QColor(234, 179, 8, 135), 1))
         painter.setBrush(QColor(255, 251, 235, 232))
         painter.drawRoundedRect(QRectF(left, top, panel_width, panel_height), 6, 6)
 
         painter.setPen(QColor("#854d0e"))
-        painter.setFont(ui_font(7, QFont.Weight.Bold))
+        painter.setFont(ui_font(8, QFont.Weight.Bold))
         suffix = f" +{len(dishes) - len(visible_dishes)}" if len(dishes) > len(visible_dishes) else ""
-        painter.drawText(QRectF(left + 6, top + 3, panel_width - 12, 12), Qt.AlignmentFlag.AlignLeft, f"菜品{suffix}")
+        painter.drawText(QRectF(left + 8, top + 3, panel_width - 16, 14), Qt.AlignmentFlag.AlignLeft, f"菜品{suffix}")
 
-        painter.setFont(ui_font(7))
         for index, dish in enumerate(visible_dishes):
-            row_top = top + 18.0 + index * row_height
+            row_top = top + 20.0 + index * row_height
             available = self._dish_available(dish)
-            name = str(dish.get("name") or f"菜品{index + 1}")
-            name = painter.fontMetrics().elidedText(name, Qt.TextElideMode.ElideRight, 38)
+            full_name = str(dish.get("name") or f"菜品{index + 1}")
             price = self._format_price(dish.get("price"))
             stock = self._display_value(dish.get("stock"))
+            name_rect = QRectF(left + 35, row_top + 2, 54, 16)
+            row_rect = QRectF(left + 6, row_top + 1, panel_width - 12, 18)
+            hovered = self._is_hovered(row_rect)
+            painter.setFont(ui_font(8))
+            name = painter.fontMetrics().elidedText(full_name, Qt.TextElideMode.ElideRight, int(name_rect.width()))
 
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor("#dcfce7" if available else "#fee2e2"))
-            painter.drawRoundedRect(QRectF(left + 6, row_top + 2, 24, 12), 5, 5)
+            painter.drawRoundedRect(QRectF(left + 7, row_top + 2, 24, 15), 6, 6)
 
             painter.setPen(QColor("#166534" if available else "#991b1b"))
-            painter.setFont(ui_font(7, QFont.Weight.Bold))
-            painter.drawText(QRectF(left + 7, row_top + 1, 22, 13), Qt.AlignmentFlag.AlignCenter, "售" if available else "罄")
+            painter.setFont(ui_font(8, QFont.Weight.Bold))
+            painter.drawText(QRectF(left + 8, row_top + 1, 22, 16), Qt.AlignmentFlag.AlignCenter, "售" if available else "罄")
 
             painter.setPen(QColor("#334155"))
-            painter.setFont(ui_font(7))
-            painter.drawText(QRectF(left + 33, row_top + 1, 40, 14), Qt.AlignmentFlag.AlignLeft, name)
-            painter.drawText(QRectF(left + 71, row_top + 1, 20, 14), Qt.AlignmentFlag.AlignRight, price)
-            painter.drawText(QRectF(left + 93, row_top + 1, 8, 14), Qt.AlignmentFlag.AlignRight, stock)
+            painter.setFont(ui_font(8))
+            painter.drawText(name_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, name)
+            painter.setPen(QColor("#7c2d12"))
+            painter.setFont(ui_font(8, QFont.Weight.Bold))
+            painter.drawText(QRectF(left + 91, row_top + 2, 29, 16), Qt.AlignmentFlag.AlignRight, f"¥{price}")
+            painter.setPen(QColor("#64736e"))
+            painter.setFont(ui_font(7, QFont.Weight.Bold))
+            painter.drawText(QRectF(left + 122, row_top + 2, 16, 16), Qt.AlignmentFlag.AlignRight, f"余{stock}")
+            if hovered:
+                self._draw_dish_tooltip(painter, dish, full_name, left + panel_width + 4, row_top - 7)
+
+    def _draw_dish_tooltip(
+        self,
+        painter: QPainter,
+        dish: dict,
+        name: str,
+        left: float,
+        top: float,
+    ) -> None:
+        width = 150.0
+        height = 58.0
+        frame_width, frame_height = self._frame_size()
+        left = min(left, frame_width - width - 12)
+        top = min(max(24.0, top), frame_height - height - 24)
+        rect = QRectF(left, top, width, height)
+
+        painter.setPen(QPen(QColor(120, 82, 36, 130), 1))
+        painter.setBrush(QColor(255, 250, 240, 246))
+        painter.drawRoundedRect(rect, 8, 8)
+
+        painter.setPen(QColor("#17211f"))
+        painter.setFont(ui_font(8, QFont.Weight.Bold))
+        painter.drawText(QRectF(left + 8, top + 7, width - 16, 16), Qt.AlignmentFlag.AlignLeft, name)
+        painter.setPen(QColor("#7c2d12"))
+        painter.setFont(ui_font(8, QFont.Weight.Bold))
+        painter.drawText(QRectF(left + 8, top + 29, 62, 16), Qt.AlignmentFlag.AlignLeft, f"¥{self._format_price(dish.get('price'))}")
+        painter.setPen(QColor("#64736e"))
+        painter.setFont(ui_font(8))
+        painter.drawText(QRectF(left + 74, top + 29, width - 82, 16), Qt.AlignmentFlag.AlignRight, f"余 {self._display_value(dish.get('stock'))}")
 
     def _stall_dishes(self, stall: dict) -> list[dict[str, Any]]:
         raw_dishes = stall.get("dishes")
@@ -1336,10 +1373,10 @@ class CanvasWidget(QWidget):
 
         painter.setPen(QPen(QColor("#ffffff"), 1))
         painter.setBrush(color)
-        painter.drawEllipse(QRectF(x + 9, y - 8, 12, 12))
+        painter.drawEllipse(QRectF(x + 8, y - 9, 15, 15))
         painter.setPen(QColor("#ffffff"))
-        painter.setFont(ui_font(6, QFont.Weight.Bold))
-        painter.drawText(QRectF(x + 9, y - 8, 12, 12), Qt.AlignmentFlag.AlignCenter, label)
+        painter.setFont(ui_font(7, QFont.Weight.Bold))
+        painter.drawText(QRectF(x + 8, y - 9, 15, 15), Qt.AlignmentFlag.AlignCenter, label)
 
         student_id = self._seat_student_id(seat)
         if student_id is not None:
@@ -1491,32 +1528,32 @@ class CanvasWidget(QWidget):
             painter.drawText(QRectF(badge_x + 13, badge_y + 9, 24, 12), Qt.AlignmentFlag.AlignLeft, f"x{int(group_size)}")
 
     def _draw_student_expression(self, painter: QPainter, x: float, y: float, state: str) -> None:
-        painter.setFont(ui_font(8, QFont.Weight.Bold))
+        painter.setFont(ui_font(9, QFont.Weight.Bold))
         if state == "deciding":
             painter.setPen(QColor("#7c3aed"))
-            painter.drawText(QRectF(x + 8, y - 24, 16, 16), Qt.AlignmentFlag.AlignCenter, "?")
+            painter.drawText(QRectF(x + 8, y - 25, 20, 18), Qt.AlignmentFlag.AlignCenter, "?")
             painter.setPen(QPen(QColor("#831843"), 1.1))
             painter.drawLine(int(x - 4), int(y + 8), int(x + 4), int(y + 8))
         elif state in ("leaving", "done"):
             painter.setPen(QPen(QColor("#831843"), 1.2))
             painter.drawArc(QRectF(x - 6, y + 2, 12, 9), 200 * 16, 140 * 16)
             painter.setPen(QColor("#15803d"))
-            painter.drawText(QRectF(x - 13, y + 11, 26, 14), Qt.AlignmentFlag.AlignCenter, "离")
+            painter.drawText(QRectF(x - 13, y + 10, 28, 16), Qt.AlignmentFlag.AlignCenter, "离")
         elif state == "eating":
             painter.setPen(QPen(QColor("#831843"), 1.1))
             painter.drawArc(QRectF(x - 5, y + 4, 10, 7), 200 * 16, 140 * 16)
         elif state == "searching_seat":
             painter.setPen(QColor("#0f766e"))
-            painter.drawText(QRectF(x + 8, y - 24, 20, 16), Qt.AlignmentFlag.AlignCenter, "座?")
+            painter.drawText(QRectF(x + 8, y - 25, 24, 18), Qt.AlignmentFlag.AlignCenter, "座?")
         elif state in ("moving_to_seat", "moving_to_table"):
             painter.setPen(QColor("#0369a1"))
-            painter.drawText(QRectF(x + 8, y - 24, 18, 16), Qt.AlignmentFlag.AlignCenter, "座")
+            painter.drawText(QRectF(x + 8, y - 25, 22, 18), Qt.AlignmentFlag.AlignCenter, "座")
         elif state == "moving_to_tray_return":
             painter.setPen(QColor("#0f766e"))
-            painter.drawText(QRectF(x + 8, y - 24, 18, 16), Qt.AlignmentFlag.AlignCenter, "收")
+            painter.drawText(QRectF(x + 8, y - 25, 22, 18), Qt.AlignmentFlag.AlignCenter, "收")
         elif state == "waiting_seat":
             painter.setPen(QColor("#ea580c"))
-            painter.drawText(QRectF(x + 8, y - 24, 18, 16), Qt.AlignmentFlag.AlignCenter, "等")
+            painter.drawText(QRectF(x + 8, y - 25, 22, 18), Qt.AlignmentFlag.AlignCenter, "等")
         else:
             painter.setPen(QPen(QColor("#831843"), 1.1))
             painter.drawArc(QRectF(x - 6, y + 6, 12, 8), 20 * 16, 140 * 16)

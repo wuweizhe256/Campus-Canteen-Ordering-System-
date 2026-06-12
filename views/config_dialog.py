@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
 )
 
 from models.entities import SimulationConfig
-from utils.fonts import stylesheet_font_family
+from views.ui_widgets import dialog_stylesheet
 
 
 class ConfigDialog(QDialog):
@@ -95,6 +95,7 @@ class ConfigDialog(QDialog):
         buttons.setContentsMargins(20, 12, 20, 20)
         buttons.button(QDialogButtonBox.StandardButton.Ok).setText("\u5f00\u59cb\u4eff\u771f")
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("\u53d6\u6d88")
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setObjectName("DialogAcceptButton")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
 
@@ -116,8 +117,9 @@ class ConfigDialog(QDialog):
         self.setLayout(layout)
         self._update_table_count()
         self._apply_style()
-        self.setMinimumSize(680, 420)
-        self.resize(720, 460)
+        self.setSizeGripEnabled(True)
+        self.setMinimumSize(560, 360)
+        self.resize(640, 420)
 
     def _form_layout(self) -> QFormLayout:
         form = QFormLayout()
@@ -164,51 +166,4 @@ class ConfigDialog(QDialog):
         )
 
     def _apply_style(self) -> None:
-        font_family = stylesheet_font_family()
-        style = """
-            QDialog {
-                background: #fff7ed;
-                font-family: "Microsoft YaHei UI";
-            }
-            QGroupBox {
-                color: #0f172a;
-                background: #fffbf5;
-                border: 1px solid #d6c2a8;
-                border-radius: 8px;
-                margin-top: 12px;
-                font: 700 11pt "Microsoft YaHei UI";
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 12px;
-                padding: 0 6px;
-            }
-            QLabel {
-                color: #0f172a;
-                font: 10pt "Microsoft YaHei UI";
-            }
-            QSpinBox {
-                color: #0f172a;
-                background: #ffffff;
-                border: 1px solid #cbd5e1;
-                border-radius: 6px;
-                padding: 7px 10px;
-                min-width: 116px;
-                min-height: 28px;
-                font: 10pt "Microsoft YaHei UI";
-            }
-            QPushButton {
-                color: #0f172a;
-                background: #e2e8f0;
-                border: 0;
-                border-radius: 8px;
-                padding: 10px 24px;
-                min-width: 96px;
-                min-height: 34px;
-                font: 700 10pt "Microsoft YaHei UI";
-            }
-            QPushButton:hover {
-                background: #cbd5e1;
-            }
-            """
-        self.setStyleSheet(style.replace("Microsoft YaHei UI", font_family))
+        self.setStyleSheet(dialog_stylesheet())
