@@ -13,6 +13,7 @@ from utils.fonts import ui_font
 class CanvasWidget(QWidget):
     zoomChanged = pyqtSignal(float)
     stallClicked = pyqtSignal(dict)
+    tableClicked = pyqtSignal(dict)
     _STUDENT_MOVE_ANIMATION_MS = 120
     _STUDENT_TELEPORT_DISTANCE = 360.0
 
@@ -408,6 +409,10 @@ class CanvasWidget(QWidget):
                     stall = self._hit_stall(*self._hover_scene_pos)
                     if stall is not None:
                         self.stallClicked.emit(stall)
+                    else:
+                        table = self._hit_table(*self._hover_scene_pos)
+                        if table is not None:
+                            self.tableClicked.emit(table)
             if not was_drag:
                 event.accept()
             return
@@ -1100,6 +1105,35 @@ class CanvasWidget(QWidget):
                 return stall
         return None
 
+    def _hit_table(self, scene_x: float, scene_y: float) -> dict | None:
+        """返回被点击的 table 帧数据 dict，未命中则返回 None。"""
+        if not self.frame:
+            return None
+        for table in self.frame.get("tables", []) or []:
+            if not isinstance(table, dict):
+                continue
+            point = self._point((table.get("x"), table.get("y")))
+            if point is None:
+                continue
+            if self._table_hit_rect(table, point[0], point[1]).contains(QPointF(scene_x, scene_y)):
+                return table
+        return None
+
+    def _table_hit_rect(self, table: dict, x: float, y: float) -> QRectF:
+        _, seat_count = self._table_type_and_seat_count(table)
+        table_width = {2: 52.0, 4: 64.0, 6: 84.0}.get(seat_count, 64.0)
+        table_height = 38.0
+        left = x - table_width / 2 - 12.0
+        right = x + table_width / 2 + 12.0
+        top = y - table_height / 2 - 18.0
+        bottom = y + table_height / 2 + 34.0
+        for dx, dy in self._table_seat_offsets(seat_count):
+            left = min(left, x + dx - 6.0)
+            right = max(right, x + dx + 24.0)
+            top = min(top, y + dy - 10.0)
+            bottom = max(bottom, y + dy + 28.0)
+        return QRectF(left, top, right - left, bottom - top)
+
     def _order_status_name(self, status: str) -> str:
         names = {
             "queued": "排队等待",
@@ -1159,6 +1193,10 @@ class CanvasWidget(QWidget):
 
             self._draw_shadow(painter, x, y + 28, table_width + 22, 24, QColor(71, 85, 105, 40))
             self._draw_iso_box(painter, x, y, table_width, table_height, 14, QColor("#fde68a"), QColor("#d97706"), QColor("#92400e"))
+            if self._is_hovered(self._table_hit_rect(table, x, y)):
+                painter.setPen(QPen(QColor(15, 118, 110, 170), 2.0))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRoundedRect(QRectF(x - table_width / 2 - 8, y - 29, table_width + 16, 66), 10, 10)
             painter.setPen(QPen(QColor("#92400e"), 1.2))
             painter.drawLine(int(x - table_width * 0.33), int(y + 18), int(x - table_width * 0.39), int(y + 34))
             painter.drawLine(int(x + table_width * 0.33), int(y + 18), int(x + table_width * 0.27), int(y + 34))

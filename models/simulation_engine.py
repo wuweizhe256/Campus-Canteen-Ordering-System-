@@ -2229,26 +2229,7 @@ class SimulationEngine:
             "obstacles": self._obstacle_frames(),
             "collision_boxes": self._build_collision_boxes(),
             "stalls": [self._stall_frame(stall) for stall in self.stalls],
-            "tables": [
-                {
-                    "id": table.id,
-                    "x": table.x,
-                    "y": table.y,
-                    "table_type": table.table_type,
-                    "seat_count": table.seat_count,
-                    "occupied": table.occupied_count,
-                    "seats": [seat.student_id for seat in table.seats],
-                    "seat_frames": [
-                        {
-                            "index": seat_index,
-                            "status": seat.status.value,
-                            "student_id": seat.student_id,
-                        }
-                        for seat_index, seat in enumerate(table.seats)
-                    ],
-                }
-                for table in self.tables
-            ],
+            "tables": [self._table_frame(table) for table in self.tables],
             "students": [
                 self._student_frame(student)
                 for student in self.students.values()
@@ -2277,6 +2258,113 @@ class SimulationEngine:
             "is_congested": self._exit_density(exit_area) >= 4,
         }
 
+    def _table_frame(self, table: Table) -> dict[str, Any]:
+        seat_frames = [
+            self._table_seat_frame(table, seat_index, seat)
+            for seat_index, seat in enumerate(table.seats)
+        ]
+        occupied_count = sum(1 for seat in table.seats if seat.status == SeatStatus.OCCUPIED)
+        reserved_count = sum(1 for seat in table.seats if seat.status == SeatStatus.RESERVED)
+        free_count = max(0, table.seat_count - occupied_count - reserved_count)
+        return {
+            "id": table.id,
+            "x": table.x,
+            "y": table.y,
+            "table_type": table.table_type,
+            "seat_count": table.seat_count,
+            "occupied": occupied_count,
+            "occupied_count": occupied_count,
+            "reserved_count": reserved_count,
+            "free_count": free_count,
+            "occupancy_rate": occupied_count / max(1, table.seat_count),
+            "seats": [seat.student_id for seat in table.seats],
+            "seat_frames": seat_frames,
+            "companion_groups": self._table_companion_groups(seat_frames),
+        }
+
+    def _table_seat_frame(self, table: Table, seat_index: int, seat: Any) -> dict[str, Any]:
+        student = self.students.get(seat.student_id) if seat.student_id is not None else None
+        frame = {
+            "index": seat_index,
+            "status": seat.status.value if isinstance(seat.status, SeatStatus) else str(seat.status),
+            "student_id": seat.student_id,
+        }
+        if student is not None:
+            frame["student"] = self._table_student_frame(student)
+        return frame
+
+    def _table_student_frame(self, student: Student) -> dict[str, Any]:
+        eating_metrics = self._student_eating_metrics(student)
+        companion_ids = [
+            member.id
+            for member in self.students.values()
+            if member.id != student.id
+            and member.group_id is not None
+            and member.group_id == student.group_id
+            and member.table_id == student.table_id
+            and member.state != StudentState.DONE
+        ]
+        return {
+            "id": student.id,
+            "state": student.state.value if isinstance(student.state, StudentState) else str(student.state),
+            "group_id": student.group_id,
+            "group_size": student.group_size,
+            "seat_index": student.seat_index,
+            "dish_id": student.dish_id,
+            "order_id": student.order_id,
+            "eating_duration": eating_metrics["duration"],
+            "eating_elapsed": eating_metrics["elapsed"],
+            "eating_remaining": eating_metrics["remaining"],
+            "eating_progress": eating_metrics["progress"],
+            "companion_ids": sorted(companion_ids),
+        }
+
+    def _table_companion_groups(self, seat_frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        groups: dict[int, dict[str, Any]] = {}
+        for seat in seat_frames:
+            student = seat.get("student")
+            if not isinstance(student, dict):
+                continue
+            group_id = student.get("group_id")
+            group_size = student.get("group_size")
+            if group_id is None or not isinstance(group_size, int) or group_size <= 1:
+                continue
+            group = groups.setdefault(
+                int(group_id),
+                {
+                    "group_id": int(group_id),
+                    "group_size": group_size,
+                    "members": [],
+                },
+            )
+            group["group_size"] = max(int(group["group_size"]), group_size)
+            group["members"].append(
+                {
+                    "student_id": student.get("id"),
+                    "seat_index": seat.get("index"),
+                    "state": student.get("state"),
+                    "eating_progress": student.get("eating_progress"),
+                }
+            )
+
+        companion_groups = []
+        for group in groups.values():
+            members = sorted(
+                group["members"],
+                key=lambda item: (
+                    item.get("seat_index") if item.get("seat_index") is not None else 999,
+                    item.get("student_id") if item.get("student_id") is not None else 999,
+                ),
+            )
+            companion_groups.append(
+                {
+                    "group_id": group["group_id"],
+                    "group_size": group["group_size"],
+                    "member_ids": [member.get("student_id") for member in members],
+                    "members": members,
+                }
+            )
+        return sorted(companion_groups, key=lambda group: group["group_id"])
 
     def _stall_frame(self, stall: Stall) -> dict[str, Any]:
         dishes = stall.dishes or []
@@ -2336,6 +2424,7 @@ class SimulationEngine:
         }
 
     def _student_frame(self, student: Student) -> dict[str, Any]:
+        eating_metrics = self._student_eating_metrics(student)
         return {
             "id": student.id,
             "x": student.x,
@@ -2361,12 +2450,30 @@ class SimulationEngine:
             "reroute_count": student.reroute_count,
             "facing_x": student.facing_x,
             "facing_y": student.facing_y,
-            "eating_duration": student.eating_time,
-            "eating_remaining": (
-                max(0.0, student.eating_done_at - self.game_time)
-                if student.eating_done_at is not None
-                else None
-            ),
+            "eating_duration": eating_metrics["duration"],
+            "eating_elapsed": eating_metrics["elapsed"],
+            "eating_remaining": eating_metrics["remaining"],
+            "eating_progress": eating_metrics["progress"],
+        }
+
+    def _student_eating_metrics(self, student: Student) -> dict[str, float | None]:
+        duration = max(0.001, float(student.eating_time))
+        if student.state != StudentState.EATING or student.eating_done_at is None:
+            return {
+                "duration": duration,
+                "elapsed": None,
+                "remaining": None,
+                "progress": None,
+            }
+
+        remaining = max(0.0, student.eating_done_at - self.game_time)
+        elapsed = max(0.0, min(duration, duration - remaining))
+        progress = max(0.0, min(1.0, elapsed / duration))
+        return {
+            "duration": duration,
+            "elapsed": elapsed,
+            "remaining": remaining,
+            "progress": progress,
         }
 
     def _stall_cook_remaining(self, stall: Stall) -> float:

@@ -23,6 +23,7 @@ from views.config_dialog import ConfigDialog
 from views.settings_dialog import SettingsDialog
 from views.stall_info_popup import StallInfoPopup
 from views.stats_panel import StatsPanel
+from views.table_info_popup import TableInfoPopup
 
 
 class MainWindow(QMainWindow):
@@ -41,6 +42,7 @@ class MainWindow(QMainWindow):
         self._font_scale = 1.0
         self.settings_dialog: SettingsDialog | None = None
         self._stall_popup: StallInfoPopup | None = None
+        self._table_popup: TableInfoPopup | None = None
 
         self.canvas = CanvasWidget()
         self.stats_panel = StatsPanel()
@@ -93,6 +95,7 @@ class MainWindow(QMainWindow):
         self.zoom_slider.valueChanged.connect(self._zoom_slider_changed)
         self.canvas.zoomChanged.connect(self._canvas_zoom_changed)
         self.canvas.stallClicked.connect(self._show_stall_popup)
+        self.canvas.tableClicked.connect(self._show_table_popup)
         self.reset_view_button.clicked.connect(self.canvas.reset_view)
         self.settings_button.clicked.connect(self._open_settings_dialog)
 
@@ -164,6 +167,8 @@ class MainWindow(QMainWindow):
         self.settings_dialog = None
 
     def _show_stall_popup(self, stall: dict) -> None:
+        if self._table_popup is not None:
+            self._table_popup.close()
         if self._stall_popup is not None:
             self._stall_popup.close()
         self._stall_popup = StallInfoPopup(stall, self)
@@ -179,6 +184,24 @@ class MainWindow(QMainWindow):
 
     def _stall_popup_closed(self) -> None:
         self._stall_popup = None
+
+    def _show_table_popup(self, table: dict) -> None:
+        if self._stall_popup is not None:
+            self._stall_popup.close()
+        if self._table_popup is not None:
+            self._table_popup.close()
+        self._table_popup = TableInfoPopup(table, self)
+        self._table_popup.finished.connect(self._table_popup_closed)
+        from PyQt6.QtGui import QCursor
+        cursor_pos = QCursor.pos()
+        self._table_popup.move(
+            cursor_pos.x() + 16,
+            cursor_pos.y() + 16,
+        )
+        self._table_popup.show()
+
+    def _table_popup_closed(self) -> None:
+        self._table_popup = None
 
     @pyqtSlot(object, int)
     def _apply_window_settings(self, resolution: tuple[int, int] | None, font_size: int) -> None:
@@ -265,6 +288,7 @@ class MainWindow(QMainWindow):
         self.canvas.set_frame(frame)
         self.stats_panel.set_frame(frame)
         self._refresh_stall_popup(frame)
+        self._refresh_table_popup(frame)
 
     def _refresh_stall_popup(self, frame: dict) -> None:
         if self._stall_popup is None:
@@ -273,6 +297,15 @@ class MainWindow(QMainWindow):
         for stall in frame.get("stalls", []):
             if isinstance(stall, dict) and stall.get("id") == popup_id:
                 self._stall_popup.update_stall(stall)
+                return
+
+    def _refresh_table_popup(self, frame: dict) -> None:
+        if self._table_popup is None:
+            return
+        popup_id = self._table_popup.table_id()
+        for table in frame.get("tables", []):
+            if isinstance(table, dict) and table.get("id") == popup_id:
+                self._table_popup.update_table(table)
                 return
 
     @pyqtSlot(str)

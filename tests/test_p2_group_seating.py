@@ -104,6 +104,42 @@ class P2GroupSeatingTest(unittest.TestCase):
         self.assertEqual(seat.status, SeatStatus.OCCUPIED)
         self.assertEqual((student.x, student.y), (seat_x, seat_y))
 
+    def test_table_frame_includes_occupancy_progress_and_companions(self) -> None:
+        engine = SimulationEngine(
+            SimulationConfig(
+                sim_minutes=10,
+                table_count=1,
+                two_person_table_count=0,
+                four_person_table_count=1,
+                six_person_table_count=0,
+                seed=20240522,
+                total_student_count=2,
+                max_active_students=2,
+            )
+        )
+        engine.initialize()
+        engine._spawn_group(2)
+        table = engine.tables[0]
+        members = sorted(engine.students.values(), key=lambda student: student.id)
+        engine.game_time = 120.0
+
+        for seat_index, student in enumerate(members):
+            table.seats[seat_index].status = SeatStatus.OCCUPIED
+            table.seats[seat_index].student_id = student.id
+            student.table_id = table.id
+            student.seat_index = seat_index
+            student.state = StudentState.EATING
+            student.eating_duration = 300.0
+            student.eating_done_at = 300.0
+
+        table_frame = engine.build_frame()["tables"][0]
+
+        self.assertEqual(table_frame["occupied_count"], 2)
+        self.assertEqual(table_frame["reserved_count"], 0)
+        self.assertAlmostEqual(table_frame["seat_frames"][0]["student"]["eating_progress"], 0.4)
+        self.assertEqual(table_frame["seat_frames"][0]["student"]["companion_ids"], [members[1].id])
+        self.assertEqual(table_frame["companion_groups"][0]["member_ids"], [member.id for member in members])
+
     def test_long_queue_slots_stay_walkable(self) -> None:
         engine = SimulationEngine(SimulationConfig(stall_count=10, table_count=24, seed=20240522))
         engine.initialize()
