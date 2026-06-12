@@ -15,7 +15,7 @@ from utils.fonts import stylesheet_font_family
 
 
 class SettingsDialog(QDialog):
-    settingsApplied = pyqtSignal(tuple, int)
+    settingsApplied = pyqtSignal(object, int)
 
     RESOLUTIONS = (
         (1280, 720),
@@ -35,6 +35,7 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("设置")
         self.setModal(False)
         self.setWindowFlag(Qt.WindowType.Tool, True)
+        self._applied_resolution = current_resolution
 
         self.resolution_combo = QComboBox()
         resolutions = list(self.RESOLUTIONS)
@@ -80,10 +81,14 @@ class SettingsDialog(QDialog):
     def _button_clicked(self, button) -> None:
         role = self.sender().buttonRole(button)
         if role == QDialogButtonBox.ButtonRole.ApplyRole:
+            current_resolution = self.resolution_combo.currentData()
+            resolution = current_resolution if current_resolution != self._applied_resolution else None
             self.settingsApplied.emit(
-                self.resolution_combo.currentData(),
+                resolution,
                 self.font_size_spin.value(),
             )
+            if resolution is not None:
+                self._applied_resolution = current_resolution
             return
         self.close()
 

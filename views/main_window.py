@@ -34,7 +34,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("校园食堂就餐仿真系统")
-        self.resize(1480, 860)
+        self.resize(1600, 920)
         self._running = False
         self._paused = False
         self._font_point_size = 10
@@ -50,6 +50,7 @@ class MainWindow(QMainWindow):
 
         self.start_button = QPushButton("开始仿真")
         self.start_button.setObjectName("PrimaryButton")
+        self.start_button.setMinimumSize(118, 42)
         self.pause_button = QPushButton("暂停")
         self.pause_button.setObjectName("SecondaryButton")
         self.pause_button.setEnabled(False)
@@ -179,12 +180,13 @@ class MainWindow(QMainWindow):
     def _stall_popup_closed(self) -> None:
         self._stall_popup = None
 
-    @pyqtSlot(tuple, int)
-    def _apply_window_settings(self, resolution: tuple[int, int], font_size: int) -> None:
-        width, height = resolution
-        if self.isMaximized():
-            self.showNormal()
-        self.resize(width, height)
+    @pyqtSlot(object, int)
+    def _apply_window_settings(self, resolution: tuple[int, int] | None, font_size: int) -> None:
+        if resolution is not None:
+            width, height = resolution
+            if self.isMaximized():
+                self.showNormal()
+            self.resize(width, height)
 
         self._font_point_size = font_size
         self._font_scale = font_size / 10.0
@@ -195,7 +197,10 @@ class MainWindow(QMainWindow):
         self._apply_style()
         self.stats_panel.apply_font_scale(self._font_scale)
         self.canvas.update()
-        self.status_label.setText(f"设置已应用：{width} x {height}，字体 {font_size} pt")
+        if resolution is None:
+            self.status_label.setText(f"设置已应用：字体 {font_size} pt")
+        else:
+            self.status_label.setText(f"设置已应用：{width} x {height}，字体 {font_size} pt")
         self._position_settings_dialog()
 
     def _position_settings_dialog(self) -> None:
