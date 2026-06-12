@@ -140,6 +140,36 @@ class P2GroupSeatingTest(unittest.TestCase):
         self.assertEqual(table_frame["seat_frames"][0]["student"]["companion_ids"], [members[1].id])
         self.assertEqual(table_frame["companion_groups"][0]["member_ids"], [member.id for member in members])
 
+    def test_student_frame_includes_realtime_navigation_details(self) -> None:
+        engine = SimulationEngine(
+            SimulationConfig(
+                sim_minutes=10,
+                table_count=1,
+                two_person_table_count=0,
+                four_person_table_count=1,
+                six_person_table_count=0,
+                seed=20240522,
+                total_student_count=1,
+                max_active_students=1,
+            )
+        )
+        engine.initialize()
+        engine._spawn_group(1)
+        student = next(iter(engine.students.values()))
+        student.state = StudentState.MOVING_TO_QUEUE
+        engine._start_queue_path(student)
+        engine.game_time = student.spawn_time + 42.0
+
+        student_frame = engine.build_frame()["students"][0]
+
+        self.assertEqual(student_frame["path_status"], "active")
+        self.assertIsNotNone(student_frame["path_id"])
+        self.assertGreater(student_frame["path_waypoint_count"], 0)
+        self.assertIsNotNone(student_frame["path_remaining_distance"])
+        self.assertEqual(student_frame["queue_position"], 1)
+        self.assertIsNotNone(student_frame["dish_name"])
+        self.assertEqual(student_frame["time_in_system"], 42.0)
+
     def test_long_queue_slots_stay_walkable(self) -> None:
         engine = SimulationEngine(SimulationConfig(stall_count=10, table_count=24, seed=20240522))
         engine.initialize()

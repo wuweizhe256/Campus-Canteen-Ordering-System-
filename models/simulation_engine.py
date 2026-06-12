@@ -2425,6 +2425,7 @@ class SimulationEngine:
 
     def _student_frame(self, student: Student) -> dict[str, Any]:
         eating_metrics = self._student_eating_metrics(student)
+        path_metrics = self._student_path_metrics(student)
         return {
             "id": student.id,
             "x": student.x,
@@ -2437,17 +2438,38 @@ class SimulationEngine:
             "veg_pref": student.veg_pref,
             "preferences": dict(student.preferences or {}),
             "dish_id": student.dish_id,
+            "dish_name": self._student_dish_name(student),
             "order_id": student.order_id,
             "group_id": student.group_id,
             "group_size": student.group_size,
             "entrance_id": student.entrance_id,
             "exit_id": student.exit_id,
             "stall_id": student.stall_id,
+            "queue_position": self._student_queue_position(student),
             "table_id": student.table_id,
             "seat_index": student.seat_index,
+            "time_in_system": max(0.0, self.game_time - student.spawn_time),
+            "decision_remaining": (
+                max(0.0, student.decision_done_at - self.game_time)
+                if student.state == StudentState.DECIDING
+                else None
+            ),
+            "waiting_seat_time": (
+                max(0.0, self.game_time - student.waiting_seat_since)
+                if student.waiting_seat_since is not None
+                else None
+            ),
             "actual_speed": student.actual_speed,
             "stuck_time": student.stuck_time,
             "reroute_count": student.reroute_count,
+            "path_id": student.path_id,
+            "path_started_at": student.path_started_at,
+            "path_duration": path_metrics["duration"],
+            "path_length": student.path_length,
+            "path_remaining_distance": path_metrics["remaining_distance"],
+            "path_progress": path_metrics["progress"],
+            "path_waypoint_count": len(student.path or []),
+            "path_status": path_metrics["status"],
             "facing_x": student.facing_x,
             "facing_y": student.facing_y,
             "eating_duration": eating_metrics["duration"],
@@ -2475,6 +2497,59 @@ class SimulationEngine:
             "remaining": remaining,
             "progress": progress,
         }
+
+    def _student_path_metrics(self, student: Student) -> dict[str, float | str | None]:
+        remaining_distance = self._student_path_remaining_distance(student)
+        path_duration = (
+            max(0.0, self.game_time - student.path_started_at)
+            if student.path_started_at is not None
+            else None
+        )
+        progress = None
+        if student.path_length is not None and student.path_length > 0 and remaining_distance is not None:
+            progress = clamp(1.0 - remaining_distance / student.path_length, 0.0, 1.0)
+
+        if student.path_id is not None:
+            status = "active"
+        elif student.path:
+            status = "pending"
+        elif self._student_needs_navigation_work(student) and distance(student.x, student.y, student.target_x, student.target_y) > 4.0:
+            status = "direct"
+        else:
+            status = "idle"
+
+        return {
+            "status": status,
+            "duration": path_duration,
+            "remaining_distance": remaining_distance,
+            "progress": progress,
+        }
+
+    def _student_path_remaining_distance(self, student: Student) -> float | None:
+        if student.path:
+            return self._path_distance(student.x, student.y, list(student.path or []))
+        if self._student_needs_navigation_work(student):
+            return distance(student.x, student.y, student.target_x, student.target_y)
+        return None
+
+    def _student_queue_position(self, student: Student) -> int | None:
+        if student.stall_id is None or student.stall_id < 0 or student.stall_id >= len(self.stalls):
+            return None
+        stall = self.stalls[student.stall_id]
+        if student.id in stall.queue:
+            return stall.queue.index(student.id) + 1
+        if student.state == StudentState.MOVING_TO_QUEUE:
+            return len(stall.queue) + self._inbound_queue_rank(student) + 1
+        return None
+
+    def _student_dish_name(self, student: Student) -> str | None:
+        if student.dish_id is None:
+            return None
+        for stall in self.stalls:
+            dish = self._dish_by_id(stall, student.dish_id)
+            if dish is not None:
+                return dish.name
+        return None
 
     def _stall_cook_remaining(self, stall: Stall) -> float:
         if not stall.ready_times:

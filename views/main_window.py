@@ -23,6 +23,7 @@ from views.config_dialog import ConfigDialog
 from views.settings_dialog import SettingsDialog
 from views.stall_info_popup import StallInfoPopup
 from views.stats_panel import StatsPanel
+from views.student_info_popup import StudentInfoPopup
 from views.table_info_popup import TableInfoPopup
 
 
@@ -43,6 +44,7 @@ class MainWindow(QMainWindow):
         self.settings_dialog: SettingsDialog | None = None
         self._stall_popup: StallInfoPopup | None = None
         self._table_popup: TableInfoPopup | None = None
+        self._student_popup: StudentInfoPopup | None = None
 
         self.canvas = CanvasWidget()
         self.stats_panel = StatsPanel()
@@ -96,6 +98,7 @@ class MainWindow(QMainWindow):
         self.canvas.zoomChanged.connect(self._canvas_zoom_changed)
         self.canvas.stallClicked.connect(self._show_stall_popup)
         self.canvas.tableClicked.connect(self._show_table_popup)
+        self.canvas.studentClicked.connect(self._show_student_popup)
         self.reset_view_button.clicked.connect(self.canvas.reset_view)
         self.settings_button.clicked.connect(self._open_settings_dialog)
 
@@ -169,8 +172,11 @@ class MainWindow(QMainWindow):
     def _show_stall_popup(self, stall: dict) -> None:
         if self._table_popup is not None:
             self._table_popup.close()
+        if self._student_popup is not None:
+            self._student_popup.close()
         if self._stall_popup is not None:
             self._stall_popup.close()
+        self.canvas.set_selected_student(None)
         self._stall_popup = StallInfoPopup(stall, self)
         self._stall_popup.finished.connect(self._stall_popup_closed)
         # 定位到鼠标附近
@@ -188,8 +194,11 @@ class MainWindow(QMainWindow):
     def _show_table_popup(self, table: dict) -> None:
         if self._stall_popup is not None:
             self._stall_popup.close()
+        if self._student_popup is not None:
+            self._student_popup.close()
         if self._table_popup is not None:
             self._table_popup.close()
+        self.canvas.set_selected_student(None)
         self._table_popup = TableInfoPopup(table, self)
         self._table_popup.finished.connect(self._table_popup_closed)
         from PyQt6.QtGui import QCursor
@@ -202,6 +211,29 @@ class MainWindow(QMainWindow):
 
     def _table_popup_closed(self) -> None:
         self._table_popup = None
+
+    def _show_student_popup(self, student: dict) -> None:
+        if self._stall_popup is not None:
+            self._stall_popup.close()
+        if self._table_popup is not None:
+            self._table_popup.close()
+        if self._student_popup is not None:
+            self._student_popup.close()
+        student_id = student.get("id")
+        self.canvas.set_selected_student(int(student_id) if isinstance(student_id, (int, float)) else None)
+        self._student_popup = StudentInfoPopup(student, self)
+        self._student_popup.finished.connect(self._student_popup_closed)
+        from PyQt6.QtGui import QCursor
+        cursor_pos = QCursor.pos()
+        self._student_popup.move(
+            cursor_pos.x() + 16,
+            cursor_pos.y() + 16,
+        )
+        self._student_popup.show()
+
+    def _student_popup_closed(self) -> None:
+        self._student_popup = None
+        self.canvas.set_selected_student(None)
 
     @pyqtSlot(object, int)
     def _apply_window_settings(self, resolution: tuple[int, int] | None, font_size: int) -> None:
@@ -289,6 +321,7 @@ class MainWindow(QMainWindow):
         self.stats_panel.set_frame(frame)
         self._refresh_stall_popup(frame)
         self._refresh_table_popup(frame)
+        self._refresh_student_popup(frame)
 
     def _refresh_stall_popup(self, frame: dict) -> None:
         if self._stall_popup is None:
@@ -307,6 +340,18 @@ class MainWindow(QMainWindow):
             if isinstance(table, dict) and table.get("id") == popup_id:
                 self._table_popup.update_table(table)
                 return
+
+    def _refresh_student_popup(self, frame: dict) -> None:
+        if self._student_popup is None:
+            return
+        popup_id = self._student_popup.student_id()
+        for student in frame.get("students", []):
+            if isinstance(student, dict) and student.get("id") == popup_id:
+                self._student_popup.update_student(student)
+                self.canvas.set_selected_student(popup_id)
+                return
+        self._student_popup.update_student(None)
+        self.canvas.set_selected_student(None)
 
     @pyqtSlot(str)
     def set_status(self, status: str) -> None:

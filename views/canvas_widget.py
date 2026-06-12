@@ -14,6 +14,7 @@ class CanvasWidget(QWidget):
     zoomChanged = pyqtSignal(float)
     stallClicked = pyqtSignal(dict)
     tableClicked = pyqtSignal(dict)
+    studentClicked = pyqtSignal(dict)
     _STUDENT_MOVE_ANIMATION_MS = 120
     _STUDENT_TELEPORT_DISTANCE = 360.0
 
@@ -28,6 +29,7 @@ class CanvasWidget(QWidget):
         self._drag_start: QPointF | None = None
         self._click_start: QPointF | None = None
         self._hover_scene_pos: tuple[float, float] | None = None
+        self._selected_student_id: int | None = None
         self._student_animations: dict[int, dict[str, float]] = {}
         self._student_animation_clock = QElapsedTimer()
         self._student_animation_timer = QTimer(self)
@@ -308,6 +310,10 @@ class CanvasWidget(QWidget):
         self.zoomChanged.emit(self.view_zoom)
         self.update()
 
+    def set_selected_student(self, student_id: int | None) -> None:
+        self._selected_student_id = student_id
+        self.update()
+
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
         self._static_scene_cache = None
         self._static_scene_cache_key = None
@@ -406,13 +412,19 @@ class CanvasWidget(QWidget):
             if delta.manhattanLength() < 5:
                 self._update_hover_scene_pos(event.position())
                 if self._hover_scene_pos is not None:
-                    stall = self._hit_stall(*self._hover_scene_pos)
-                    if stall is not None:
-                        self.stallClicked.emit(stall)
+                    student = self._hit_student(*self._hover_scene_pos)
+                    if student is not None:
+                        student_id = self._number(student.get("id"), None)
+                        self.set_selected_student(int(student_id) if student_id is not None else None)
+                        self.studentClicked.emit(student)
                     else:
-                        table = self._hit_table(*self._hover_scene_pos)
-                        if table is not None:
-                            self.tableClicked.emit(table)
+                        stall = self._hit_stall(*self._hover_scene_pos)
+                        if stall is not None:
+                            self.stallClicked.emit(stall)
+                        else:
+                            table = self._hit_table(*self._hover_scene_pos)
+                            if table is not None:
+                                self.tableClicked.emit(table)
             if not was_drag:
                 event.accept()
             return
@@ -1119,6 +1131,25 @@ class CanvasWidget(QWidget):
                 return table
         return None
 
+    def _hit_student(self, scene_x: float, scene_y: float) -> dict | None:
+        """返回被点击的学生帧数据 dict，未命中则返回 None。"""
+        if not self.frame:
+            return None
+        students = [
+            self._student_render_data(student)
+            for student in self.frame.get("students", [])
+            if isinstance(student, dict)
+        ]
+        students.sort(key=lambda item: self._number(item.get("y"), 0.0), reverse=True)
+        for student in students:
+            point = self._point((student.get("x"), student.get("y")))
+            if point is None:
+                continue
+            hit_radius = 24.0 if str(student.get("state") or "") == "eating" else 22.0
+            if hypot(scene_x - point[0], scene_y - point[1]) <= hit_radius:
+                return student
+        return None
+
     def _table_hit_rect(self, table: dict, x: float, y: float) -> QRectF:
         _, seat_count = self._table_type_and_seat_count(table)
         table_width = {2: 52.0, 4: 64.0, 6: 84.0}.get(seat_count, 64.0)
@@ -1286,9 +1317,15 @@ class CanvasWidget(QWidget):
             return
         x, y = point
         state = str(student.get("state") or "unknown")
-        fill = self._student_fill_color(state)
+        selected = self._is_selected_student(student)
+        fill = QColor("#facc15") if selected else self._student_fill_color(state)
         facing_x = max(-1.0, min(1.0, self._number(student.get("facing_x"), 1.0)))
         lean = 4.0 if facing_x >= 0 else -4.0
+
+        if selected:
+            painter.setPen(QPen(QColor("#0f766e"), 2.4))
+            painter.setBrush(QColor(20, 184, 166, 38))
+            painter.drawEllipse(QRectF(x - 23, y - 30, 46, 56))
 
         self._draw_shadow(painter, x, y + 14, 30, 11, QColor(51, 65, 85, 55))
         painter.setPen(QPen(fill.darker(145), 1.1))
@@ -1321,6 +1358,12 @@ class CanvasWidget(QWidget):
         painter.drawPoint(int(head_x + 5 + eye_offset), int(head_y - 4))
         self._draw_student_expression(painter, head_x, head_y, state)
         self._draw_group_badge(painter, student, head_x, head_y)
+
+    def _is_selected_student(self, student: dict) -> bool:
+        if self._selected_student_id is None:
+            return False
+        student_id = self._number(student.get("id"), None)
+        return student_id is not None and int(student_id) == self._selected_student_id
 
     def _draw_group_badge(self, painter: QPainter, student: dict, x: float, y: float) -> None:
         group_id = student.get("group_id")
