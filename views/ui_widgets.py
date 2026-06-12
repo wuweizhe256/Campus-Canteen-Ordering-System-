@@ -182,7 +182,7 @@ def dialog_stylesheet() -> str:
     font = stylesheet_font_family()
     style = """
         QDialog {
-            background: #f7efe2;
+            background: #f7f0e6;
             font-family: "Microsoft YaHei UI";
         }
         QScrollArea {
@@ -209,56 +209,50 @@ def dialog_stylesheet() -> str:
         QScrollBar::sub-line:vertical {
             height: 0;
         }
-        QLabel#DialogTitle {
+        QFrame#ConfigCard {
             color: #17211f;
-            font: 800 16pt "Microsoft YaHei UI";
+            background: #fffaf3;
+            border: 1px solid #e2d2be;
+            border-radius: 15px;
         }
-        QLabel#DialogSubtitle {
-            color: #64736e;
-            font: 9pt "Microsoft YaHei UI";
-        }
-        QGroupBox {
-            color: #17211f;
-            background: #fffaf0;
-            border: 1px solid #dccdb8;
-            border-radius: 14px;
-            margin-top: 12px;
-            padding: 14px 10px 10px 10px;
-            font: 800 10pt "Microsoft YaHei UI";
-        }
-        QGroupBox::title {
-            subcontrol-origin: margin;
-            subcontrol-position: top left;
-            left: 14px;
-            padding: 0 8px;
+        QLabel#ConfigCardTitle {
             color: #0f5f59;
-            background: #f7efe2;
+            font: 900 11pt "Microsoft YaHei UI";
+            padding: 0 0 2px 0;
         }
         QLabel {
-            color: #33423f;
+            color: #263633;
             font: 9pt "Microsoft YaHei UI";
         }
         QSpinBox {
             color: #17211f;
-            background: #ffffff;
+            background: #fffefa;
             border: 1px solid #d8c9b6;
             border-radius: 10px;
-            padding: 5px 10px;
-            min-height: 22px;
+            padding: 4px 12px;
+            min-width: 118px;
+            min-height: 30px;
             font: 10pt "Microsoft YaHei UI";
         }
         QSpinBox:hover {
             border-color: #d8842b;
-            background: #fffdf8;
+            background: #ffffff;
         }
         QSpinBox:focus {
             border: 1px solid #0f766e;
             background: #ffffff;
+            selection-background-color: #dff4ef;
+            selection-color: #17211f;
         }
         QSpinBox:disabled {
             color: #7d8b85;
-            background: #edf1ec;
-            border-color: #d8ded8;
+            background: #e9efea;
+            border-color: #cfdad2;
+        }
+        QSpinBox#CompactSpinBox {
+            min-width: 70px;
+            padding-left: 8px;
+            padding-right: 8px;
         }
         QCheckBox {
             color: #273633;
@@ -279,8 +273,9 @@ def dialog_stylesheet() -> str:
         QPushButton {
             border: 1px solid #dccdb8;
             border-radius: 12px;
-            padding: 7px 18px;
-            min-width: 92px;
+            padding: 8px 20px;
+            min-width: 108px;
+            min-height: 24px;
             font: 800 10pt "Microsoft YaHei UI";
             color: #17211f;
             background: #fffaf0;
@@ -288,11 +283,13 @@ def dialog_stylesheet() -> str:
         QPushButton:hover {
             background: #fff1d8;
             border-color: #d8842b;
+            margin-top: -1px;
+            margin-bottom: 1px;
         }
         QPushButton:pressed {
             background: #f7e1bd;
-            padding-top: 9px;
-            padding-bottom: 7px;
+            margin-top: 1px;
+            margin-bottom: -1px;
         }
         QPushButton#DialogAcceptButton {
             color: #ffffff;
@@ -301,6 +298,10 @@ def dialog_stylesheet() -> str:
         }
         QPushButton#DialogAcceptButton:hover {
             background: #13887f;
+            border-color: #0f5f59;
+        }
+        QPushButton#DialogAcceptButton:pressed {
+            background: #0f5f59;
         }
         """
     return style.replace("Microsoft YaHei UI", font)

@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+from PyQt6.QtCore import QEasingCurve, QPoint, QParallelAnimationGroup, QPropertyAnimation, Qt, QTimer
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QFrame,
+    QGraphicsDropShadowEffect,
     QGridLayout,
-    QGroupBox,
     QHBoxLayout,
+    QLabel,
+    QSizePolicy,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -21,6 +26,7 @@ class ConfigDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("\u4eff\u771f\u914d\u7f6e")
         self.setModal(True)
+        self._intro_animation: QParallelAnimationGroup | None = None
 
         self.minutes_spin = QSpinBox()
         self.minutes_spin.setRange(30, 60)
@@ -44,16 +50,19 @@ class ConfigDialog(QDialog):
         self.companion_ratio_spin.setSuffix(" %")
 
         self.two_tables_spin = QSpinBox()
+        self.two_tables_spin.setObjectName("CompactSpinBox")
         self.two_tables_spin.setRange(0, 36)
         self.two_tables_spin.setValue(6)
         self.two_tables_spin.setSuffix(" \u5f20")
 
         self.four_tables_spin = QSpinBox()
+        self.four_tables_spin.setObjectName("CompactSpinBox")
         self.four_tables_spin.setRange(0, 36)
         self.four_tables_spin.setValue(14)
         self.four_tables_spin.setSuffix(" \u5f20")
 
         self.six_tables_spin = QSpinBox()
+        self.six_tables_spin.setObjectName("CompactSpinBox")
         self.six_tables_spin.setRange(0, 36)
         self.six_tables_spin.setValue(4)
         self.six_tables_spin.setSuffix(" \u5f20")
@@ -71,6 +80,19 @@ class ConfigDialog(QDialog):
         self.seed_spin.setValue(0)
         self.seed_spin.setSpecialValueText("\u968f\u673a")
 
+        for spin in (
+            self.minutes_spin,
+            self.stalls_spin,
+            self.tables_spin,
+            self.companion_ratio_spin,
+            self.two_tables_spin,
+            self.four_tables_spin,
+            self.six_tables_spin,
+            self.total_students_spin,
+            self.seed_spin,
+        ):
+            spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+
         basic_form = self._form_layout()
         basic_form.addRow("\u663e\u793a\u4eff\u771f\u65f6\u957f", self.minutes_spin)
         basic_form.addRow("\u7a97\u53e3\u6570\u91cf", self.stalls_spin)
@@ -79,7 +101,7 @@ class ConfigDialog(QDialog):
 
         table_form = self._form_layout()
         table_type_row = QHBoxLayout()
-        table_type_row.setSpacing(10)
+        table_type_row.setSpacing(8)
         table_type_row.addWidget(self.two_tables_spin)
         table_type_row.addWidget(self.four_tables_spin)
         table_type_row.addWidget(self.six_tables_spin)
@@ -92,7 +114,8 @@ class ConfigDialog(QDialog):
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        buttons.setContentsMargins(20, 12, 20, 20)
+        buttons.setCenterButtons(True)
+        buttons.setContentsMargins(20, 8, 20, 18)
         buttons.button(QDialogButtonBox.StandardButton.Ok).setText("\u5f00\u59cb\u4eff\u771f")
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("\u53d6\u6d88")
         buttons.button(QDialogButtonBox.StandardButton.Ok).setObjectName("DialogAcceptButton")
@@ -100,12 +123,12 @@ class ConfigDialog(QDialog):
         buttons.rejected.connect(self.reject)
 
         content = QGridLayout()
-        content.setContentsMargins(20, 20, 20, 8)
+        content.setContentsMargins(22, 20, 22, 6)
         content.setHorizontalSpacing(16)
         content.setVerticalSpacing(14)
-        content.addWidget(self._group_box("\u57fa\u7840\u53c2\u6570", basic_form), 0, 0, 2, 1)
-        content.addWidget(self._group_box("\u9910\u684c\u5e03\u5c40", table_form), 0, 1)
-        content.addWidget(self._group_box("\u884c\u4e3a\u53c2\u6570", behavior_form), 1, 1)
+        content.addWidget(self._card("\u57fa\u7840\u53c2\u6570", basic_form), 0, 0, 2, 1)
+        content.addWidget(self._card("\u9910\u684c\u5e03\u5c40", table_form), 0, 1)
+        content.addWidget(self._card("\u884c\u4e3a\u53c2\u6570", behavior_form), 1, 1)
         content.setColumnStretch(0, 1)
         content.setColumnStretch(1, 1)
 
@@ -118,20 +141,64 @@ class ConfigDialog(QDialog):
         self._update_table_count()
         self._apply_style()
         self.setSizeGripEnabled(True)
-        self.setMinimumSize(560, 360)
-        self.resize(640, 420)
+        self.setMinimumSize(660, 400)
+        self.resize(700, 440)
 
     def _form_layout(self) -> QFormLayout:
         form = QFormLayout()
-        form.setContentsMargins(16, 20, 16, 16)
-        form.setSpacing(14)
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setHorizontalSpacing(14)
+        form.setVerticalSpacing(12)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         return form
 
-    def _group_box(self, title: str, form: QFormLayout) -> QGroupBox:
-        group = QGroupBox(title)
-        group.setLayout(form)
-        return group
+    def _card(self, title: str, form: QFormLayout) -> QFrame:
+        card = QFrame()
+        card.setObjectName("ConfigCard")
+        card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        shadow = QGraphicsDropShadowEffect(card)
+        shadow.setBlurRadius(12)
+        shadow.setOffset(0, 3)
+        shadow.setColor(QColor(39, 31, 22, 18))
+        card.setGraphicsEffect(shadow)
+
+        title_label = QLabel(title)
+        title_label.setObjectName("ConfigCardTitle")
+
+        layout = QVBoxLayout()
+        layout.setContentsMargins(18, 14, 18, 18)
+        layout.setSpacing(12)
+        layout.addWidget(title_label)
+        layout.addLayout(form)
+        card.setLayout(layout)
+        return card
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().showEvent(event)
+        QTimer.singleShot(0, self._play_intro_animation)
+
+    def _play_intro_animation(self) -> None:
+        end_pos = self.pos()
+        self.move(end_pos + QPoint(0, 10))
+        self.setWindowOpacity(0.0)
+
+        opacity = QPropertyAnimation(self, b"windowOpacity", self)
+        opacity.setDuration(220)
+        opacity.setStartValue(0.0)
+        opacity.setEndValue(1.0)
+        opacity.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        position = QPropertyAnimation(self, b"pos", self)
+        position.setDuration(220)
+        position.setStartValue(end_pos + QPoint(0, 10))
+        position.setEndValue(end_pos)
+        position.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        self._intro_animation = QParallelAnimationGroup(self)
+        self._intro_animation.addAnimation(opacity)
+        self._intro_animation.addAnimation(position)
+        self._intro_animation.start()
 
     def _update_table_count(self) -> None:
         self.tables_spin.setValue(
