@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
 )
 
 from utils.fonts import stylesheet_font_family, ui_font
+from views.ui_widgets import apply_detail_card_shadow
 
 
 class StatsTokens:
@@ -769,18 +770,20 @@ class QueueDetailPopup(QDialog):
         self._orders_scroll: QScrollArea | None = None
 
         self.setWindowTitle(f"窗口 {stall_id + 1} 队列详情")
-        self.setMinimumSize(420, 520)
-        self.resize(460, 600)
+        self.setMinimumSize(360, 420)
+        self.resize(400, 520)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
 
         root = QVBoxLayout()
-        root.setContentsMargins(18, 18, 18, 18)
-        root.setSpacing(12)
+        root.setContentsMargins(20, 20, 20, 20)
+        root.setSpacing(14)
 
         title = QLabel(f"窗口 {stall_id + 1} 队列详情")
-        title.setFont(ui_font(14, QFont.Weight.Bold))
-        title.setStyleSheet("color: #0f172a;")
+        title.setFont(ui_font(15, QFont.Weight.Bold))
+        title.setStyleSheet("color: #4a3728;")
         root.addWidget(title)
+
+        root.addWidget(_popup_divider())
 
         metrics = QHBoxLayout()
         metrics.setSpacing(8)
@@ -793,9 +796,11 @@ class QueueDetailPopup(QDialog):
             metrics.addWidget(self._metric_card(key, label))
         root.addLayout(metrics)
 
+        root.addWidget(_popup_divider())
+
         subtitle = QLabel("学生订单")
-        subtitle.setFont(ui_font(10, QFont.Weight.Bold))
-        subtitle.setStyleSheet("color: #334155; padding-top: 2px;")
+        subtitle.setFont(ui_font(11, QFont.Weight.Bold))
+        subtitle.setStyleSheet("color: #5c4a3a;")
         root.addWidget(subtitle)
 
         self._orders_scroll = QScrollArea()
@@ -819,26 +824,26 @@ class QueueDetailPopup(QDialog):
         self.setStyleSheet(
             """
             QDialog {
-                background: #ffffff;
+                background: #fffaf0;
             }
             QFrame#QueueMetricCard {
-                background: #f8fafc;
-                border: 1px solid #e2e8f0;
-                border-radius: 8px;
+                background: #fffbeb;
+                border: 1px solid #e7cda9;
+                border-radius: 10px;
             }
             QFrame#QueueOrderCard {
-                background: #ffffff;
-                border: 1px solid #e2e8f0;
-                border-radius: 8px;
+                background: #fffbeb;
+                border: 1px solid #e7cda9;
+                border-radius: 10px;
             }
             QProgressBar {
-                background: #e2e8f0;
+                background: #e5e7eb;
                 border: 0;
                 border-radius: 5px;
                 height: 10px;
             }
             QProgressBar::chunk {
-                background: #0ea5e9;
+                background: #f59e0b;
                 border-radius: 5px;
             }
             """
@@ -847,16 +852,17 @@ class QueueDetailPopup(QDialog):
     def _metric_card(self, key: str, label: str) -> QFrame:
         card = QFrame()
         card.setObjectName("QueueMetricCard")
+        apply_detail_card_shadow(card)
         layout = QVBoxLayout()
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(3)
 
         name = QLabel(label)
         name.setFont(ui_font(8))
-        name.setStyleSheet("color: #64748b;")
+        name.setStyleSheet("color: #78716c;")
         value = QLabel("-")
         value.setFont(ui_font(13, QFont.Weight.Bold))
-        value.setStyleSheet("color: #0f172a;")
+        value.setStyleSheet("color: #44403c;")
         value.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._metric_labels[key] = value
 
@@ -895,7 +901,7 @@ class QueueDetailPopup(QDialog):
         if not orders:
             empty = QLabel("当前没有等待取餐的学生")
             empty.setFont(ui_font(10))
-            empty.setStyleSheet("color: #94a3b8; padding: 30px;")
+            empty.setStyleSheet("color: #9ca3af; padding: 24px;")
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             layout.addWidget(empty)
             layout.addStretch()
@@ -918,6 +924,7 @@ class QueueDetailPopup(QDialog):
     ) -> QFrame:
         card = QFrame()
         card.setObjectName("QueueOrderCard")
+        apply_detail_card_shadow(card)
         layout = QVBoxLayout()
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(8)
@@ -935,11 +942,11 @@ class QueueDetailPopup(QDialog):
         top.setSpacing(8)
         student_label = QLabel(f"S{student_id}")
         student_label.setFont(ui_font(11, QFont.Weight.Bold))
-        student_label.setStyleSheet("color: #0f172a;")
+        student_label.setStyleSheet("color: #4a3728;")
         top.addWidget(student_label)
         dish_label = QLabel(dish_name)
         dish_label.setFont(ui_font(10, QFont.Weight.Bold))
-        dish_label.setStyleSheet("color: #334155;")
+        dish_label.setStyleSheet("color: #4a3728;")
         top.addWidget(dish_label, 1)
         status_label = QLabel(_order_status_label(status))
         status_label.setFont(ui_font(9, QFont.Weight.Bold))
@@ -964,12 +971,12 @@ class QueueDetailPopup(QDialog):
             wait_text = f"还需 {_format_seconds(remaining)}"
         left = QLabel(wait_text)
         left.setFont(ui_font(9))
-        left.setStyleSheet("color: #475569;")
+        left.setStyleSheet("color: #78716c;")
         detail.addWidget(left)
         detail.addStretch()
         right = QLabel(state or f"订单 #{_display_value(order.get('id'))}")
         right.setFont(ui_font(9))
-        right.setStyleSheet("color: #64748b;")
+        right.setStyleSheet("color: #78716c;")
         detail.addWidget(right)
         layout.addLayout(detail)
 
@@ -1171,6 +1178,13 @@ def _card() -> QFrame:
     frame = QFrame()
     frame.setObjectName("StatsCard")
     return frame
+
+
+def _popup_divider() -> QFrame:
+    line = QFrame()
+    line.setFrameShape(QFrame.Shape.HLine)
+    line.setStyleSheet("color: #d2dfc9;")
+    return line
 
 
 def _card_painter(widget: QWidget) -> QPainter:
@@ -1386,9 +1400,9 @@ def _order_status_label(status: str) -> str:
 
 def _order_status_style(status: str) -> str:
     fg, bg = {
-        "queued": ("#1d4ed8", "#dbeafe"),
-        "cooking": ("#c2410c", "#ffedd5"),
-        "done": ("#15803d", "#dcfce7"),
+        "queued": ("#92400e", "#fef3c7"),
+        "cooking": ("#b45309", "#ffedd5"),
+        "done": ("#166534", "#dcfce7"),
         "cancelled": ("#475569", "#f1f5f9"),
     }.get(status, ("#475569", "#f1f5f9"))
     return f"color: {fg}; background: {bg}; border-radius: 6px; padding: 3px 8px;"

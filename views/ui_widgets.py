@@ -4,7 +4,7 @@ import math
 
 from PyQt6.QtCore import QPointF, QRect, QRectF, QSize, Qt
 from PyQt6.QtGui import QColor, QCursor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
-from PyQt6.QtWidgets import QLabel, QSlider, QStyle, QStyleOptionSlider
+from PyQt6.QtWidgets import QGraphicsDropShadowEffect, QLabel, QSlider, QStyle, QStyleOptionSlider, QWidget
 
 from utils.fonts import stylesheet_font_family
 
@@ -37,8 +37,8 @@ class DetailTokens:
     SECTION_SPACING = 5
     CARD_SPACING = 5
     CARD_RADIUS = 10
-    CARD_BORDER = "#e4d4bf"
-    CARD_BG = "#fffaf0"
+    CARD_BORDER = "#e7cda9"
+    CARD_BG = "#fffbeb"
     CARD_ALT_BG = "#fffdf7"
     VALUE_TEXT = "#44403c"
     LABEL_TEXT = "#78716c"
@@ -122,6 +122,14 @@ def detail_card_stylesheet(object_name: str, *, bg: str | None = None) -> str:
         f"border-radius: {DetailTokens.CARD_RADIUS}px; "
         "}"
     )
+
+
+def apply_detail_card_shadow(widget: QWidget) -> None:
+    shadow = QGraphicsDropShadowEffect(widget)
+    shadow.setBlurRadius(12)
+    shadow.setOffset(0, 2)
+    shadow.setColor(QColor(78, 54, 30, 28))
+    widget.setGraphicsEffect(shadow)
 
 
 def detail_progress_stylesheet(status: str = "in_progress") -> str:

@@ -21,6 +21,7 @@ from utils.fonts import ui_font
 from views.ui_widgets import (
     DetailBadge,
     DetailTokens,
+    apply_detail_card_shadow,
     detail_card_stylesheet,
     detail_progress_stylesheet,
     set_detail_value,
@@ -59,6 +60,20 @@ class TableInfoPopup(QDialog):
         _apply_compact_dialog_size(self, 380, 560)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.Dialog)
+        self.setStyleSheet(
+            """
+            QDialog {
+                background: #fffaf0;
+            }
+            QScrollArea {
+                background: #fffaf0;
+                border: 0;
+            }
+            QScrollArea > QWidget > QWidget {
+                background: #fffaf0;
+            }
+            """
+        )
 
         root = QVBoxLayout()
         root.setContentsMargins(14, 14, 14, 14)
@@ -165,8 +180,10 @@ class TableInfoPopup(QDialog):
 
     def _seats_content(self) -> QWidget:
         container = QWidget()
+        container.setObjectName("PopupContent")
+        container.setStyleSheet("QWidget#PopupContent { background: #fffaf0; }")
         layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(0, 0, 10, 0)
         layout.setSpacing(DetailTokens.CARD_SPACING)
         self._seat_widgets = {}
         self._seats_signature = self._seat_signature()
@@ -174,6 +191,8 @@ class TableInfoPopup(QDialog):
         seats = self._seat_frames()
         if not seats:
             layout.addWidget(_empty_label("暂无座位信息"))
+        elif _all_seats_free(seats):
+            layout.addWidget(_free_seats_summary(len(seats)))
         else:
             for seat in seats:
                 layout.addWidget(self._seat_card(seat))
@@ -183,8 +202,10 @@ class TableInfoPopup(QDialog):
 
     def _companions_content(self) -> QWidget:
         container = QWidget()
+        container.setObjectName("PopupContent")
+        container.setStyleSheet("QWidget#PopupContent { background: #fffaf0; }")
         layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(0, 0, 10, 0)
         layout.setSpacing(DetailTokens.CARD_SPACING)
         self._companions_signature = self._companion_signature()
 
@@ -202,9 +223,13 @@ class TableInfoPopup(QDialog):
         card = QWidget()
         card.setObjectName("SeatCard")
         card.setStyleSheet(detail_card_stylesheet("SeatCard"))
+        apply_detail_card_shadow(card)
         layout = QVBoxLayout()
-        layout.setContentsMargins(9, 7, 9, 7)
+        is_free = _seat_is_free(seat)
+        layout.setContentsMargins(8, 4, 8, 4) if is_free else layout.setContentsMargins(9, 7, 9, 7)
         layout.setSpacing(4)
+        if is_free:
+            card.setFixedHeight(34)
 
         seat_index = int(_number(seat.get("index"), 0) or 0)
         status = str(seat.get("status") or "free")
@@ -328,6 +353,7 @@ class TableInfoPopup(QDialog):
         card = QWidget()
         card.setObjectName("CompanionCard")
         card.setStyleSheet(detail_card_stylesheet("CompanionCard", bg=DetailTokens.CARD_ALT_BG))
+        apply_detail_card_shadow(card)
         layout = QVBoxLayout()
         layout.setContentsMargins(9, 7, 9, 7)
         layout.setSpacing(4)
@@ -526,6 +552,40 @@ def _empty_label(text: str) -> QLabel:
     label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
     label.setStyleSheet(f"color: {DetailTokens.EMPTY_TEXT}; padding: 2px 0;")
     return label
+
+
+def _free_seats_summary(count: int) -> QWidget:
+    card = QWidget()
+    card.setObjectName("SeatCard")
+    card.setStyleSheet(detail_card_stylesheet("SeatCard"))
+    apply_detail_card_shadow(card)
+    layout = QHBoxLayout()
+    layout.setContentsMargins(10, 6, 10, 6)
+    layout.setSpacing(8)
+
+    label = QLabel(f"{count} 个座位全部空闲")
+    label.setFont(ui_font(10, QFont.Weight.Bold))
+    label.setStyleSheet(f"color: {DetailTokens.TITLE_TEXT};")
+    layout.addWidget(label)
+    layout.addStretch()
+    badge = DetailBadge("空闲", "normal")
+    badge.setFont(ui_font(9, QFont.Weight.Bold))
+    layout.addWidget(badge)
+    card.setLayout(layout)
+    card.setFixedHeight(38)
+    return card
+
+
+def _all_seats_free(seats: list[dict]) -> bool:
+    return bool(seats) and all(_seat_is_free(seat) for seat in seats)
+
+
+def _seat_is_free(seat: dict) -> bool:
+    return (
+        str(seat.get("status") or "free") == "free"
+        and seat.get("student") is None
+        and seat.get("student_id") is None
+    )
 
 
 def _apply_status_badge(label: QLabel, status: str) -> None:

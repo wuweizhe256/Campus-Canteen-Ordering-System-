@@ -5,7 +5,6 @@ from typing import Any
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
-    QApplication,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -50,19 +49,33 @@ class StudentInfoPopup(QDialog):
 
     def _setup_ui(self) -> None:
         self.setWindowTitle(f"学生 S{self._student_id} 详情")
-        self.setMinimumSize(340, 420)
-        _apply_compact_dialog_size(self, 380, 560)
+        self.setMinimumSize(360, 420)
+        self.resize(400, 520)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.Dialog)
+        self.setStyleSheet(
+            """
+            QDialog {
+                background: #fffaf0;
+            }
+            QScrollArea {
+                background: #fffaf0;
+                border: 0;
+            }
+            QScrollArea > QWidget > QWidget {
+                background: #fffaf0;
+            }
+            """
+        )
 
         root = QVBoxLayout()
-        root.setContentsMargins(14, 14, 14, 14)
-        root.setSpacing(8)
+        root.setContentsMargins(20, 20, 20, 20)
+        root.setSpacing(14)
 
         header = QHBoxLayout()
-        header.setSpacing(8)
+        header.setSpacing(12)
         self._title_label = QLabel(f"学生 S{self._student_id}")
-        self._title_label.setFont(ui_font(13, QFont.Weight.Bold))
+        self._title_label.setFont(ui_font(15, QFont.Weight.Bold))
         self._title_label.setStyleSheet("color: #4a3728;")
         header.addWidget(self._title_label)
         header.addStretch()
@@ -75,17 +88,20 @@ class StudentInfoPopup(QDialog):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setStyleSheet("QScrollArea { background: transparent; }")
 
         content = QWidget()
+        content.setObjectName("PopupContent")
+        content.setStyleSheet("QWidget#PopupContent { background: #fffaf0; }")
         content_layout = QVBoxLayout()
-        content_layout.setContentsMargins(1, 0, 6, 0)
-        content_layout.setSpacing(8)
+        content_layout.setContentsMargins(0, 0, 12, 0)
+        content_layout.setSpacing(10)
 
         content_layout.addWidget(_divider())
         content_layout.addWidget(_section_title("当前状态"))
         status_box = QVBoxLayout()
-        status_box.setSpacing(4)
+        status_box.setSpacing(6)
         for key, label in (
             ("state", "状态"),
             ("time_in_system", "在场时间"),
@@ -100,7 +116,7 @@ class StudentInfoPopup(QDialog):
         content_layout.addWidget(_divider())
         content_layout.addWidget(_section_title("寻路状态"))
         path_box = QVBoxLayout()
-        path_box.setSpacing(4)
+        path_box.setSpacing(6)
         for key, label in (
             ("path_status", "路径状态"),
             ("path_id", "路径编号"),
@@ -118,7 +134,7 @@ class StudentInfoPopup(QDialog):
         content_layout.addWidget(_divider())
         content_layout.addWidget(_section_title("业务信息"))
         business_box = QVBoxLayout()
-        business_box.setSpacing(4)
+        business_box.setSpacing(6)
         for key, label in (
             ("stall", "窗口/队列"),
             ("table", "餐桌/座位"),
@@ -235,21 +251,21 @@ class StudentInfoPopup(QDialog):
 
 def _section_title(text: str) -> QLabel:
     label = QLabel(text)
-    label.setFont(ui_font(10, QFont.Weight.Bold))
-    label.setStyleSheet(f"color: {DetailTokens.TITLE_TEXT};")
+    label.setFont(ui_font(11, QFont.Weight.Bold))
+    label.setStyleSheet("color: #5c4a3a;")
     return label
 
 
 def _divider() -> QFrame:
     line = QFrame()
     line.setFrameShape(QFrame.Shape.HLine)
-    line.setStyleSheet(f"color: {DetailTokens.DIVIDER};")
+    line.setStyleSheet("color: #d2dfc9;")
     return line
 
 
 def _value_label() -> QLabel:
     label = QLabel(DetailTokens.EMPTY_DISPLAY)
-    label.setFont(ui_font(9, QFont.Weight.Bold))
+    label.setFont(ui_font(10, QFont.Weight.Bold))
     label.setWordWrap(True)
     set_detail_value(label, None)
     return label
@@ -257,14 +273,14 @@ def _value_label() -> QLabel:
 
 def _row_widget(label: str, value_widget: QLabel) -> QWidget:
     row = QWidget()
-    row.setMinimumHeight(DetailTokens.ROW_MIN_HEIGHT)
+    row.setMinimumHeight(28)
     layout = QHBoxLayout()
     layout.setContentsMargins(0, 0, 0, 0)
-    layout.setSpacing(DetailTokens.ROW_SPACING)
+    layout.setSpacing(8)
     key = QLabel(label)
-    key.setFont(ui_font(9))
-    key.setFixedWidth(DetailTokens.LABEL_WIDTH)
-    key.setStyleSheet(f"color: {DetailTokens.LABEL_TEXT};")
+    key.setFont(ui_font(10))
+    key.setFixedWidth(92)
+    key.setStyleSheet("color: #78716c;")
     layout.addWidget(key)
     layout.addWidget(value_widget, 1)
     row.setLayout(layout)
@@ -275,7 +291,7 @@ def _progress_bar() -> QProgressBar:
     bar = QProgressBar()
     bar.setRange(0, 1000)
     bar.setTextVisible(True)
-    bar.setFixedHeight(8)
+    bar.setFixedHeight(10)
     bar.setStyleSheet(detail_progress_stylesheet("in_progress"))
     _set_progress(bar, None)
     return bar
@@ -294,15 +310,6 @@ def _set_progress(bar: QProgressBar | None, progress: float | None, status: str 
     bar.setStyleSheet(detail_progress_stylesheet(status))
     bar.setValue(int(progress * 1000))
     bar.setFormat(f"{progress * 100:.0f}%")
-
-
-def _apply_compact_dialog_size(dialog: QDialog, width: int, height: int) -> None:
-    screen = QApplication.primaryScreen()
-    max_height = height
-    if screen is not None:
-        max_height = min(height, int(screen.availableGeometry().height() * 0.8))
-    dialog.setMaximumSize(400, max_height)
-    dialog.resize(min(width, 400), max_height)
 
 
 def _state_badge(state: str) -> tuple[str, str]:
