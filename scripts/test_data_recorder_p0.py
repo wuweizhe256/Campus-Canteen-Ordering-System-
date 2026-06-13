@@ -54,14 +54,23 @@ def test_stats_frame_p0_from_events() -> None:
         recorder.feed_event(event)
 
     stats = recorder.build_stats().to_dict()
-    assert set(stats) == {
+    required_keys = {
         "avg_wait_time",
+        "avg_eating_time",
         "avg_total_time",
         "max_active_students",
         "stall_queue_stats",
         "seat_utilization",
+        "avg_move_speed",
+        "congestion_index",
+        "stuck_student_count",
+        "reroute_count",
+        "avg_queue_length",
+        "tray_return_queue_length",
     }
+    assert required_keys.issubset(set(stats))
     assert_close(stats["avg_wait_time"], 11.0)
+    assert_close(stats["avg_eating_time"], 20.0)
     assert_close(stats["avg_total_time"], 69.5)
     assert stats["max_active_students"] == 2
     assert stats["stall_queue_stats"] == [{"stall_id": 3, "max_queue_length": 2}]

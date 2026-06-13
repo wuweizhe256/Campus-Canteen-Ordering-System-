@@ -1,29 +1,391 @@
 from __future__ import annotations
 
-from math import ceil
+from math import ceil, hypot
+from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import QRectF, Qt
-from PyQt6.QtGui import QColor, QFont, QPainter, QPen
+from PyQt6.QtCore import QElapsedTimer, QPointF, QRectF, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPixmap, QPolygonF
 from PyQt6.QtWidgets import QWidget
 
 from utils.fonts import ui_font
 
 
 class CanvasWidget(QWidget):
+    zoomChanged = pyqtSignal(float)
+    stallClicked = pyqtSignal(dict)
+    tableClicked = pyqtSignal(dict)
+    studentClicked = pyqtSignal(dict)
+    _STUDENT_MOVE_ANIMATION_MS = 120
+    _STUDENT_TELEPORT_DISTANCE = 360.0
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setMinimumSize(900, 620)
         self.frame: dict | None = None
         self.show_paths = False
+        self.show_obstacles = False
+        self.render_mode = "performance"
+        self.view_zoom = 1.0
+        self._pan_offset = QPointF(0.0, 0.0)
+        self._drag_start: QPointF | None = None
+        self._click_start: QPointF | None = None
+        self._hover_scene_pos: tuple[float, float] | None = None
+        self._selected_student_id: int | None = None
+        self._student_animations: dict[int, dict[str, float]] = {}
+        self._student_animation_clock = QElapsedTimer()
+        self._student_animation_timer = QTimer(self)
+        self._student_animation_timer.setInterval(16)
+        self._student_animation_timer.timeout.connect(self._advance_student_animation)
+        self._student_details_by_id: dict[int, dict] = {}
+        self._static_scene_cache: QPixmap | None = None
+        self._static_scene_cache_key: tuple[int, int] | None = None
+        self._seated_students_cache: QPixmap | None = None
+        self._seated_students_cache_key: tuple[Any, ...] | None = None
+        self._entity_asset_root = Path(__file__).resolve().parents[1] / "assets" / "entities"
+        self._entity_pixmap_cache: dict[str, QPixmap | None] = {}
+        self.setMouseTracking(True)
 
     def set_frame(self, frame: dict) -> None:
-        self.frame = frame
-        self.update()
+        adapted = self._frame_with_p1_fallback(frame)
+        self._update_student_details_cache(adapted)
+        animation_drives_repaint = self._update_student_animations(adapted)
+        self.frame = adapted
+        if not animation_drives_repaint:
+            self.update()
 
     def set_show_paths(self, show_paths: bool) -> None:
         self.show_paths = show_paths
         self.update()
+
+    def set_show_obstacles(self, show_obstacles: bool) -> None:
+        self.show_obstacles = show_obstacles
+        self.update()
+
+    def set_render_mode(self, render_mode: str) -> None:
+        normalized = render_mode if render_mode in {"showcase", "fallback"} else "performance"
+        if self.render_mode == normalized:
+            return
+        self.render_mode = normalized
+        self._static_scene_cache = None
+        self._static_scene_cache_key = None
+        self._seated_students_cache = None
+        self._seated_students_cache_key = None
+        self.update()
+
+    def _frame_with_p1_fallback(self, frame: dict) -> dict:
+        if not isinstance(frame, dict):
+            return {}
+        adapted = dict(frame)
+        raw_stalls = frame.get("stalls")
+        if isinstance(raw_stalls, list):
+            adapted["stalls"] = [
+                self._stall_with_p1_fallback(stall)
+                for stall in raw_stalls
+                if isinstance(stall, dict)
+            ]
+        else:
+            adapted["stalls"] = []
+        return adapted
+
+    def _stall_with_p1_fallback(self, stall: dict) -> dict:
+        adapted = dict(stall)
+        dishes = self._p1_dishes_or_mock(adapted)
+        adapted["dishes"] = dishes
+
+        status = str(adapted.get("status") or "")
+        if status not in {"pending", "open", "sold_out"}:
+            status = "sold_out" if dishes and not any(self._dish_available(dish) for dish in dishes) else "open"
+        adapted["status"] = status
+
+        if "is_congested" not in adapted:
+            adapted["is_congested"] = int(self._number(adapted.get("queue_count"), 0)) >= 8
+
+        adapted["orders"] = self._p1_orders_or_mock(adapted, dishes)
+        return adapted
+
+    def _p1_dishes_or_mock(self, stall: dict) -> list[dict[str, Any]]:
+        raw_dishes = stall.get("dishes")
+        if isinstance(raw_dishes, list):
+            dishes = [
+                self._normalize_p1_dish(dish, stall, index)
+                for index, dish in enumerate(raw_dishes)
+                if isinstance(dish, dict)
+            ]
+            if dishes:
+                return dishes
+        return self._mock_stall_dishes(stall)
+
+    def _normalize_p1_dish(self, dish: dict, stall: dict, index: int) -> dict[str, Any]:
+        stall_id = int(self._number(stall.get("id"), 0))
+        normalized = dict(dish)
+        normalized.setdefault("id", stall_id * 100 + index + 1)
+        normalized.setdefault("name", f"菜品{index + 1}")
+        normalized.setdefault(
+            "features",
+            {
+                "meat_ratio": self._number(stall.get("meat_ratio"), 0.5),
+                "veg_ratio": self._number(stall.get("veg_ratio"), 0.5),
+            },
+        )
+        normalized.setdefault("price", 10.0 + stall_id)
+        normalized.setdefault("stock", 0)
+        normalized.setdefault("cook_time", self._number(stall.get("cook_time"), 45.0))
+        if "available" not in normalized:
+            stock = self._number(normalized.get("stock"), None)
+            normalized["available"] = True if stock is None else stock > 0
+        return normalized
+
+    def _p1_orders_or_mock(self, stall: dict, dishes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        raw_orders = stall.get("orders")
+        if isinstance(raw_orders, list):
+            return [
+                self._normalize_p1_order(order, stall, dishes, index)
+                for index, order in enumerate(raw_orders)
+                if isinstance(order, dict)
+            ]
+        return self._mock_stall_orders(stall, dishes)
+
+    def _normalize_p1_order(
+        self,
+        order: dict,
+        stall: dict,
+        dishes: list[dict[str, Any]],
+        index: int,
+    ) -> dict[str, Any]:
+        stall_id = int(self._number(stall.get("id"), 0))
+        dish_id = dishes[index % len(dishes)].get("id") if dishes else None
+        normalized = dict(order)
+        normalized.setdefault("id", stall_id * 1000 + index + 1)
+        normalized.setdefault("student_id", None)
+        normalized.setdefault("stall_id", stall_id)
+        normalized.setdefault("dish_id", dish_id)
+        normalized.setdefault("created_at", None)
+        normalized.setdefault("started_at", None)
+        normalized.setdefault("finished_at", None)
+        status = str(normalized.get("status") or "queued")
+        normalized["status"] = status if status in {"queued", "cooking", "done", "cancelled"} else "queued"
+        return normalized
+
+    def _update_student_animations(self, next_frame: dict) -> bool:
+        next_students = [
+            student
+            for student in next_frame.get("students", [])
+            if isinstance(student, dict) and student.get("id") is not None
+        ]
+        if not next_students:
+            self._student_animations.clear()
+            self._student_animation_timer.stop()
+            self._student_animation_clock.invalidate()
+            return False
+
+        previous_students = {}
+        if isinstance(self.frame, dict):
+            previous_students = {
+                student.get("id"): student
+                for student in self.frame.get("students", [])
+                if isinstance(student, dict) and student.get("id") is not None
+            }
+
+        progress = self._student_animation_progress()
+        animations: dict[int, dict[str, float]] = {}
+        for student in next_students:
+            student_id = int(student.get("id"))
+            target_x = self._number(student.get("x"), 0.0)
+            target_y = self._number(student.get("y"), 0.0)
+            target_facing_x = max(-1.0, min(1.0, self._number(student.get("facing_x"), 1.0)))
+            target_facing_y = max(-1.0, min(1.0, self._number(student.get("facing_y"), 0.0)))
+
+            previous_student = previous_students.get(student.get("id"))
+            if previous_student is None:
+                start_x = target_x
+                start_y = target_y
+                start_facing_x = target_facing_x
+                start_facing_y = target_facing_y
+            else:
+                start_x, start_y = self._interpolated_student_position(student_id, previous_student, progress)
+                start_facing_x = self._interpolated_student_value(
+                    student_id,
+                    previous_student,
+                    progress,
+                    "facing_x",
+                    1.0,
+                )
+                start_facing_y = self._interpolated_student_value(
+                    student_id,
+                    previous_student,
+                    progress,
+                    "facing_y",
+                    0.0,
+                )
+                if hypot(target_x - start_x, target_y - start_y) > self._STUDENT_TELEPORT_DISTANCE:
+                    start_x = target_x
+                    start_y = target_y
+                    start_facing_x = target_facing_x
+                    start_facing_y = target_facing_y
+
+            if (
+                hypot(target_x - start_x, target_y - start_y) < 0.01
+                and abs(target_facing_x - start_facing_x) < 0.001
+                and abs(target_facing_y - start_facing_y) < 0.001
+            ):
+                continue
+
+            animations[student_id] = {
+                "start_x": start_x,
+                "start_y": start_y,
+                "target_x": target_x,
+                "target_y": target_y,
+                "start_facing_x": start_facing_x,
+                "start_facing_y": start_facing_y,
+                "target_facing_x": target_facing_x,
+                "target_facing_y": target_facing_y,
+            }
+
+        self._student_animations = animations
+        if not animations:
+            self._student_animation_timer.stop()
+            self._student_animation_clock.invalidate()
+            return False
+
+        self._student_animation_clock.restart()
+        if not self._student_animation_timer.isActive():
+            self._student_animation_timer.start()
+        return True
+
+    def _advance_student_animation(self) -> None:
+        if self._student_animation_progress() >= 1.0:
+            self._student_animation_timer.stop()
+        self.update()
+
+    def _student_animation_progress(self) -> float:
+        if not self._student_animation_clock.isValid():
+            return 1.0
+        elapsed = self._student_animation_clock.elapsed()
+        return max(0.0, min(1.0, elapsed / self._STUDENT_MOVE_ANIMATION_MS))
+
+    def _interpolated_student_position(
+        self,
+        student_id: int,
+        fallback_student: dict,
+        progress: float | None = None,
+    ) -> tuple[float, float]:
+        animation = self._student_animations.get(student_id)
+        if animation is None:
+            return (
+                self._number(fallback_student.get("x"), 0.0),
+                self._number(fallback_student.get("y"), 0.0),
+            )
+        if progress is None:
+            progress = self._student_animation_progress()
+        eased = self._ease_out_cubic(progress)
+        x = animation["start_x"] + (animation["target_x"] - animation["start_x"]) * eased
+        y = animation["start_y"] + (animation["target_y"] - animation["start_y"]) * eased
+        return x, y
+
+    def _interpolated_student_value(
+        self,
+        student_id: int,
+        fallback_student: dict,
+        progress: float,
+        key: str,
+        default: float,
+    ) -> float:
+        animation = self._student_animations.get(student_id)
+        if animation is None:
+            return self._number(fallback_student.get(key), default)
+        eased = self._ease_out_cubic(progress)
+        start = animation.get(f"start_{key}", default)
+        target = animation.get(f"target_{key}", default)
+        return start + (target - start) * eased
+
+    def _student_render_data(self, student: dict) -> dict:
+        student_id = student.get("id")
+        if student_id is None:
+            return student
+        render_student = dict(student)
+        progress = self._student_animation_progress()
+        x, y = self._interpolated_student_position(int(student_id), student, progress)
+        render_student["x"] = x
+        render_student["y"] = y
+        render_student["facing_x"] = self._interpolated_student_value(
+            int(student_id),
+            student,
+            progress,
+            "facing_x",
+            self._number(student.get("facing_x"), 1.0),
+        )
+        render_student["facing_y"] = self._interpolated_student_value(
+            int(student_id),
+            student,
+            progress,
+            "facing_y",
+            self._number(student.get("facing_y"), 0.0),
+        )
+        return render_student
+
+    def _update_student_details_cache(self, frame: dict) -> None:
+        details = frame.get("student_details")
+        if isinstance(details, list):
+            for student in details:
+                if not isinstance(student, dict):
+                    continue
+                student_id = student.get("id")
+                if isinstance(student_id, (int, float)):
+                    self._student_details_by_id[int(student_id)] = student
+
+        active_ids = {
+            int(student.get("id"))
+            for student in frame.get("students", [])
+            if isinstance(student, dict) and isinstance(student.get("id"), (int, float))
+        }
+        stale_ids = set(self._student_details_by_id) - active_ids
+        for student_id in stale_ids:
+            self._student_details_by_id.pop(student_id, None)
+
+    def _student_detail_or_render(self, student: dict) -> dict:
+        student_id = student.get("id")
+        if not isinstance(student_id, (int, float)):
+            return student
+        detail = self._student_details_by_id.get(int(student_id))
+        if detail is None:
+            return student
+        merged = dict(detail)
+        merged.update(student)
+        return merged
+
+    def _ease_out_cubic(self, value: float) -> float:
+        value = max(0.0, min(1.0, value))
+        return 1.0 - (1.0 - value) ** 3
+
+    def set_view_zoom(self, zoom: float) -> None:
+        zoom = max(0.6, min(1.8, zoom))
+        if abs(self.view_zoom - zoom) < 0.001:
+            return
+        self.view_zoom = zoom
+        if self.view_zoom <= 1.0:
+            self._pan_offset = QPointF(0.0, 0.0)
+        self.zoomChanged.emit(self.view_zoom)
+        self.update()
+
+    def reset_view(self) -> None:
+        self.view_zoom = 1.0
+        self._pan_offset = QPointF(0.0, 0.0)
+        self.zoomChanged.emit(self.view_zoom)
+        self.update()
+
+    def set_selected_student(self, student_id: int | None) -> None:
+        self._selected_student_id = student_id
+        self._seated_students_cache = None
+        self._seated_students_cache_key = None
+        self.update()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        self._static_scene_cache = None
+        self._static_scene_cache_key = None
+        self._seated_students_cache = None
+        self._seated_students_cache_key = None
+        super().resizeEvent(event)
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
         painter = QPainter(self)
@@ -34,16 +396,30 @@ class CanvasWidget(QWidget):
             self._draw_empty_scene(painter)
             return
 
+        if self.render_mode == "showcase":
+            self._paint_texture_showcase_scene(painter)
+            return
+        if self.render_mode == "fallback":
+            self._paint_fallback_scene(painter)
+            return
+        self._paint_performance_scene(painter)
+
+    def _paint_performance_scene(self, painter: QPainter) -> None:
         frame_width, frame_height = self._frame_size()
-        scale = min(self.width() / frame_width, self.height() / frame_height)
-        x_offset = (self.width() - frame_width * scale) / 2
-        y_offset = (self.height() - frame_height * scale) / 2
+        base_scale = min(self.width() / frame_width, self.height() / frame_height)
+        scale = base_scale * self.view_zoom
+        x_offset = (self.width() - frame_width * scale) / 2 + self._pan_offset.x()
+        y_offset = (self.height() - frame_height * scale) / 2 + self._pan_offset.y()
         painter.translate(x_offset, y_offset)
         painter.scale(scale, scale)
+        self._scene_origin = QPointF(x_offset, y_offset)
+        self._scene_scale = scale
 
-        self._draw_floor(painter)
+        self._draw_static_scene(painter)
         if self.show_paths:
             self._draw_path_debug(painter)
+        if self.show_obstacles:
+            self._draw_obstacles_debug(painter)
         self._draw_door(painter)
         self._draw_exit(painter)
         self._draw_tray_return_points(painter)
@@ -52,22 +428,850 @@ class CanvasWidget(QWidget):
         self._draw_students(painter)
         self._draw_header(painter)
 
+    def _paint_texture_showcase_scene(self, painter: QPainter) -> None:
+        self._paint_scene_with_entities(
+            painter,
+            self._draw_texture_stalls,
+            self._draw_texture_tables,
+            self._draw_texture_students,
+        )
+
+    def _paint_fallback_scene(self, painter: QPainter) -> None:
+        self._paint_scene_with_entities(
+            painter,
+            self._draw_showcase_stalls,
+            self._draw_showcase_tables,
+            self._draw_showcase_students,
+        )
+
+    def _paint_scene_with_entities(self, painter: QPainter, draw_stalls, draw_tables, draw_students) -> None:
+        frame_width, frame_height = self._frame_size()
+        base_scale = min(self.width() / frame_width, self.height() / frame_height)
+        scale = base_scale * self.view_zoom
+        x_offset = (self.width() - frame_width * scale) / 2 + self._pan_offset.x()
+        y_offset = (self.height() - frame_height * scale) / 2 + self._pan_offset.y()
+        painter.translate(x_offset, y_offset)
+        painter.scale(scale, scale)
+        self._scene_origin = QPointF(x_offset, y_offset)
+        self._scene_scale = scale
+
+        self._draw_static_scene(painter)
+        if self.show_paths:
+            self._draw_path_debug(painter)
+        if self.show_obstacles:
+            self._draw_obstacles_debug(painter)
+        self._draw_door(painter)
+        self._draw_exit(painter)
+        self._draw_tray_return_points(painter)
+        draw_stalls(painter)
+        draw_tables(painter)
+        draw_students(painter)
+        self._draw_header(painter)
+
+    def _draw_static_scene(self, painter: QPainter) -> None:
+        width, height = self._frame_size()
+        cache_key = (int(width), int(height))
+        if self._static_scene_cache is None or self._static_scene_cache_key != cache_key:
+            pixmap = QPixmap(cache_key[0], cache_key[1])
+            pixmap.fill(Qt.GlobalColor.transparent)
+            cache_painter = QPainter(pixmap)
+            cache_painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            self._draw_floor(cache_painter)
+            cache_painter.end()
+            self._static_scene_cache = pixmap
+            self._static_scene_cache_key = cache_key
+        painter.drawPixmap(QRectF(0, 0, width, height), self._static_scene_cache, QRectF(0, 0, width, height))
+
+    def _draw_texture_stalls(self, painter: QPainter) -> None:
+        for stall in self.frame.get("stalls", []):
+            if not isinstance(stall, dict):
+                continue
+            point = self._point((stall.get("x"), stall.get("y")))
+            if point is None:
+                continue
+            x, y = point
+            status = self._showcase_stall_status(stall)
+            pixmap = self._entity_pixmap("stalls", f"stall_{status}.png")
+            if pixmap is None:
+                self._draw_showcase_stall(painter, stall, x, y)
+                continue
+            self._draw_cook_timer(painter, stall)
+            self._draw_shadow(painter, x, y + 54, 122, 24, QColor(71, 85, 105, 42))
+            self._draw_centered_pixmap(painter, pixmap, x, y + 2, 118, 118, anchor="center")
+            queue_count = int(self._number(stall.get("queue_count"), 0))
+            self._draw_texture_queue(painter, x, y, queue_count)
+
+    def _draw_texture_tables(self, painter: QPainter) -> None:
+        for table in self.frame.get("tables", []):
+            if not isinstance(table, dict):
+                continue
+            point = self._point((table.get("x"), table.get("y")))
+            if point is None:
+                continue
+            x, y = point
+            table_type, seat_count = self._table_type_and_seat_count(table)
+            status = self._showcase_table_status(table)
+            pixmap = self._entity_pixmap("tables", f"table_{table_type}_{status}.png")
+            if pixmap is None:
+                self._draw_showcase_table(painter, table, x, y)
+                continue
+
+            target_width = {2: 74.0, 4: 88.0, 6: 104.0}.get(seat_count, 88.0)
+            target_height = {2: 56.0, 4: 74.0, 6: 88.0}.get(seat_count, 74.0)
+            self._draw_shadow(painter, x, y + target_height * 0.38, target_width + 30, 18, QColor(71, 85, 105, 34))
+            if self._is_hovered(self._table_hit_rect(table, x, y)):
+                painter.setPen(QPen(QColor(15, 118, 110, 175), 2.0))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRoundedRect(
+                    QRectF(x - target_width / 2 - 8, y - target_height / 2 - 8, target_width + 16, target_height + 18),
+                    8,
+                    8,
+                )
+            self._draw_centered_pixmap(painter, pixmap, x, y + 2, target_width, target_height, anchor="center")
+
+    def _draw_texture_students(self, painter: QPainter) -> None:
+        students = [
+            self._student_render_data(student)
+            for student in self.frame.get("students", [])
+            if isinstance(student, dict)
+        ]
+        students.sort(key=lambda item: self._number(item.get("y"), 0.0))
+        for student in students:
+            self._draw_texture_student(painter, student)
+
+    def _draw_texture_student(self, painter: QPainter, student: dict) -> None:
+        point = self._point((student.get("x"), student.get("y")))
+        if point is None:
+            return
+        x, y = point
+        state = str(student.get("state") or "deciding")
+        selected = self._is_selected_student(student)
+        if selected:
+            painter.setPen(QPen(QColor("#0f766e"), 2.2))
+            painter.setBrush(QColor(20, 184, 166, 38))
+            painter.drawEllipse(QRectF(x - 24, y - 42, 48, 60))
+
+        if state == "eating":
+            self._draw_texture_eating_student(painter, x, y, selected)
+        else:
+            pixmap = self._entity_pixmap("students", f"student_{state}.png")
+            if pixmap is None:
+                self._draw_showcase_student(painter, student)
+            else:
+                if state == "done":
+                    painter.save()
+                    painter.setOpacity(0.55)
+                    self._draw_centered_pixmap(painter, pixmap, x, y + 14, 42, 42, anchor="bottom")
+                    painter.restore()
+                else:
+                    self._draw_shadow(painter, x, y + 13, 28, 9, QColor(51, 65, 85, 42))
+                    self._draw_centered_pixmap(painter, pixmap, x, y + 15, 46, 46, anchor="bottom")
+        self._draw_group_badge(painter, student, x + 2, y - 31)
+
+    def _draw_texture_eating_student(self, painter: QPainter, x: float, y: float, selected: bool) -> None:
+        fill = QColor("#facc15") if selected else QColor("#ff9aa6")
+        outline = QColor("#7f1d1d")
+        head_x = x
+        head_y = y - 4
+        self._draw_shadow(painter, head_x, y + 9, 18, 6, QColor(51, 65, 85, 38))
+        painter.setPen(QPen(outline, 1.2))
+        painter.setBrush(fill)
+        painter.drawEllipse(QRectF(head_x - 11, head_y - 10, 22, 19))
+        painter.setBrush(fill.lighter(112))
+        painter.drawEllipse(QRectF(head_x - 13, head_y - 13, 7, 7))
+        painter.drawEllipse(QRectF(head_x + 6, head_y - 13, 7, 7))
+        self._draw_texture_eating_face(painter, head_x, head_y, outline)
+        painter.setPen(QPen(QColor("#ffffff"), 1.0))
+        painter.setBrush(QColor("#dc2626"))
+        painter.drawEllipse(QRectF(head_x + 6, head_y - 12, 13, 13))
+        painter.setPen(QColor("#ffffff"))
+        painter.setFont(ui_font(7, QFont.Weight.Bold))
+        painter.drawText(QRectF(head_x + 6, head_y - 12, 13, 13), Qt.AlignmentFlag.AlignCenter, "\u98df")
+
+    def _draw_texture_eating_face(self, painter: QPainter, x: float, y: float, outline: QColor) -> None:
+        painter.setPen(QPen(outline, 1.0))
+        painter.setBrush(QColor("#fecdd3"))
+        painter.drawEllipse(QRectF(x - 5.5, y - 1, 11, 7))
+        painter.setBrush(outline)
+        painter.drawEllipse(QRectF(x - 2.8, y + 1.5, 1.8, 1.8))
+        painter.drawEllipse(QRectF(x + 1.0, y + 1.5, 1.8, 1.8))
+        painter.drawPoint(int(x - 4), int(y - 4))
+        painter.drawPoint(int(x + 4), int(y - 4))
+        painter.drawArc(QRectF(x - 4.5, y + 3.5, 9, 5), 200 * 16, 140 * 16)
+
+    def _draw_texture_queue(self, painter: QPainter, x: float, y: float, queue_count: int) -> None:
+        if queue_count <= 0:
+            return
+        pixmap = self._entity_pixmap("students", "student_queued.png")
+        painter.setPen(QPen(QColor(148, 163, 184, 100), 1))
+        painter.setBrush(QColor(255, 247, 237, 70))
+        painter.drawRoundedRect(QRectF(x - 15, y + 65, 30, 210), 10, 10)
+        for index in range(min(queue_count, 8)):
+            queue_y = y + 84 + index * 24
+            self._draw_shadow(painter, x, queue_y + 8, 18, 7, QColor(51, 65, 85, 38))
+            if pixmap is None:
+                self._draw_showcase_tiny_pig_head(painter, x, queue_y, QColor("#ff9aa6"))
+            else:
+                self._draw_centered_pixmap(painter, pixmap, x, queue_y + 9, 20, 20, anchor="bottom")
+
+    def _entity_pixmap(self, folder: str, filename: str) -> QPixmap | None:
+        key = f"{folder}/{filename}"
+        if key not in self._entity_pixmap_cache:
+            path = self._entity_asset_root / folder / filename
+            pixmap = QPixmap(str(path))
+            self._entity_pixmap_cache[key] = pixmap if not pixmap.isNull() else None
+        return self._entity_pixmap_cache[key]
+
+    def _draw_centered_pixmap(
+        self,
+        painter: QPainter,
+        pixmap: QPixmap,
+        x: float,
+        y: float,
+        target_width: float,
+        target_height: float,
+        *,
+        anchor: str,
+    ) -> None:
+        source_width = max(1, pixmap.width())
+        source_height = max(1, pixmap.height())
+        scale = min(target_width / source_width, target_height / source_height)
+        width = source_width * scale
+        height = source_height * scale
+        top = y - height if anchor == "bottom" else y - height / 2
+        target = QRectF(x - width / 2, top, width, height)
+        painter.drawPixmap(target, pixmap, QRectF(0, 0, source_width, source_height))
+
+    def _draw_showcase_stalls(self, painter: QPainter) -> None:
+        for stall in self.frame.get("stalls", []):
+            if not isinstance(stall, dict):
+                continue
+            point = self._point((stall.get("x"), stall.get("y")))
+            if point is None:
+                continue
+            self._draw_showcase_stall(painter, stall, point[0], point[1])
+
+    def _draw_showcase_stall(self, painter: QPainter, stall: dict, x: float, y: float) -> None:
+        status = self._showcase_stall_status(stall)
+        palette = {
+            "pending": (QColor("#e9a35d"), QColor("#8f4f20"), QColor("#fff4dc")),
+            "open": (QColor("#f6ad55"), QColor("#9a4f14"), QColor("#d9f99d")),
+            "cooking": (QColor("#fb923c"), QColor("#9a3412"), QColor("#bbf7d0")),
+            "sold_out": (QColor("#c98240"), QColor("#7c3f16"), QColor("#d1d5db")),
+        }.get(status, (QColor("#f6ad55"), QColor("#9a4f14"), QColor("#d9f99d")))
+        wood, edge, sign_fill = palette
+
+        self._draw_cook_timer(painter, stall)
+        self._draw_shadow(painter, x, y + 54, 124, 25, QColor(71, 85, 105, 42))
+
+        painter.setPen(QPen(edge.darker(120), 1.6))
+        painter.setBrush(wood.lighter(118))
+        roof = QPolygonF([
+            QPointF(x - 58, y - 70),
+            QPointF(x + 58, y - 70),
+            QPointF(x + 48, y - 50),
+            QPointF(x - 48, y - 50),
+        ])
+        painter.drawPolygon(roof)
+
+        painter.setBrush(QColor("#ffd18b") if status != "sold_out" else QColor("#d0a16f"))
+        painter.drawRect(QRectF(x - 54, y - 50, 108, 76))
+        painter.setBrush(wood)
+        painter.drawRect(QRectF(x - 62, y + 25, 124, 20))
+        painter.setBrush(wood.darker(112))
+        painter.drawRect(QRectF(x - 58, y + 44, 116, 12))
+        painter.setPen(QPen(edge.darker(140), 1.2))
+        painter.drawLine(int(x - 44), int(y - 48), int(x - 44), int(y + 23))
+        painter.drawLine(int(x + 44), int(y - 48), int(x + 44), int(y + 23))
+
+        self._draw_showcase_stall_sign(painter, stall, x, y, status, sign_fill, edge)
+        if status == "sold_out":
+            self._draw_showcase_sold_out_sign(painter, x, y)
+        elif status == "pending":
+            self._draw_showcase_pending_stall(painter, x, y)
+        elif status == "cooking":
+            self._draw_showcase_cooking_stall(painter, x, y)
+        else:
+            self._draw_showcase_open_stall(painter, x, y)
+
+        queue_count = int(self._number(stall.get("queue_count"), 0))
+        self._draw_showcase_queue(painter, x, y, queue_count)
+
+    def _draw_showcase_stall_sign(
+        self,
+        painter: QPainter,
+        stall: dict,
+        x: float,
+        y: float,
+        status: str,
+        fill: QColor,
+        edge: QColor,
+    ) -> None:
+        stall_id = int(self._number(stall.get("id"), 0)) + 1
+        text = {"pending": "WAIT", "open": "OPEN", "cooking": "COOK", "sold_out": "EMPTY"}.get(status, "OPEN")
+        painter.setPen(QPen(edge.darker(135), 1.2))
+        painter.setBrush(fill)
+        painter.drawRoundedRect(QRectF(x - 34, y + 34, 68, 18), 4, 4)
+        painter.setPen(QColor("#166534") if status != "sold_out" else QColor("#64748b"))
+        painter.setFont(ui_font(6, QFont.Weight.Bold))
+        painter.drawText(QRectF(x - 32, y + 35, 64, 16), Qt.AlignmentFlag.AlignCenter, f"W{stall_id} {text}")
+
+    def _draw_showcase_open_stall(self, painter: QPainter, x: float, y: float) -> None:
+        self._draw_showcase_chef(painter, x - 11, y - 10, busy=False)
+        self._draw_showcase_food_tray(painter, x + 24, y + 8, QColor("#22c55e"))
+        self._draw_showcase_bottle(painter, x + 31, y - 25, QColor("#84cc16"))
+        self._draw_showcase_bottle(painter, x + 43, y - 25, QColor("#f59e0b"))
+        self._draw_showcase_steam(painter, x - 32, y - 12, QColor(255, 255, 255, 145))
+
+    def _draw_showcase_cooking_stall(self, painter: QPainter, x: float, y: float) -> None:
+        self._draw_showcase_chef(painter, x - 14, y - 9, busy=True)
+        painter.setPen(QPen(QColor("#374151"), 1.3))
+        painter.setBrush(QColor("#94a3b8"))
+        painter.drawRoundedRect(QRectF(x - 16, y + 7, 34, 16), 5, 5)
+        painter.setBrush(QColor("#e5e7eb"))
+        painter.drawEllipse(QRectF(x - 14, y + 4, 30, 8))
+        self._draw_showcase_steam(painter, x - 5, y - 6, QColor(255, 255, 255, 210))
+        self._draw_showcase_food_tray(painter, x + 31, y + 7, QColor("#16a34a"))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#f97316"))
+        painter.drawEllipse(QRectF(x - 7, y + 23, 8, 9))
+        painter.setBrush(QColor("#facc15"))
+        painter.drawEllipse(QRectF(x - 4, y + 23, 6, 7))
+
+    def _draw_showcase_pending_stall(self, painter: QPainter, x: float, y: float) -> None:
+        painter.setPen(QPen(QColor("#7c2d12"), 1.2))
+        painter.setBrush(QColor("#f6c37b"))
+        painter.drawRoundedRect(QRectF(x - 32, y - 10, 64, 16), 3, 3)
+        painter.setPen(QPen(QColor("#92400e"), 1.0))
+        painter.drawLine(int(x - 27), int(y - 6), int(x + 27), int(y - 6))
+        painter.setBrush(QColor(255, 255, 255, 100))
+        painter.drawRoundedRect(QRectF(x - 26, y + 9, 52, 9), 4, 4)
+
+    def _draw_showcase_sold_out_sign(self, painter: QPainter, x: float, y: float) -> None:
+        painter.setPen(QPen(QColor("#5f3213"), 1.3))
+        painter.drawLine(int(x - 23), int(y - 42), int(x - 23), int(y - 30))
+        painter.drawLine(int(x + 23), int(y - 42), int(x + 23), int(y - 30))
+        painter.setBrush(QColor("#a95f25"))
+        painter.drawRoundedRect(QRectF(x - 38, y - 32, 76, 24), 3, 3)
+        painter.setPen(QColor("#fff7ed"))
+        painter.setFont(ui_font(7, QFont.Weight.Bold))
+        painter.drawText(QRectF(x - 36, y - 28, 72, 16), Qt.AlignmentFlag.AlignCenter, "SOLD OUT")
+
+    def _draw_showcase_queue(self, painter: QPainter, x: float, y: float, queue_count: int) -> None:
+        if queue_count <= 0:
+            return
+        painter.setPen(QPen(QColor(148, 163, 184, 100), 1))
+        painter.setBrush(QColor(255, 247, 237, 70))
+        painter.drawRoundedRect(QRectF(x - 16, y + 65, 32, 210), 10, 10)
+        for index in range(min(queue_count, 8)):
+            queue_y = y + 83 + index * 24
+            self._draw_shadow(painter, x, queue_y + 6, 18, 7, QColor(51, 65, 85, 40))
+            self._draw_showcase_tiny_pig_head(painter, x, queue_y, QColor("#ff9aa6"))
+
+    def _draw_showcase_tables(self, painter: QPainter) -> None:
+        for table in self.frame.get("tables", []):
+            if not isinstance(table, dict):
+                continue
+            point = self._point((table.get("x"), table.get("y")))
+            if point is None:
+                continue
+            self._draw_showcase_table(painter, table, point[0], point[1])
+
+    def _draw_showcase_table(self, painter: QPainter, table: dict, x: float, y: float) -> None:
+        _, seat_count = self._table_type_and_seat_count(table)
+        table_width = {2: 58.0, 4: 70.0, 6: 90.0}.get(seat_count, 70.0)
+        table_height = {2: 36.0, 4: 50.0, 6: 58.0}.get(seat_count, 50.0)
+        status = self._showcase_table_status(table)
+        top_color = {"free": "#ffe58a", "reserved": "#fde68a", "occupied": "#f8c86b"}.get(status, "#ffe58a")
+
+        self._draw_shadow(painter, x, y + table_height / 2 + 15, table_width + 38, 20, QColor(71, 85, 105, 38))
+        if self._is_hovered(self._table_hit_rect(table, x, y)):
+            painter.setPen(QPen(QColor(15, 118, 110, 175), 2.0))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(QRectF(x - table_width / 2 - 20, y - table_height / 2 - 17, table_width + 40, table_height + 42), 8, 8)
+
+        self._draw_showcase_table_chairs(painter, x, y, seat_count, table_width, table_height, table)
+        painter.setPen(QPen(QColor("#8a4a0b"), 1.5))
+        painter.setBrush(QColor(top_color))
+        painter.drawRoundedRect(QRectF(x - table_width / 2, y - table_height / 2, table_width, table_height), 5, 5)
+        painter.setBrush(QColor("#d97706"))
+        painter.drawRect(QRectF(x - table_width / 2 + 5, y + table_height / 2 - 1, 8, 15))
+        painter.drawRect(QRectF(x + table_width / 2 - 13, y + table_height / 2 - 1, 8, 15))
+
+        if status == "reserved":
+            self._draw_showcase_reserve_card(painter, x + table_width * 0.18, y + table_height * 0.04)
+        if status == "occupied":
+            self._draw_showcase_tableware(painter, x, y, seat_count, table_width, table_height)
+
+    def _draw_showcase_table_chairs(
+        self,
+        painter: QPainter,
+        x: float,
+        y: float,
+        seat_count: int,
+        table_width: float,
+        table_height: float,
+        table: dict,
+    ) -> None:
+        seats = table.get("seat_frames") or table.get("seats") or []
+        offsets = self._showcase_chair_offsets(seat_count, table_width, table_height)
+        for index, (dx, dy) in enumerate(offsets):
+            seat = seats[index] if index < len(seats) else None
+            status = self._seat_status(seat)
+            fill = {"free": "#f8fafc", "reserved": "#fde68a", "occupied": "#fecdd3"}.get(status, "#f8fafc")
+            painter.setPen(QPen(QColor("#64748b"), 1.1))
+            painter.setBrush(QColor(fill))
+            painter.drawRoundedRect(QRectF(x + dx - 8, y + dy - 8, 16, 16), 6, 6)
+            painter.setBrush(QColor(fill).lighter(112))
+            painter.drawEllipse(QRectF(x + dx - 6, y + dy - 10, 12, 8))
+
+    def _showcase_chair_offsets(self, seat_count: int, table_width: float, table_height: float) -> list[tuple[float, float]]:
+        side_x = table_width / 2 + 16
+        if seat_count <= 2:
+            return [(-side_x, 0.0), (side_x, 0.0)]
+        if seat_count <= 4:
+            return [
+                (-side_x, -table_height * 0.25),
+                (side_x, -table_height * 0.25),
+                (-side_x, table_height * 0.25),
+                (side_x, table_height * 0.25),
+            ]
+        return [
+            (-side_x, -table_height * 0.34),
+            (side_x, -table_height * 0.34),
+            (-side_x, 0.0),
+            (side_x, 0.0),
+            (-side_x, table_height * 0.34),
+            (side_x, table_height * 0.34),
+        ]
+
+    def _draw_showcase_reserve_card(self, painter: QPainter, x: float, y: float) -> None:
+        painter.setPen(QPen(QColor("#92400e"), 1.0))
+        painter.setBrush(QColor("#facc15"))
+        card = QPolygonF([
+            QPointF(x - 7, y + 8),
+            QPointF(x - 3, y - 8),
+            QPointF(x + 7, y - 8),
+            QPointF(x + 9, y + 8),
+        ])
+        painter.drawPolygon(card)
+        painter.drawLine(int(x - 4), int(y + 2), int(x + 6), int(y + 2))
+
+    def _draw_showcase_tableware(self, painter: QPainter, x: float, y: float, seat_count: int, width: float, height: float) -> None:
+        offsets = [(-0.23, -0.18), (0.23, 0.18), (-0.18, 0.24), (0.2, -0.24)]
+        if seat_count >= 6:
+            offsets.extend([(0.0, -0.02), (0.32, -0.05)])
+        for index, (rx, ry) in enumerate(offsets[: max(2, min(seat_count, len(offsets)))]):
+            plate_x = x + width * rx
+            plate_y = y + height * ry
+            painter.setPen(QPen(QColor("#64748b"), 1.0))
+            painter.setBrush(QColor("#f8fafc"))
+            painter.drawEllipse(QRectF(plate_x - 8, plate_y - 5, 16, 10))
+            painter.setBrush(QColor("#f97316") if index % 2 else QColor("#facc15"))
+            painter.drawEllipse(QRectF(plate_x - 3, plate_y - 2, 6, 4))
+            painter.setBrush(QColor("#bfdbfe"))
+            painter.drawEllipse(QRectF(plate_x + 8, plate_y - 6, 7, 7))
+
+    def _draw_showcase_students(self, painter: QPainter) -> None:
+        students = [
+            self._student_render_data(student)
+            for student in self.frame.get("students", [])
+            if isinstance(student, dict)
+        ]
+        students.sort(key=lambda item: self._number(item.get("y"), 0.0))
+        for student in students:
+            self._draw_showcase_student(painter, student)
+
+    def _draw_showcase_student(self, painter: QPainter, student: dict) -> None:
+        point = self._point((student.get("x"), student.get("y")))
+        if point is None:
+            return
+        x, y = point
+        state = str(student.get("state") or "deciding")
+        selected = self._is_selected_student(student)
+        if selected:
+            painter.setPen(QPen(QColor("#0f766e"), 2.2))
+            painter.setBrush(QColor(20, 184, 166, 38))
+            painter.drawEllipse(QRectF(x - 25, y - 45, 50, 64))
+
+        if state == "done":
+            painter.save()
+            painter.setOpacity(0.55)
+            self._draw_showcase_pig(painter, student, x, y, state, selected)
+            painter.restore()
+        else:
+            self._draw_showcase_pig(painter, student, x, y, state, selected)
+        self._draw_group_badge(painter, student, x + 2, y - 31)
+
+    def _draw_showcase_pig(
+        self,
+        painter: QPainter,
+        student: dict,
+        x: float,
+        y: float,
+        state: str,
+        selected: bool,
+    ) -> None:
+        if state == "eating":
+            self._draw_showcase_eating_pig(painter, x, y, selected)
+            return
+
+        facing_x = max(-1.0, min(1.0, self._number(student.get("facing_x"), 1.0)))
+        lean = 2.0 if facing_x >= 0 else -2.0
+        fill = QColor("#facc15") if selected else QColor("#ff9aa6")
+        outline = QColor("#7f1d1d")
+
+        self._draw_shadow(painter, x, y + 11, 30, 10, QColor(51, 65, 85, 45))
+        painter.setPen(QPen(outline, 1.5))
+        painter.setBrush(QColor("#5aa7e8") if state in {"moving_to_queue", "moving_to_seat"} else fill.darker(104))
+        painter.drawRoundedRect(QRectF(x - 10, y - 20, 20, 26), 5, 5)
+
+        step = 4 if state in {"moving_to_queue", "moving_to_seat", "moving_to_tray_return", "leaving"} else 0
+        painter.setPen(QPen(QColor("#475569"), 1.6))
+        painter.drawLine(int(x - 4), int(y + 5), int(x - 9 - step / 2), int(y + 14))
+        painter.drawLine(int(x + 5), int(y + 5), int(x + 10 + step / 2), int(y + 13))
+        painter.setBrush(QColor("#ffffff"))
+        painter.drawRoundedRect(QRectF(x - 12 - step / 2, y + 12, 9, 4), 2, 2)
+        painter.drawRoundedRect(QRectF(x + 6 + step / 2, y + 11, 9, 4), 2, 2)
+
+        head_x = x + lean
+        head_y = y - 31
+        self._draw_showcase_pig_head(painter, head_x, head_y, fill, outline, state)
+        self._draw_showcase_student_accessory(painter, x, y, state)
+
+    def _draw_showcase_eating_pig(self, painter: QPainter, x: float, y: float, selected: bool) -> None:
+        fill = QColor("#facc15") if selected else QColor("#ff9aa6")
+        outline = QColor("#7f1d1d")
+        self._draw_shadow(painter, x, y + 8, 24, 8, QColor(51, 65, 85, 45))
+        self._draw_showcase_pig_head(painter, x, y - 13, fill, outline, "eating")
+        painter.setPen(QPen(QColor("#ffffff"), 1.0))
+        painter.setBrush(QColor("#dc2626"))
+        painter.drawEllipse(QRectF(x + 8, y - 27, 16, 16))
+        painter.setPen(QColor("#ffffff"))
+        painter.setFont(ui_font(8, QFont.Weight.Bold))
+        painter.drawText(QRectF(x + 8, y - 27, 16, 16), Qt.AlignmentFlag.AlignCenter, "\u98df")
+
+    def _draw_showcase_pig_head(
+        self,
+        painter: QPainter,
+        x: float,
+        y: float,
+        fill: QColor,
+        outline: QColor,
+        state: str,
+    ) -> None:
+        painter.setPen(QPen(outline, 1.5))
+        painter.setBrush(fill)
+        painter.drawEllipse(QRectF(x - 15, y - 13, 30, 26))
+        painter.setBrush(fill.lighter(112))
+        painter.drawEllipse(QRectF(x - 18, y - 16, 10, 10))
+        painter.drawEllipse(QRectF(x + 8, y - 16, 10, 10))
+        self._draw_showcase_face(painter, x, y, outline, happy=state in {"leaving", "done"})
+
+    def _draw_showcase_face(self, painter: QPainter, x: float, y: float, outline: QColor, happy: bool) -> None:
+        painter.setPen(QPen(outline, 1.3))
+        painter.setBrush(QColor("#fecdd3"))
+        painter.drawEllipse(QRectF(x - 7, y - 1, 14, 9))
+        painter.setBrush(outline)
+        painter.drawEllipse(QRectF(x - 3.5, y + 2, 2.4, 2.4))
+        painter.drawEllipse(QRectF(x + 1.2, y + 2, 2.4, 2.4))
+        painter.drawPoint(int(x - 6), int(y - 4))
+        painter.drawPoint(int(x + 6), int(y - 4))
+        if happy:
+            painter.drawArc(QRectF(x - 6, y + 4, 12, 7), 200 * 16, 140 * 16)
+        else:
+            painter.drawLine(int(x - 4), int(y + 8), int(x + 4), int(y + 8))
+
+    def _draw_showcase_student_accessory(self, painter: QPainter, x: float, y: float, state: str) -> None:
+        if state == "deciding":
+            painter.setPen(QPen(QColor("#7c3aed"), 1.2))
+            painter.setBrush(QColor("#f5f3ff"))
+            painter.drawEllipse(QRectF(x + 12, y - 50, 13, 13))
+            painter.setFont(ui_font(8, QFont.Weight.Bold))
+            painter.drawText(QRectF(x + 12, y - 51, 13, 13), Qt.AlignmentFlag.AlignCenter, "?")
+            self._draw_showcase_card(painter, x - 23, y - 18, QColor("#fef3c7"))
+        elif state == "moving_to_queue":
+            self._draw_showcase_card(painter, x - 23, y - 15, QColor("#fbbf24"))
+        elif state == "queued":
+            self._draw_showcase_tray(painter, x - 19, y - 11, full=True)
+        elif state == "searching_seat":
+            self._draw_showcase_tray(painter, x - 20, y - 11, full=True)
+            painter.setPen(QPen(QColor("#0f766e"), 1.4))
+            painter.drawEllipse(QRectF(x + 13, y - 41, 11, 11))
+            painter.drawLine(int(x + 22), int(y - 31), int(x + 27), int(y - 26))
+        elif state == "waiting_seat":
+            self._draw_showcase_tray(painter, x - 20, y - 11, full=True)
+            painter.setPen(QPen(QColor("#38bdf8"), 1.2))
+            painter.drawLine(int(x + 16), int(y - 36), int(x + 14), int(y - 31))
+        elif state == "moving_to_seat":
+            self._draw_showcase_tray(painter, x - 20, y - 12, full=True)
+            painter.setPen(QPen(QColor("#2563eb"), 1.3))
+            painter.drawLine(int(x + 14), int(y - 28), int(x + 26), int(y - 28))
+            painter.drawLine(int(x + 26), int(y - 28), int(x + 22), int(y - 32))
+            painter.drawLine(int(x + 26), int(y - 28), int(x + 22), int(y - 24))
+        elif state == "moving_to_tray_return":
+            self._draw_showcase_tray(painter, x - 20, y - 12, full=False)
+            painter.setPen(QPen(QColor("#0f766e"), 1.2))
+            painter.drawArc(QRectF(x + 14, y - 37, 14, 14), 45 * 16, 260 * 16)
+        elif state in {"leaving", "done"}:
+            painter.setPen(QPen(QColor("#7f1d1d"), 1.4))
+            painter.drawLine(int(x + 10), int(y - 17), int(x + 22), int(y - 28))
+
+    def _draw_showcase_card(self, painter: QPainter, x: float, y: float, fill: QColor) -> None:
+        painter.setPen(QPen(QColor("#92400e"), 1.0))
+        painter.setBrush(fill)
+        painter.drawRoundedRect(QRectF(x, y, 13, 16), 2, 2)
+        painter.setPen(QPen(QColor("#ffffff"), 1.0))
+        painter.drawLine(int(x + 3), int(y + 5), int(x + 10), int(y + 5))
+
+    def _draw_showcase_tray(self, painter: QPainter, x: float, y: float, *, full: bool) -> None:
+        painter.setPen(QPen(QColor("#64748b"), 1.1))
+        painter.setBrush(QColor("#e2e8f0"))
+        painter.drawRoundedRect(QRectF(x, y, 18, 8), 3, 3)
+        if full:
+            painter.setBrush(QColor("#f97316"))
+            painter.drawEllipse(QRectF(x + 3, y + 1, 5, 5))
+            painter.setBrush(QColor("#22c55e"))
+            painter.drawEllipse(QRectF(x + 10, y + 1, 5, 5))
+
+    def _draw_showcase_chef(self, painter: QPainter, x: float, y: float, *, busy: bool) -> None:
+        self._draw_showcase_pig_head(painter, x, y, QColor("#ff9aa6"), QColor("#7f1d1d"), "open")
+        painter.setPen(QPen(QColor("#94a3b8"), 1.0))
+        painter.setBrush(QColor("#ffffff"))
+        painter.drawRoundedRect(QRectF(x - 12, y - 25, 24, 7), 3, 3)
+        painter.drawEllipse(QRectF(x - 9, y - 31, 9, 9))
+        painter.drawEllipse(QRectF(x - 2, y - 34, 10, 10))
+        painter.drawEllipse(QRectF(x + 6, y - 31, 9, 9))
+        if busy:
+            painter.setPen(QPen(QColor("#7f1d1d"), 1.2))
+            painter.drawLine(int(x - 4), int(y + 8), int(x + 4), int(y + 8))
+
+    def _draw_showcase_food_tray(self, painter: QPainter, x: float, y: float, fill: QColor) -> None:
+        painter.setPen(QPen(QColor("#7c2d12"), 1.0))
+        painter.setBrush(QColor("#f8fafc"))
+        painter.drawEllipse(QRectF(x - 13, y - 5, 26, 10))
+        painter.setBrush(fill)
+        painter.drawEllipse(QRectF(x - 8, y - 3, 16, 6))
+
+    def _draw_showcase_bottle(self, painter: QPainter, x: float, y: float, fill: QColor) -> None:
+        painter.setPen(QPen(QColor("#78350f"), 1.0))
+        painter.setBrush(fill)
+        painter.drawRoundedRect(QRectF(x - 3, y - 8, 6, 15), 2, 2)
+        painter.setBrush(QColor("#fde68a"))
+        painter.drawRect(QRectF(x - 2, y - 4, 4, 5))
+
+    def _draw_showcase_steam(self, painter: QPainter, x: float, y: float, color: QColor) -> None:
+        painter.setPen(QPen(color, 2.0))
+        for offset in (-10, 0, 10):
+            painter.drawArc(QRectF(x + offset - 5, y - 18, 10, 18), 90 * 16, 180 * 16)
+
+    def _draw_showcase_tiny_pig_head(self, painter: QPainter, x: float, y: float, fill: QColor) -> None:
+        outline = QColor("#7f1d1d")
+        painter.setPen(QPen(outline, 1.0))
+        painter.setBrush(fill)
+        painter.drawEllipse(QRectF(x - 8, y - 8, 16, 15))
+        painter.setBrush(fill.lighter(112))
+        painter.drawEllipse(QRectF(x - 10, y - 10, 6, 6))
+        painter.drawEllipse(QRectF(x + 4, y - 10, 6, 6))
+        painter.setBrush(QColor("#fecdd3"))
+        painter.drawEllipse(QRectF(x - 4, y - 1, 8, 5))
+
+    def _showcase_stall_status(self, stall: dict) -> str:
+        base_status = self._stall_status(stall)
+        if base_status in {"pending", "sold_out"}:
+            return base_status
+        progress = self._number(stall.get("cook_progress"), 0.0)
+        remaining = self._number(stall.get("cook_remaining"), 0.0)
+        if (progress and progress > 0) or (remaining and remaining > 0):
+            return "cooking"
+        for order in self._stall_orders(stall):
+            if str(order.get("status") or "") == "cooking":
+                return "cooking"
+        return "open"
+
+    def _showcase_table_status(self, table: dict) -> str:
+        seats = table.get("seat_frames") or table.get("seats") or []
+        statuses = [self._seat_status(seat) for seat in seats]
+        if any(status == "occupied" for status in statuses):
+            return "occupied"
+        if any(status == "reserved" for status in statuses):
+            return "reserved"
+        occupied_count = self._number(table.get("occupied_count") or table.get("occupied"), 0)
+        reserved_count = self._number(table.get("reserved_count"), 0)
+        if occupied_count and occupied_count > 0:
+            return "occupied"
+        if reserved_count and reserved_count > 0:
+            return "reserved"
+        return "free"
+
+    def wheelEvent(self, event) -> None:  # noqa: N802 - Qt override
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            delta = event.angleDelta().y()
+            if delta:
+                factor = 1.08 if delta > 0 else 1 / 1.08
+                self.set_view_zoom(self.view_zoom * factor)
+                event.accept()
+                return
+        super().wheelEvent(event)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt override
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._click_start = event.position()
+        if event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.MiddleButton) and self.view_zoom > 1.0:
+            self._drag_start = event.position()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt override
+        if self._drag_start is not None:
+            current = event.position()
+            delta = current - self._drag_start
+            self._drag_start = current
+            self._pan_offset = self._pan_offset + delta
+            self._update_hover_scene_pos(current)
+            self.update()
+            event.accept()
+            return
+        self._update_hover_scene_pos(event.position())
+        self.update()
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt override
+        was_drag = self._drag_start is not None and event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.MiddleButton)
+        if was_drag:
+            self._drag_start = None
+            self.unsetCursor()
+            event.accept()
+
+        if self._click_start is not None and event.button() == Qt.MouseButton.LeftButton:
+            delta = event.position() - self._click_start
+            self._click_start = None
+            if delta.manhattanLength() < 5:
+                self._update_hover_scene_pos(event.position())
+                if self._hover_scene_pos is not None:
+                    student = self._hit_student(*self._hover_scene_pos)
+                    if student is not None:
+                        student_id = self._number(student.get("id"), None)
+                        self.set_selected_student(int(student_id) if student_id is not None else None)
+                        self.studentClicked.emit(student)
+                    else:
+                        stall = self._hit_stall(*self._hover_scene_pos)
+                        if stall is not None:
+                            self.stallClicked.emit(stall)
+                        else:
+                            table = self._hit_table(*self._hover_scene_pos)
+                            if table is not None:
+                                self.tableClicked.emit(table)
+            if not was_drag:
+                event.accept()
+            return
+
+        if not was_drag:
+            super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 - Qt override
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.reset_view()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802 - Qt override
+        self._hover_scene_pos = None
+        self.update()
+        super().leaveEvent(event)
+
+    def _update_hover_scene_pos(self, widget_pos: QPointF) -> None:
+        origin = getattr(self, "_scene_origin", QPointF(0.0, 0.0))
+        scale = getattr(self, "_scene_scale", 1.0)
+        if scale <= 0:
+            self._hover_scene_pos = None
+            return
+        self._hover_scene_pos = (
+            (widget_pos.x() - origin.x()) / scale,
+            (widget_pos.y() - origin.y()) / scale,
+        )
+
     def _draw_empty_scene(self, painter: QPainter) -> None:
         painter.setPen(QColor("#475569"))
         painter.setFont(ui_font(14))
         painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "点击开始仿真")
 
+    def _draw_shadow(self, painter: QPainter, x: float, y: float, width: float, height: float, color: QColor) -> None:
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+        painter.drawEllipse(QRectF(x - width / 2, y - height / 2, width, height))
+
+    def _draw_iso_box(
+        self,
+        painter: QPainter,
+        x: float,
+        y: float,
+        width: float,
+        height: float,
+        depth: float,
+        top_color: QColor,
+        side_color: QColor,
+        edge_color: QColor,
+    ) -> None:
+        left = x - width / 2
+        right = x + width / 2
+        top = y - height / 2
+        bottom = y + height / 2
+        top_poly = QPolygonF([
+            QPointF(left, top),
+            QPointF(right, top),
+            QPointF(right, bottom),
+            QPointF(left, bottom),
+        ])
+        front_poly = QPolygonF([
+            QPointF(left, bottom),
+            QPointF(right, bottom),
+            QPointF(right - depth * 0.55, bottom + depth),
+            QPointF(left - depth * 0.55, bottom + depth),
+        ])
+        right_poly = QPolygonF([
+            QPointF(right, top),
+            QPointF(right, bottom),
+            QPointF(right - depth * 0.55, bottom + depth),
+            QPointF(right - depth * 0.55, top + depth),
+        ])
+        painter.setPen(QPen(edge_color.darker(115), 1.1))
+        painter.setBrush(side_color.darker(108))
+        painter.drawPolygon(front_poly)
+        painter.setBrush(side_color)
+        painter.drawPolygon(right_poly)
+        painter.setBrush(top_color)
+        painter.drawPolygon(top_poly)
+
     def _draw_floor(self, painter: QPainter) -> None:
         width, height = self._frame_size()
-        painter.setPen(QPen(QColor("#dbe4cf"), 1))
-        for x in range(0, int(width) + 1, 56):
-            painter.drawLine(x, 0, x, int(height))
-        for y in range(0, int(height) + 1, 56):
-            painter.drawLine(0, y, int(width), y)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#e7efe2"))
+        painter.drawRoundedRect(QRectF(18, 18, width - 36, height - 36), 18, 18)
 
-        painter.setPen(QPen(QColor("#cbd8be"), 1.4))
-        painter.setBrush(QColor("#edf4e8"))
-        painter.drawRoundedRect(QRectF(18, 18, width - 36, height - 36), 12, 12)
+        painter.setPen(QPen(QColor("#d2dfc9"), 1))
+        for x in range(48, int(width) - 24, 56):
+            painter.drawLine(x, 28, x - 92, int(height) - 34)
+            painter.drawLine(x, 28, x + 92, int(height) - 34)
+        painter.setPen(QPen(QColor("#c7d6bd"), 2))
+        painter.drawRoundedRect(QRectF(18, 18, width - 36, height - 36), 18, 18)
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#d6c8b8"))
+        painter.drawRoundedRect(QRectF(34, 34, width - 68, 84), 12, 12)
+        painter.setBrush(QColor("#c8b8a7"))
+        painter.drawRoundedRect(QRectF(34, 34, 10, height - 68), 5, 5)
+        painter.drawRoundedRect(QRectF(width - 44, 34, 10, height - 68), 5, 5)
+        painter.setBrush(QColor("#d8e5ce"))
+        painter.drawRoundedRect(QRectF(60, self._number(self.frame.get("height"), 800.0) - 96, width - 120, 48), 14, 14)
+        painter.setPen(QPen(QColor("#a98f78"), 3))
+        painter.drawLine(50, 118, int(width - 50), 118)
+        painter.setPen(QColor("#6b4f3d"))
+        painter.setFont(ui_font(10, QFont.Weight.Bold))
+        painter.drawText(QRectF(70, 48, width - 140, 24), Qt.AlignmentFlag.AlignCenter, "靠墙出餐窗口区")
 
     def _draw_path_debug(self, painter: QPainter) -> None:
         painter.setFont(ui_font(8, QFont.Weight.Bold))
@@ -77,6 +1281,7 @@ class CanvasWidget(QWidget):
             "bottom": QColor("#16a34a"),
             "aisle": QColor("#64748b"),
             "door": QColor("#1d4ed8"),
+            "tray": QColor("#0f766e"),
             "exit": QColor("#15803d"),
         }
         for path in self.frame.get("walk_paths", []):
@@ -101,16 +1306,37 @@ class CanvasWidget(QWidget):
                     int(end_point[1]),
                 )
 
-        painter.setPen(QPen(QColor("#db2777"), 2))
-        for student in self.frame.get("students", []):
+        painter.setPen(QPen(QColor(220, 38, 38, 145), 1.6))
+        painter.setBrush(QColor(248, 113, 113, 35))
+        obstacle_frames = list(self.frame.get("obstacles") or [])
+        obstacle_frames.extend(
+            box
+            for box in self.frame.get("collision_boxes", [])
+            if isinstance(box, dict) and str(box.get("kind") or "") != "static"
+        )
+        for box in obstacle_frames:
+            rect = self._obstacle_rect_frame(box)
+            if rect is None:
+                continue
+            x, y, width, height, _ = rect
+            painter.drawRoundedRect(QRectF(x - width / 2, y - height / 2, width, height), 5, 5)
+
+        for raw_student in self.frame.get("students", []):
+            student = self._student_detail_or_render(raw_student) if isinstance(raw_student, dict) else raw_student
             if not isinstance(student, dict):
                 continue
             student_point = self._point((student.get("x"), student.get("y")))
             if student_point is None:
                 continue
+            stuck_time = self._number(student.get("stuck_time"), 0.0)
+            if stuck_time > 1.2:
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor(239, 68, 68, 70))
+                painter.drawEllipse(QRectF(student_point[0] - 22, student_point[1] - 16, 44, 32))
             points = [student_point, *(student.get("path") or [])]
             if len(points) < 2:
                 continue
+            painter.setPen(QPen(QColor("#db2777"), 2))
             for start, end in zip(points, points[1:]):
                 start_point = self._point(start)
                 end_point = self._point(end)
@@ -122,6 +1348,14 @@ class CanvasWidget(QWidget):
                     int(end_point[0]),
                     int(end_point[1]),
                 )
+            target = self._point(points[-1])
+            if target is not None:
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor("#db2777"))
+                painter.drawEllipse(QRectF(target[0] - 4, target[1] - 4, 8, 8))
+                painter.setPen(QColor("#9d174d"))
+                painter.setFont(ui_font(7, QFont.Weight.Bold))
+                painter.drawText(QRectF(target[0] + 5, target[1] - 8, 34, 14), Qt.AlignmentFlag.AlignLeft, f"S{self._display_value(student.get('id'))}")
 
     def _draw_header(self, painter: QPainter) -> None:
         frame_width, frame_height = self._frame_size()
@@ -142,28 +1376,199 @@ class CanvasWidget(QWidget):
         painter.drawText(QRectF(28, frame_height - 38, frame_width - 56, 30), Qt.AlignmentFlag.AlignLeft, text)
 
     def _draw_door(self, painter: QPainter) -> None:
-        point = self._point(self.frame.get("door"))
+        entrances = self._entrance_frames()
+        for entrance in entrances:
+            rect = self._rect_frame(entrance, default_width=44.0, default_height=76.0)
+            if rect is None:
+                continue
+            x, y, width, height, _ = rect
+            entrance_id = int(self._number(entrance.get("id") if isinstance(entrance, dict) else 0, 0))
+
+            label = "入口" if len(entrances) == 1 else f"入口 {entrance_id + 1}"
+            self._draw_wall_doorway(
+                painter,
+                y,
+                width,
+                height,
+                side="left",
+                label=label,
+                detail="",
+                accent=QColor("#2563eb"),
+            )
+
+    def _entrance_frames(self) -> list[dict[str, Any]]:
+        entrances = self.frame.get("entrances") if self.frame else None
+        if isinstance(entrances, list):
+            frames = [entrance for entrance in entrances if isinstance(entrance, dict)]
+            if frames:
+                return frames
+        point = self._point(self.frame.get("door") if self.frame else None)
         if point is None:
+            return []
+        return [
+            {
+                "id": 0,
+                "x": point[0],
+                "y": point[1],
+                "width": 44.0,
+                "height": 76.0,
+                "weight": 1.0,
+            }
+        ]
+
+    def _exit_frames(self) -> list[dict[str, Any]]:
+        exits = self.frame.get("exits") if self.frame else None
+        if isinstance(exits, list):
+            frames = [exit_frame for exit_frame in exits if isinstance(exit_frame, dict)]
+            if frames:
+                return frames
+        point = self._point(self.frame.get("exit") if self.frame else None)
+        if point is None:
+            return []
+        return [
+            {
+                "id": 0,
+                "x": point[0],
+                "y": point[1],
+                "width": 44.0,
+                "height": 76.0,
+                "is_congested": False,
+            }
+        ]
+
+    def _draw_obstacles_debug(self, painter: QPainter) -> None:
+        obstacle_rects = self._obstacle_rects()
+        if not obstacle_rects:
             return
-        x, y = point
-        painter.setPen(QPen(QColor("#1f2937"), 2))
-        painter.setBrush(QColor("#dbeafe"))
-        painter.drawRoundedRect(QRectF(x - 36, y - 36, 72, 72), 6, 6)
-        painter.setFont(ui_font(11, QFont.Weight.Bold))
-        painter.setPen(QColor("#1d4ed8"))
-        painter.drawText(QRectF(x - 34, y - 10, 68, 28), Qt.AlignmentFlag.AlignCenter, "大门")
+        for left, top, right, bottom, kind in obstacle_rects:
+            color = self._obstacle_color(kind)
+            rect = QRectF(left, top, max(1.0, right - left), max(1.0, bottom - top))
+            painter.setPen(QPen(color.darker(130), 1.6))
+            painter.setBrush(QColor(color.red(), color.green(), color.blue(), 42))
+            painter.drawRoundedRect(rect, 5, 5)
+            if kind:
+                painter.setPen(color.darker(150))
+                painter.setFont(ui_font(7, QFont.Weight.Bold))
+                painter.drawText(rect.adjusted(4, 2, -4, -2), Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft, kind)
+
+    def _obstacle_rects(self) -> list[tuple[float, float, float, float, str]]:
+        obstacles = self.frame.get("obstacles") if self.frame else None
+        rects: list[tuple[float, float, float, float, str]] = []
+        if isinstance(obstacles, list):
+            for obstacle in obstacles:
+                if not isinstance(obstacle, dict):
+                    continue
+                left = self._number(obstacle.get("left"), None)
+                top = self._number(obstacle.get("top"), None)
+                right = self._number(obstacle.get("right"), None)
+                bottom = self._number(obstacle.get("bottom"), None)
+                if None in (left, top, right, bottom):
+                    continue
+                rects.append((left, top, right, bottom, str(obstacle.get("kind") or "obstacle")))
+
+        for box in self.frame.get("collision_boxes", []) if self.frame else []:
+            if isinstance(box, dict) and str(box.get("kind") or "") == "static" and rects:
+                continue
+            rect = self._rect_frame(box, default_width=1.0, default_height=1.0)
+            if rect is None:
+                continue
+            x, y, width, height, _ = rect
+            kind = str(box.get("kind") or "collision") if isinstance(box, dict) else "collision"
+            rects.append((x - width / 2, y - height / 2, x + width / 2, y + height / 2, kind))
+        return rects
+
+    def _obstacle_color(self, kind: str) -> QColor:
+        colors = {
+            "wall": QColor("#64748b"),
+            "table": QColor("#d97706"),
+            "stall": QColor("#dc2626"),
+            "window": QColor("#dc2626"),
+            "collision": QColor("#ef4444"),
+            "static": QColor("#ef4444"),
+            "student": QColor("#ef4444"),
+        }
+        return colors.get(kind, QColor("#ef4444"))
 
     def _draw_exit(self, painter: QPainter) -> None:
-        point = self._point(self.frame.get("exit"))
-        if point is None:
-            return
-        x, y = point
-        painter.setPen(QPen(QColor("#166534"), 2))
-        painter.setBrush(QColor("#dcfce7"))
-        painter.drawRoundedRect(QRectF(x - 58, y - 58, 116, 116), 8, 8)
-        painter.setFont(ui_font(11, QFont.Weight.Bold))
-        painter.setPen(QColor("#15803d"))
-        painter.drawText(QRectF(x - 34, y - 10, 68, 28), Qt.AlignmentFlag.AlignCenter, "出口")
+        exits = self._exit_frames()
+        for exit_frame in exits:
+            rect = self._rect_frame(exit_frame, default_width=44.0, default_height=76.0)
+            if rect is None:
+                continue
+            _, y, width, height, congested = rect
+            exit_id = int(self._number(exit_frame.get("id") if isinstance(exit_frame, dict) else 0, 0))
+            edge = QColor("#b45309" if congested else "#15803d")
+
+            label = "出口" if len(exits) == 1 else f"出口 {exit_id + 1}"
+            self._draw_wall_doorway(
+                painter,
+                y,
+                width,
+                height,
+                side="right",
+                label=label,
+                detail="拥堵" if congested else "",
+                accent=edge,
+            )
+
+    def _draw_wall_doorway(
+        self,
+        painter: QPainter,
+        y: float,
+        width: float,
+        height: float,
+        *,
+        side: str,
+        label: str,
+        detail: str,
+        accent: QColor,
+    ) -> None:
+        frame_width, _ = self._frame_size()
+        marker_height = max(38.0, min(48.0, height * 0.58))
+        marker_width = max(7.0, min(10.0, width * 0.22))
+        top = y - marker_height / 2.0
+        wall_x = 34.0 if side == "left" else frame_width - 44.0
+        marker_x = wall_x + 1.5 if side == "left" else wall_x + 10.0 - marker_width - 1.5
+        inside_direction = 1.0 if side == "left" else -1.0
+        sign_width = 34.0 if len(label) <= 3 else 42.0
+        sign_x = wall_x + 11.0 if side == "left" else wall_x - sign_width - 1.0
+        sign_y = top - 8.0
+        threshold_y = y + marker_height / 2.0 + 2.0
+        threshold_start = wall_x + 9.0 if side == "left" else wall_x + 1.0
+        threshold_end = threshold_start + inside_direction * 18.0
+
+        shadow = QColor(51, 65, 85, 28)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(shadow)
+        painter.drawRect(QRectF(marker_x + inside_direction * 2.0, top + 4.0, marker_width + 5.0, marker_height - 2.0))
+
+        painter.setPen(QPen(QColor("#8a7a67"), 1.0))
+        painter.setBrush(QColor("#f1e6d4"))
+        painter.drawRoundedRect(QRectF(marker_x, top, marker_width, marker_height), 2, 2)
+        painter.setPen(QPen(QColor("#6f5f4e"), 1.1))
+        center_x = marker_x + marker_width / 2.0
+        painter.drawLine(int(center_x), int(top + 4.0), int(center_x), int(top + marker_height - 4.0))
+        painter.setPen(QPen(accent, 1.4))
+        painter.drawLine(int(marker_x + 2.0), int(top + 4.0), int(marker_x + marker_width - 2.0), int(top + 4.0))
+        painter.drawLine(int(marker_x + 2.0), int(top + marker_height - 4.0), int(marker_x + marker_width - 2.0), int(top + marker_height - 4.0))
+
+        painter.setPen(QPen(QColor("#9aa692"), 1.2))
+        painter.drawLine(int(threshold_start), int(threshold_y), int(threshold_end), int(threshold_y))
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(255, 255, 255, 215))
+        painter.drawRoundedRect(QRectF(sign_x, sign_y, sign_width, 12.0), 3, 3)
+        painter.setPen(accent.darker(115))
+        painter.setFont(ui_font(6, QFont.Weight.Bold))
+        painter.drawText(QRectF(sign_x + 2.0, sign_y - 0.5, sign_width - 4.0, 12.0), Qt.AlignmentFlag.AlignCenter, label)
+        if detail:
+            painter.setPen(accent.darker(105))
+            painter.setFont(ui_font(5, QFont.Weight.Bold))
+            painter.drawText(
+                QRectF(sign_x + 2.0, threshold_y + 2.0, sign_width - 4.0, 9.0),
+                Qt.AlignmentFlag.AlignCenter,
+                detail,
+            )
 
     def _draw_stalls(self, painter: QPainter) -> None:
         painter.setFont(ui_font(8))
@@ -175,24 +1580,338 @@ class CanvasWidget(QWidget):
                 continue
             x, y = point
             self._draw_cook_timer(painter, stall)
-            painter.setPen(QPen(QColor("#334155"), 1.5))
-            painter.setBrush(QColor("#fff7ed"))
-            painter.drawRoundedRect(QRectF(x - 38, y - 26, 76, 48), 6, 6)
+            self._draw_shadow(painter, x, y + 34, 96, 24, QColor(120, 53, 15, 45))
+            self._draw_iso_box(painter, x, y + 2, 88, 46, 16, QColor("#fed7aa"), QColor("#fb923c"), QColor("#9a3412"))
 
             stall_id = int(self._number(stall.get("id"), 0))
             painter.setPen(QColor("#7c2d12"))
-            painter.drawText(QRectF(x - 32, y - 22, 64, 16), Qt.AlignmentFlag.AlignCenter, f"W{stall_id + 1}")
-            self._draw_chef_pig(painter, x, y + 2)
+            painter.setFont(ui_font(8, QFont.Weight.Bold))
+            painter.drawText(QRectF(x - 34, y - 23, 68, 16), Qt.AlignmentFlag.AlignCenter, f"窗口 {stall_id + 1}")
+            self._draw_chef_pig(painter, x, y + 3)
 
             queue_count = int(self._number(stall.get("queue_count"), 0))
-            painter.setPen(QColor("#475569"))
-            painter.drawText(QRectF(x - 28, y + 4, 56, 18), Qt.AlignmentFlag.AlignCenter, f"排队 {queue_count}")
+            painter.setPen(QColor("#7c2d12"))
+            painter.drawText(QRectF(x - 30, y + 11, 60, 18), Qt.AlignmentFlag.AlignCenter, f"{queue_count} 人")
+            self._draw_stall_dishes(painter, stall, x, y)
+            self._draw_stall_status(painter, stall, x, y)
 
+            painter.setPen(QPen(QColor(148, 163, 184, 120), 1))
+            painter.setBrush(QColor(255, 247, 237, 95))
+            painter.drawRoundedRect(QRectF(x - 16, y + 58, 32, 222), 10, 10)
             painter.setPen(QPen(QColor("#cbd5e1"), 1))
+            painter.setBrush(QColor("#fbbf24"))
             queue_x = x
             for index in range(min(queue_count, 9)):
                 queue_y = y + 76 + index * 24
+                self._draw_shadow(painter, queue_x, queue_y + 5, 18, 7, QColor(51, 65, 85, 42))
                 painter.drawEllipse(QRectF(queue_x - 6, queue_y - 6, 12, 12))
+
+    def _draw_stall_dishes(self, painter: QPainter, stall: dict, x: float, y: float) -> None:
+        dishes = self._stall_dishes(stall)
+        if not dishes:
+            return
+
+        panel_width = 104.0
+        row_height = 16.0
+        visible_dishes = dishes[:2]
+        panel_height = 18.0 + len(visible_dishes) * row_height
+        left = x - panel_width / 2
+        top = y - 82.0
+
+        painter.setPen(QPen(QColor(234, 179, 8, 135), 1))
+        painter.setBrush(QColor(255, 251, 235, 232))
+        painter.drawRoundedRect(QRectF(left, top, panel_width, panel_height), 6, 6)
+
+        painter.setPen(QColor("#854d0e"))
+        painter.setFont(ui_font(7, QFont.Weight.Bold))
+        suffix = f" +{len(dishes) - len(visible_dishes)}" if len(dishes) > len(visible_dishes) else ""
+        painter.drawText(QRectF(left + 6, top + 3, panel_width - 12, 12), Qt.AlignmentFlag.AlignLeft, f"菜品{suffix}")
+
+        painter.setFont(ui_font(7))
+        for index, dish in enumerate(visible_dishes):
+            row_top = top + 18.0 + index * row_height
+            available = self._dish_available(dish)
+            name = str(dish.get("name") or f"菜品{index + 1}")
+            name = painter.fontMetrics().elidedText(name, Qt.TextElideMode.ElideRight, 38)
+            price = self._format_price(dish.get("price"))
+            stock = self._display_value(dish.get("stock"))
+
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("#dcfce7" if available else "#fee2e2"))
+            painter.drawRoundedRect(QRectF(left + 6, row_top + 2, 24, 12), 5, 5)
+
+            painter.setPen(QColor("#166534" if available else "#991b1b"))
+            painter.setFont(ui_font(7, QFont.Weight.Bold))
+            painter.drawText(QRectF(left + 7, row_top + 1, 22, 13), Qt.AlignmentFlag.AlignCenter, "售" if available else "罄")
+
+            painter.setPen(QColor("#334155"))
+            painter.setFont(ui_font(7))
+            painter.drawText(QRectF(left + 33, row_top + 1, 40, 14), Qt.AlignmentFlag.AlignLeft, name)
+            painter.drawText(QRectF(left + 71, row_top + 1, 20, 14), Qt.AlignmentFlag.AlignRight, price)
+            painter.drawText(QRectF(left + 93, row_top + 1, 8, 14), Qt.AlignmentFlag.AlignRight, stock)
+
+    def _stall_dishes(self, stall: dict) -> list[dict[str, Any]]:
+        raw_dishes = stall.get("dishes")
+        if isinstance(raw_dishes, list):
+            return [dish for dish in raw_dishes if isinstance(dish, dict)]
+        return self._mock_stall_dishes(stall)
+
+    def _mock_stall_dishes(self, stall: dict) -> list[dict[str, Any]]:
+        stall_id = int(self._number(stall.get("id"), 0))
+        queue_count = int(self._number(stall.get("queue_count"), 0))
+        cook_time = self._number(stall.get("cook_time"), 45.0)
+        meat_ratio = max(0.0, min(1.0, self._number(stall.get("meat_ratio"), 0.5)))
+        veg_ratio = max(0.0, min(1.0, self._number(stall.get("veg_ratio"), 0.5)))
+        base_id = stall_id * 100
+        stocks = [
+            max(0, 24 - queue_count),
+            max(0, 16 - queue_count // 2),
+            0 if queue_count >= 8 else max(1, 10 - queue_count // 3),
+        ]
+        names = ["招牌套餐", "清爽素菜", "今日小炒"]
+        prices = [12.0 + stall_id, 8.0 + stall_id * 0.5, 10.0 + stall_id * 0.8]
+        return [
+            {
+                "id": base_id + index + 1,
+                "name": name,
+                "features": {"meat_ratio": meat_ratio, "veg_ratio": veg_ratio},
+                "price": prices[index],
+                "stock": stocks[index],
+                "cook_time": cook_time,
+                "available": stocks[index] > 0,
+            }
+            for index, name in enumerate(names)
+        ]
+
+    def _dish_available(self, dish: dict) -> bool:
+        if "available" in dish:
+            return bool(dish.get("available"))
+        stock = self._number(dish.get("stock"), None)
+        if stock is None:
+            return True
+        return stock > 0
+
+    def _draw_stall_status(self, painter: QPainter, stall: dict, x: float, y: float) -> None:
+        status = self._stall_status(stall)
+        label, text_color, fill_color = {
+            "pending": ("待营业", QColor("#92400e"), QColor("#fef3c7")),
+            "open": ("营业中", QColor("#166534"), QColor("#dcfce7")),
+            "sold_out": ("已售罄", QColor("#991b1b"), QColor("#fee2e2")),
+        }.get(status, ("营业中", QColor("#166534"), QColor("#dcfce7")))
+
+        rect = QRectF(x - 28, y + 31, 56, 15)
+        painter.setPen(QPen(text_color.lighter(125), 1))
+        painter.setBrush(fill_color)
+        painter.drawRoundedRect(rect, 5, 5)
+        painter.setPen(text_color)
+        painter.setFont(ui_font(7, QFont.Weight.Bold))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, label)
+
+    def _draw_stall_orders(self, painter: QPainter, stall: dict, x: float, y: float) -> None:
+        orders = self._stall_orders(stall)
+        if not orders:
+            return
+
+        visible_orders = orders[:2]
+        panel_width = 78.0
+        row_height = 16.0
+        panel_height = 18.0 + len(visible_orders) * row_height
+        left = x + 22.0
+        top = y + 58.0
+
+        painter.setPen(QPen(QColor(148, 163, 184, 135), 1))
+        painter.setBrush(QColor(248, 250, 252, 232))
+        painter.drawRoundedRect(QRectF(left, top, panel_width, panel_height), 6, 6)
+
+        suffix = f" +{len(orders) - len(visible_orders)}" if len(orders) > len(visible_orders) else ""
+        painter.setPen(QColor("#334155"))
+        painter.setFont(ui_font(7, QFont.Weight.Bold))
+        painter.drawText(QRectF(left + 6, top + 3, panel_width - 12, 12), Qt.AlignmentFlag.AlignLeft, f"订单{suffix}")
+
+        for index, order in enumerate(visible_orders):
+            row_top = top + 18.0 + index * row_height
+            status = str(order.get("status") or "queued")
+            status_label, status_color = self._order_status_display(status)
+            order_id = self._display_value(order.get("id"))
+            row_rect = QRectF(left + 5, row_top + 1, panel_width - 10, 14)
+            hovered = self._is_hovered(row_rect)
+
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(status_color.lighter(180))
+            painter.drawRoundedRect(QRectF(left + 5, row_top + 2, 18, 12), 5, 5)
+            painter.setPen(status_color.darker(130))
+            painter.setFont(ui_font(7, QFont.Weight.Bold))
+            painter.drawText(QRectF(left + 6, row_top + 1, 16, 13), Qt.AlignmentFlag.AlignCenter, status_label)
+
+            painter.setPen(QColor("#334155"))
+            painter.setFont(ui_font(7))
+            painter.drawText(QRectF(left + 26, row_top + 1, 46, 14), Qt.AlignmentFlag.AlignLeft, f"#{order_id}")
+            if hovered:
+                self._draw_order_tooltip(painter, order, status, status_color, left + panel_width + 4, row_top - 6)
+
+    def _stall_status(self, stall: dict) -> str:
+        status = stall.get("status")
+        if status:
+            return str(status)
+        dishes = self._stall_dishes(stall)
+        return "sold_out" if dishes and not any(self._dish_available(dish) for dish in dishes) else "open"
+
+    def _stall_orders(self, stall: dict) -> list[dict[str, Any]]:
+        raw_orders = stall.get("orders")
+        if isinstance(raw_orders, list):
+            return [order for order in raw_orders if isinstance(order, dict)]
+        return self._mock_stall_orders(stall)
+
+    def _mock_stall_orders(
+        self,
+        stall: dict,
+        dishes: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        queue_count = int(self._number(stall.get("queue_count"), 0))
+        if queue_count <= 0:
+            return []
+        stall_id = int(self._number(stall.get("id"), 0))
+        dishes = dishes if dishes is not None else self._stall_dishes(stall)
+        dish_id = dishes[0].get("id") if dishes else None
+        status_cycle = ["queued", "cooking", "done"]
+        return [
+            {
+                "id": stall_id * 1000 + index + 1,
+                "student_id": stall_id * 100 + index + 1,
+                "stall_id": stall_id,
+                "dish_id": dish_id,
+                "created_at": None,
+                "started_at": None,
+                "finished_at": None,
+                "status": status_cycle[min(index, len(status_cycle) - 1)],
+            }
+            for index in range(min(queue_count, 3))
+        ]
+
+    def _order_status_display(self, status: str) -> tuple[str, QColor]:
+        displays = {
+            "queued": ("排", QColor("#2563eb")),
+            "cooking": ("做", QColor("#ea580c")),
+            "done": ("完", QColor("#16a34a")),
+            "cancelled": ("取", QColor("#64748b")),
+        }
+        return displays.get(status, ("排", QColor("#2563eb")))
+
+    def _draw_order_tooltip(
+        self,
+        painter: QPainter,
+        order: dict,
+        status: str,
+        status_color: QColor,
+        left: float,
+        top: float,
+    ) -> None:
+        width = 126.0
+        height = 72.0
+        frame_width, frame_height = self._frame_size()
+        left = min(left, frame_width - width - 12)
+        top = min(max(24.0, top), frame_height - height - 24)
+        rect = QRectF(left, top, width, height)
+
+        painter.setPen(QPen(QColor(71, 85, 105, 160), 1))
+        painter.setBrush(QColor(255, 255, 255, 242))
+        painter.drawRoundedRect(rect, 7, 7)
+
+        status_name = self._order_status_name(status)
+        painter.setPen(status_color.darker(125))
+        painter.setFont(ui_font(8, QFont.Weight.Bold))
+        painter.drawText(QRectF(left + 8, top + 6, width - 16, 14), Qt.AlignmentFlag.AlignLeft, f"订单 {self._display_value(order.get('id'))}")
+        painter.drawText(QRectF(left + 8, top + 22, width - 16, 14), Qt.AlignmentFlag.AlignLeft, f"状态：{status_name}")
+
+        painter.setPen(QColor("#334155"))
+        painter.setFont(ui_font(7))
+        lines = [
+            f"学生：{self._display_value(order.get('student_id'))}",
+            f"菜品：{self._display_value(order.get('dish_id'))}",
+            f"窗口：{self._display_value(order.get('stall_id'))}",
+        ]
+        for index, line in enumerate(lines):
+            painter.drawText(QRectF(left + 8, top + 38 + index * 11, width - 16, 11), Qt.AlignmentFlag.AlignLeft, line)
+
+    def _is_hovered(self, rect: QRectF) -> bool:
+        if self._hover_scene_pos is None:
+            return False
+        x, y = self._hover_scene_pos
+        return rect.contains(QPointF(x, y))
+
+    def _hit_stall(self, scene_x: float, scene_y: float) -> dict | None:
+        """返回被点击的 stall 帧数据 dict，未命中则返回 None。"""
+        if not self.frame:
+            return None
+        for stall in self.frame.get("stalls", []) or []:
+            if not isinstance(stall, dict):
+                continue
+            point = self._point((stall.get("x"), stall.get("y")))
+            if point is None:
+                continue
+            x, y = point
+            # 命中区域: 从菜品面板顶部到等距盒子底部 + 状态徽章
+            hit_rect = QRectF(x - 52, y - 82, 104, 132)
+            if hit_rect.contains(QPointF(scene_x, scene_y)):
+                return stall
+        return None
+
+    def _hit_table(self, scene_x: float, scene_y: float) -> dict | None:
+        """返回被点击的 table 帧数据 dict，未命中则返回 None。"""
+        if not self.frame:
+            return None
+        for table in self.frame.get("tables", []) or []:
+            if not isinstance(table, dict):
+                continue
+            point = self._point((table.get("x"), table.get("y")))
+            if point is None:
+                continue
+            if self._table_hit_rect(table, point[0], point[1]).contains(QPointF(scene_x, scene_y)):
+                return table
+        return None
+
+    def _hit_student(self, scene_x: float, scene_y: float) -> dict | None:
+        """返回被点击的学生帧数据 dict，未命中则返回 None。"""
+        if not self.frame:
+            return None
+        students = [
+            self._student_render_data(student)
+            for student in self.frame.get("students", [])
+            if isinstance(student, dict)
+        ]
+        students.sort(key=lambda item: self._number(item.get("y"), 0.0), reverse=True)
+        for student in students:
+            point = self._point((student.get("x"), student.get("y")))
+            if point is None:
+                continue
+            hit_radius = 24.0 if str(student.get("state") or "") == "eating" else 22.0
+            if hypot(scene_x - point[0], scene_y - point[1]) <= hit_radius:
+                return student
+        return None
+
+    def _table_hit_rect(self, table: dict, x: float, y: float) -> QRectF:
+        _, seat_count = self._table_type_and_seat_count(table)
+        table_width = {2: 52.0, 4: 64.0, 6: 84.0}.get(seat_count, 64.0)
+        table_height = 38.0
+        left = x - table_width / 2 - 12.0
+        right = x + table_width / 2 + 12.0
+        top = y - table_height / 2 - 18.0
+        bottom = y + table_height / 2 + 34.0
+        for dx, dy in self._table_seat_offsets(seat_count):
+            left = min(left, x + dx - 6.0)
+            right = max(right, x + dx + 24.0)
+            top = min(top, y + dy - 10.0)
+            bottom = max(bottom, y + dy + 28.0)
+        return QRectF(left, top, right - left, bottom - top)
+
+    def _order_status_name(self, status: str) -> str:
+        names = {
+            "queued": "排队等待",
+            "cooking": "出餐中",
+            "done": "已完成",
+            "cancelled": "已取消",
+        }
+        return names.get(status, status or "-")
 
     def _draw_cook_timer(self, painter: QPainter, stall: dict) -> None:
         point = self._point((stall.get("x"), stall.get("y")))
@@ -238,24 +1957,150 @@ class CanvasWidget(QWidget):
             if point is None:
                 continue
             x, y = point
-            painter.setPen(QPen(QColor("#475569"), 1.2))
-            painter.setBrush(QColor("#fef3c7"))
-            painter.drawRoundedRect(QRectF(x - 25, y - 17, 50, 34), 5, 5)
+            table_type, seat_count = self._table_type_and_seat_count(table)
+            table_width = {2: 52.0, 4: 64.0, 6: 84.0}.get(seat_count, 64.0)
+            table_height = 38.0
 
-            seat_offsets = [(-34, -28), (26, -28), (-34, 20), (26, 20)]
+            self._draw_shadow(painter, x, y + 28, table_width + 22, 24, QColor(71, 85, 105, 40))
+            self._draw_iso_box(painter, x, y, table_width, table_height, 14, QColor("#fde68a"), QColor("#d97706"), QColor("#92400e"))
+            if self._is_hovered(self._table_hit_rect(table, x, y)):
+                painter.setPen(QPen(QColor(15, 118, 110, 170), 2.0))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRoundedRect(QRectF(x - table_width / 2 - 8, y - 29, table_width + 16, 66), 10, 10)
+            painter.setPen(QPen(QColor("#92400e"), 1.2))
+            painter.drawLine(int(x - table_width * 0.33), int(y + 18), int(x - table_width * 0.39), int(y + 34))
+            painter.drawLine(int(x + table_width * 0.33), int(y + 18), int(x + table_width * 0.27), int(y + 34))
+
+            painter.setPen(QColor("#92400e"))
+            painter.setFont(ui_font(7, QFont.Weight.Bold))
+            painter.drawText(QRectF(x - table_width / 2, y - 8, table_width, 14), Qt.AlignmentFlag.AlignCenter, f"{seat_count}人")
+
             seats = table.get("seat_frames") or table.get("seats") or []
+            seat_offsets = self._table_seat_offsets(int(table.get("seat_count") or len(seats) or 4))
             for index, (dx, dy) in enumerate(seat_offsets):
                 seat = seats[index] if index < len(seats) else None
                 status = self._seat_status(seat)
-                painter.setBrush(self._seat_color(status))
-                painter.setPen(QPen(QColor("#64748b"), 1))
-                painter.drawEllipse(QRectF(x + dx, y + dy, 16, 16))
+                color = self._seat_color(status)
+                self._draw_shadow(painter, x + dx + 8, y + dy + 13, 22, 9, QColor(51, 65, 85, 38))
+                painter.setBrush(color)
+                painter.setPen(QPen(color.darker(130), 1))
+                painter.drawRoundedRect(QRectF(x + dx, y + dy, 18, 18), 6, 6)
+                painter.setBrush(color.lighter(112))
+                painter.drawEllipse(QRectF(x + dx + 3, y + dy - 4, 12, 10))
+                self._draw_seat_status_marker(painter, x + dx, y + dy, status, seat)
+
+    def _table_type_and_seat_count(self, table: dict) -> tuple[str, int]:
+        table_type = str(table.get("table_type") or "").lower()
+        type_to_count = {"two": 2, "four": 4, "six": 6}
+        seat_count = int(self._number(table.get("seat_count"), type_to_count.get(table_type, 4)))
+        if seat_count not in (2, 4, 6):
+            seat_count = type_to_count.get(table_type, 4)
+        if table_type not in type_to_count:
+            table_type = {2: "two", 4: "four", 6: "six"}.get(seat_count, "four")
+        return table_type, seat_count
+
+    def _seat_offsets_for_table(self, seat_count: int, table_width: float) -> list[tuple[float, float]]:
+        side_x = table_width / 2 + 14
+        if seat_count == 2:
+            return [(-side_x - 4, -8), (side_x - 14, -8)]
+        if seat_count == 6:
+            return [
+                (-side_x - 4, -32),
+                (side_x - 14, -32),
+                (-side_x - 4, -4),
+                (side_x - 14, -4),
+                (-side_x - 4, 24),
+                (side_x - 14, 24),
+            ]
+        return [(-side_x - 4, -32), (side_x - 14, -32), (-side_x - 4, 24), (side_x - 14, 24)]
+
+    def _draw_seat_status_marker(self, painter: QPainter, x: float, y: float, status: str, seat: Any) -> None:
+        if status == "free":
+            return
+        label = "预" if status == "reserved" else "占"
+        color = QColor("#92400e") if status == "reserved" else QColor("#9f1239")
+
+        painter.setPen(QPen(QColor("#ffffff"), 1))
+        painter.setBrush(color)
+        painter.drawEllipse(QRectF(x + 9, y - 8, 12, 12))
+        painter.setPen(QColor("#ffffff"))
+        painter.setFont(ui_font(6, QFont.Weight.Bold))
+        painter.drawText(QRectF(x + 9, y - 8, 12, 12), Qt.AlignmentFlag.AlignCenter, label)
+
+        student_id = self._seat_student_id(seat)
+        if student_id is not None:
+            painter.setPen(color.darker(125))
+            painter.setFont(ui_font(6, QFont.Weight.Bold))
+            painter.drawText(QRectF(x - 4, y + 17, 30, 10), Qt.AlignmentFlag.AlignCenter, f"S{student_id}")
+
+    def _table_seat_offsets(self, seat_count: int) -> list[tuple[int, int]]:
+        if seat_count <= 2:
+            return [(-47, -4), (31, -4)]
+        if seat_count <= 4:
+            return [(-47, -32), (31, -32), (-47, 24), (31, 24)]
+        return [(-51, -40), (35, -40), (-51, -4), (35, -4), (-51, 32), (35, 32)][:seat_count]
 
     def _draw_students(self, painter: QPainter) -> None:
-        for student in self.frame.get("students", []):
-            if not isinstance(student, dict):
-                continue
+        self._draw_cached_seated_students(painter)
+        students = [
+            self._student_render_data(student)
+            for student in self.frame.get("students", [])
+            if isinstance(student, dict) and not self._is_cacheable_seated_student(student)
+        ]
+        students.sort(key=lambda item: self._number(item.get("y"), 0.0))
+        for student in students:
             self._draw_pig(painter, student)
+
+    def _draw_cached_seated_students(self, painter: QPainter) -> None:
+        if not self.frame:
+            return
+        seated_students = [
+            student
+            for student in self.frame.get("students", [])
+            if isinstance(student, dict) and self._is_cacheable_seated_student(student)
+        ]
+        if not seated_students:
+            self._seated_students_cache = None
+            self._seated_students_cache_key = None
+            return
+
+        width, height = self._frame_size()
+        cache_key = self._seated_students_key(seated_students, width, height)
+        if self._seated_students_cache is None or self._seated_students_cache_key != cache_key:
+            pixmap = QPixmap(int(width), int(height))
+            pixmap.fill(Qt.GlobalColor.transparent)
+            cache_painter = QPainter(pixmap)
+            cache_painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            for student in sorted(seated_students, key=lambda item: self._number(item.get("y"), 0.0)):
+                self._draw_pig(cache_painter, student)
+            cache_painter.end()
+            self._seated_students_cache = pixmap
+            self._seated_students_cache_key = cache_key
+        painter.drawPixmap(QRectF(0, 0, width, height), self._seated_students_cache, QRectF(0, 0, width, height))
+
+    def _is_cacheable_seated_student(self, student: dict) -> bool:
+        if str(student.get("state") or "") != "eating":
+            return False
+        return not self._is_selected_student(student)
+
+    def _seated_students_key(self, students: list[dict], width: float, height: float) -> tuple[Any, ...]:
+        return (
+            int(width),
+            int(height),
+            self._selected_student_id,
+            tuple(
+                (
+                    int(self._number(student.get("id"), 0)),
+                    round(self._number(student.get("x"), 0.0), 1),
+                    round(self._number(student.get("y"), 0.0), 1),
+                    round(self._number(student.get("facing_x"), 1.0), 2),
+                    round(self._number(student.get("facing_y"), 0.0), 2),
+                    student.get("group_id"),
+                    student.get("group_size"),
+                )
+                for student in sorted(students, key=lambda item: int(self._number(item.get("id"), 0)))
+            ),
+        )
 
     def _draw_pig(self, painter: QPainter, student: dict) -> None:
         point = self._point((student.get("x"), student.get("y")))
@@ -263,29 +2108,73 @@ class CanvasWidget(QWidget):
             return
         x, y = point
         state = str(student.get("state") or "unknown")
-        outline = QColor("#be185d")
-        fill = self._student_fill_color(state)
+        selected = self._is_selected_student(student)
+        fill = QColor("#facc15") if selected else self._student_fill_color(state)
+        facing_x = max(-1.0, min(1.0, self._number(student.get("facing_x"), 1.0)))
+        lean = 4.0 if facing_x >= 0 else -4.0
 
-        painter.setPen(QPen(outline, 1.4))
+        if selected:
+            painter.setPen(QPen(QColor("#0f766e"), 2.4))
+            painter.setBrush(QColor(20, 184, 166, 38))
+            painter.drawEllipse(QRectF(x - 23, y - 30, 46, 56))
+
+        self._draw_shadow(painter, x, y + 14, 30, 11, QColor(51, 65, 85, 55))
+        painter.setPen(QPen(fill.darker(145), 1.1))
+        painter.setBrush(fill.darker(108))
+        painter.drawRoundedRect(QRectF(x - 8, y + 2, 18, 18), 7, 7)
+        painter.setPen(QPen(QColor("#475569"), 1.0))
+        painter.drawLine(int(x - 3), int(y + 18), int(x - 8), int(y + 25))
+        painter.drawLine(int(x + 7), int(y + 18), int(x + 13), int(y + 24))
+
+        head_x = x + lean
+        head_y = y - 8
+        painter.setPen(QPen(QColor("#be185d"), 1.4))
         painter.setBrush(fill)
-        painter.drawEllipse(QRectF(x - 12, y - 10, 24, 22))
-
-        painter.setBrush(fill.lighter(105))
-        painter.drawEllipse(QRectF(x - 15, y - 13, 8, 8))
-        painter.drawEllipse(QRectF(x + 7, y - 13, 8, 8))
-
+        painter.drawEllipse(QRectF(head_x - 14, head_y - 12, 28, 25))
+        painter.setBrush(fill.lighter(112))
+        painter.drawEllipse(QRectF(head_x - 16, head_y - 15, 9, 9))
+        painter.drawEllipse(QRectF(head_x + 7, head_y - 15, 9, 9))
         painter.setBrush(QColor("#fecdd3"))
-        painter.drawEllipse(QRectF(x - 7, y - 2, 14, 9))
-
-        painter.setBrush(QColor("#9f1239"))
+        painter.drawEllipse(QRectF(head_x - 8, head_y - 1, 16, 10))
+        painter.setBrush(QColor(255, 255, 255, 120))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(QRectF(x - 4, y + 1, 2.5, 2.5))
-        painter.drawEllipse(QRectF(x + 2, y + 1, 2.5, 2.5))
+        painter.drawEllipse(QRectF(head_x - 8, head_y - 9, 8, 5))
+        painter.setBrush(QColor("#9f1239"))
+        painter.drawEllipse(QRectF(head_x - 4, head_y + 2, 2.5, 2.5))
+        painter.drawEllipse(QRectF(head_x + 2, head_y + 2, 2.5, 2.5))
 
         painter.setPen(QPen(QColor("#831843"), 1.2))
-        painter.drawPoint(int(x - 5), int(y - 4))
-        painter.drawPoint(int(x + 5), int(y - 4))
-        self._draw_student_expression(painter, x, y, state)
+        eye_offset = 2.0 if facing_x >= 0 else -2.0
+        painter.drawPoint(int(head_x - 5 + eye_offset), int(head_y - 4))
+        painter.drawPoint(int(head_x + 5 + eye_offset), int(head_y - 4))
+        self._draw_student_expression(painter, head_x, head_y, state)
+        self._draw_group_badge(painter, student, head_x, head_y)
+
+    def _is_selected_student(self, student: dict) -> bool:
+        if self._selected_student_id is None:
+            return False
+        student_id = self._number(student.get("id"), None)
+        return student_id is not None and int(student_id) == self._selected_student_id
+
+    def _draw_group_badge(self, painter: QPainter, student: dict, x: float, y: float) -> None:
+        group_id = student.get("group_id")
+        if group_id is None:
+            return
+        group_text = self._display_value(group_id)
+        group_size = self._number(student.get("group_size"), None)
+        color = self._group_color(group_id)
+        badge_x = x - 22
+        badge_y = y - 30
+
+        painter.setPen(QPen(color.darker(135), 1))
+        painter.setBrush(color.lighter(155))
+        painter.drawEllipse(QRectF(badge_x, badge_y, 12, 12))
+
+        painter.setPen(color.darker(150))
+        painter.setFont(ui_font(6, QFont.Weight.Bold))
+        painter.drawText(QRectF(badge_x + 13, badge_y - 1, 34, 14), Qt.AlignmentFlag.AlignLeft, f"G{group_text}")
+        if group_size is not None and group_size > 1:
+            painter.drawText(QRectF(badge_x + 13, badge_y + 9, 24, 12), Qt.AlignmentFlag.AlignLeft, f"x{int(group_size)}")
 
     def _draw_student_expression(self, painter: QPainter, x: float, y: float, state: str) -> None:
         painter.setFont(ui_font(8, QFont.Weight.Bold))
@@ -319,17 +2208,49 @@ class CanvasWidget(QWidget):
             painter.drawArc(QRectF(x - 6, y + 6, 12, 8), 20 * 16, 140 * 16)
 
     def _draw_tray_return_points(self, painter: QPainter) -> None:
+        frame_width, _ = self._frame_size()
+        wall_x = frame_width - 44.0
         for point in self.frame.get("tray_return_points", []):
-            rect = self._rect_frame(point, default_width=120.0, default_height=70.0)
+            rect = self._rect_frame(point, default_width=52.0, default_height=96.0)
             if rect is None:
                 continue
-            x, y, width, height, congested = rect
-            painter.setPen(QPen(QColor("#0f766e" if not congested else "#b45309"), 2))
-            painter.setBrush(QColor("#ccfbf1" if not congested else "#fed7aa"))
-            painter.drawRoundedRect(QRectF(x - width / 2, y - height / 2, width, height), 8, 8)
-            painter.setFont(ui_font(9, QFont.Weight.Bold))
+            _, y, width, height, congested = rect
+            edge = QColor("#0f766e" if not congested else "#b45309")
+            fill = QColor("#d8f3ea" if not congested else "#fde7c7")
+            slot = QColor("#0f3f46" if not congested else "#7c2d12")
+            panel_height = max(66.0, min(86.0, height * 0.82))
+            panel_width = max(30.0, min(38.0, width * 0.72))
+            left = wall_x - panel_width + 7.0
+            top = y - panel_height / 2.0
+
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(51, 65, 85, 28))
+            painter.drawRect(QRectF(left - 8.0, top + 8.0, panel_width + 8.0, panel_height - 4.0))
+
+            painter.setPen(QPen(edge.darker(120), 1.2))
+            painter.setBrush(fill)
+            painter.drawRoundedRect(QRectF(left, top, panel_width, panel_height), 4, 4)
+            painter.setPen(QPen(QColor("#94a3a0"), 1.0))
+            painter.drawLine(int(left + 4.0), int(top + 9.0), int(left + panel_width - 4.0), int(top + 9.0))
+
+            painter.setPen(QPen(edge.darker(125), 1.4))
+            painter.setBrush(slot)
+            painter.drawRoundedRect(QRectF(left + 6.0, y - 9.0, panel_width - 12.0, 8.0), 4, 4)
+
+            painter.setPen(QPen(QColor("#475569"), 1.0))
+            painter.setBrush(QColor(255, 255, 255, 145))
+            for index in range(3):
+                bowl_top = y + 6.0 + index * 9.0
+                painter.drawArc(QRectF(left + 8.0, bowl_top, panel_width - 16.0, 8.0), 180 * 16, 180 * 16)
+
+            label_width = 58.0
+            label_left = left - label_width - 2.0
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(255, 255, 255, 218))
+            painter.drawRoundedRect(QRectF(label_left, top - 2.0, label_width, 15.0), 4, 4)
+            painter.setFont(ui_font(7, QFont.Weight.Bold))
             painter.setPen(QColor("#115e59" if not congested else "#9a3412"))
-            painter.drawText(QRectF(x - width / 2, y - 9, width, 20), Qt.AlignmentFlag.AlignCenter, "餐盘回收")
+            painter.drawText(QRectF(label_left + 3.0, top - 2.0, label_width - 6.0, 15.0), Qt.AlignmentFlag.AlignCenter, "碗筷回收")
 
     def _draw_stats_panel(self, painter: QPainter) -> None:
         stats = self.frame.get("stats") or {}
@@ -364,6 +2285,7 @@ class CanvasWidget(QWidget):
         painter.setFont(ui_font(8))
         lines = [
             f"avg_wait_time: {self._format_seconds(stats.get('avg_wait_time'))}",
+            f"avg_eating_time: {self._format_seconds(stats.get('avg_eating_time'))}",
             f"avg_total_time: {self._format_seconds(stats.get('avg_total_time'))}",
             f"max_active_students: {self._display_value(stats.get('max_active_students'))}",
             f"seat_utilization: {self._format_percent(stats.get('seat_utilization'))}",
@@ -419,6 +2341,17 @@ class CanvasWidget(QWidget):
             return None
         return point[0], point[1], max(1.0, width), max(1.0, height), congested
 
+    def _obstacle_rect_frame(self, value: Any) -> tuple[float, float, float, float, bool] | None:
+        if isinstance(value, dict) and all(key in value for key in ("left", "top", "right", "bottom")):
+            left = self._number(value.get("left"), 0.0)
+            top = self._number(value.get("top"), 0.0)
+            right = self._number(value.get("right"), left)
+            bottom = self._number(value.get("bottom"), top)
+            width = max(1.0, right - left)
+            height = max(1.0, bottom - top)
+            return left + width / 2.0, top + height / 2.0, width, height, False
+        return self._rect_frame(value, default_width=1.0, default_height=1.0)
+
     def _seat_status(self, seat: Any) -> str:
         if isinstance(seat, dict):
             status = seat.get("status")
@@ -426,6 +2359,11 @@ class CanvasWidget(QWidget):
                 return str(status)
             return "occupied" if seat.get("student_id") is not None else "free"
         return "occupied" if seat is not None else "free"
+
+    def _seat_student_id(self, seat: Any) -> Any:
+        if isinstance(seat, dict):
+            return seat.get("student_id")
+        return seat
 
     def _seat_color(self, status: str) -> QColor:
         if status == "reserved":
@@ -450,6 +2388,23 @@ class CanvasWidget(QWidget):
         }
         return colors.get(state, QColor("#f9a8d4"))
 
+    def _group_color(self, group_id: Any) -> QColor:
+        palette = [
+            QColor("#38bdf8"),
+            QColor("#a78bfa"),
+            QColor("#34d399"),
+            QColor("#fbbf24"),
+            QColor("#fb7185"),
+            QColor("#2dd4bf"),
+            QColor("#f97316"),
+            QColor("#818cf8"),
+        ]
+        try:
+            index = int(group_id)
+        except (TypeError, ValueError):
+            index = sum(ord(char) for char in str(group_id))
+        return palette[index % len(palette)]
+
     def _format_seconds(self, value: Any) -> str:
         if value is None:
             return "-"
@@ -469,6 +2424,12 @@ class CanvasWidget(QWidget):
         if number is None:
             return "-"
         return f"{number * 100:.1f}%"
+
+    def _format_price(self, value: Any) -> str:
+        number = self._number(value, None)
+        if number is None:
+            return "-"
+        return f"{number:.1f}"
 
     def _display_value(self, value: Any) -> str:
         if value is None:
