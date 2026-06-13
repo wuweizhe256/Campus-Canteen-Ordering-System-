@@ -338,12 +338,12 @@ def draw_pig_head(
     painter.setBrush(QColor(36, 48, 41, int((0.30 if pressed else 0.15) * 255)))
     painter.drawEllipse(QPointF(cx, cy + 22 * scale), 18 * scale, 6 * scale)
 
-    lift = 3.4 * scale if pressed else 0.0
+    head_y = cy - (1.6 * scale if pressed else 0.0)
 
     def draw_ear(ex: float, sign: int) -> None:
         painter.save()
-        painter.translate(ex, cy - 12 * scale - lift)
-        rotation = sign * (-0.18) - (sign * 0.14 if pressed else 0.0)
+        painter.translate(ex, head_y - 12 * scale)
+        rotation = sign * (-0.18) - (sign * 0.08 if pressed else 0.0)
         painter.rotate(math.degrees(rotation))
 
         outer = QPainterPath()
@@ -365,15 +365,15 @@ def draw_pig_head(
     draw_ear(cx - 10 * scale, 1)
     draw_ear(cx + 10 * scale, -1)
 
-    gradient = QLinearGradient(cx, cy - 15 * scale, cx, cy + 15 * scale)
+    gradient = QLinearGradient(cx, head_y - 15 * scale, cx, head_y + 15 * scale)
     gradient.setColorAt(0.0, _adj(fill, -4 if pressed else 12))
     gradient.setColorAt(1.0, _adj(fill, -18 if pressed else -6))
     painter.setBrush(gradient)
     painter.setPen(QPen(QColor("#BE4D6E"), 1.3 * scale))
-    painter.drawEllipse(QPointF(cx, cy), 15 * scale, 13.5 * scale)
+    painter.drawEllipse(QPointF(cx, head_y), 15 * scale, 13.5 * scale)
 
     painter.save()
-    painter.translate(cx - 5 * scale, cy - 7 * scale)
+    painter.translate(cx - 5 * scale, head_y - 7 * scale)
     painter.rotate(math.degrees(-0.5))
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(QColor(255, 255, 255, 82))
@@ -383,42 +383,42 @@ def draw_pig_head(
     blush = QColor(UiColors.PIG_BLUSH)
     blush.setAlpha(50)
     painter.setBrush(blush)
-    painter.drawEllipse(QPointF(cx - 9 * scale, cy + 3 * scale), 2.6 * scale, 1.7 * scale)
-    painter.drawEllipse(QPointF(cx + 9 * scale, cy + 3 * scale), 2.6 * scale, 1.7 * scale)
+    painter.drawEllipse(QPointF(cx - 9 * scale, head_y + 3 * scale), 2.6 * scale, 1.7 * scale)
+    painter.drawEllipse(QPointF(cx + 9 * scale, head_y + 3 * scale), 2.6 * scale, 1.7 * scale)
 
     if chef:
         painter.setBrush(QColor("#ffffff"))
         painter.setPen(QPen(QColor("#CBB9A0"), 1 * scale))
         painter.drawRoundedRect(
-            QRectF(cx - 11 * scale, cy - 16 * scale, 22 * scale, 6 * scale),
+            QRectF(cx - 11 * scale, head_y - 16 * scale, 22 * scale, 6 * scale),
             3 * scale,
             3 * scale,
         )
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor("#ffffff"))
         for dx, dy, radius in [(-7, -19, 4.4), (0, -21, 5.0), (7, -19, 4.4)]:
-            painter.drawEllipse(QPointF(cx + dx * scale, cy + dy * scale), radius * scale, radius * scale)
+            painter.drawEllipse(QPointF(cx + dx * scale, head_y + dy * scale), radius * scale, radius * scale)
 
     painter.setBrush(QColor("#F4A6C0" if pressed else "#F8CDD7"))
     painter.setPen(QPen(QColor("#E1809B"), 1 * scale))
-    painter.drawEllipse(QPointF(cx, cy + 5 * scale), 8 * scale, 5.4 * scale)
+    painter.drawEllipse(QPointF(cx, head_y + 5 * scale), 8 * scale, 5.4 * scale)
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(QColor("#A83258" if pressed else "#C75D7E"))
-    painter.drawEllipse(QPointF(cx - 2.6 * scale, cy + 5 * scale), 1.2 * scale, 1.8 * scale)
-    painter.drawEllipse(QPointF(cx + 2.6 * scale, cy + 5 * scale), 1.2 * scale, 1.8 * scale)
+    painter.drawEllipse(QPointF(cx - 2.6 * scale, head_y + 5 * scale), 1.2 * scale, 1.8 * scale)
+    painter.drawEllipse(QPointF(cx + 2.6 * scale, head_y + 5 * scale), 1.2 * scale, 1.8 * scale)
     if pressed:
         painter.setBrush(QColor(255, 255, 255, 166))
-        painter.drawEllipse(QPointF(cx - 1 * scale, cy + 3.2 * scale), 2.6 * scale, 1.3 * scale)
+        painter.drawEllipse(QPointF(cx - 1 * scale, head_y + 3.2 * scale), 2.6 * scale, 1.3 * scale)
 
     eye_offset = facing * 1.4 * scale
     painter.setBrush(QColor("#3A2230"))
-    painter.drawEllipse(QPointF(cx - 6 * scale + eye_offset, cy - 2 * scale), 1.9 * scale, 1.9 * scale)
-    painter.drawEllipse(QPointF(cx + 6 * scale + eye_offset, cy - 2 * scale), 1.9 * scale, 1.9 * scale)
+    painter.drawEllipse(QPointF(cx - 6 * scale + eye_offset, head_y - 2 * scale), 1.9 * scale, 1.9 * scale)
+    painter.drawEllipse(QPointF(cx + 6 * scale + eye_offset, head_y - 2 * scale), 1.9 * scale, 1.9 * scale)
     painter.setBrush(QColor("#ffffff"))
-    painter.drawEllipse(QPointF(cx - 6.6 * scale + eye_offset, cy - 2.6 * scale), 0.7 * scale, 0.7 * scale)
-    painter.drawEllipse(QPointF(cx + 5.4 * scale + eye_offset, cy - 2.6 * scale), 0.7 * scale, 0.7 * scale)
+    painter.drawEllipse(QPointF(cx - 6.6 * scale + eye_offset, head_y - 2.6 * scale), 0.7 * scale, 0.7 * scale)
+    painter.drawEllipse(QPointF(cx + 5.4 * scale + eye_offset, head_y - 2.6 * scale), 0.7 * scale, 0.7 * scale)
 
-    mouth_y = cy + 10.5 * scale
+    mouth_y = head_y + 10.5 * scale
     if expr == "eat":
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor("#8A1733"))
