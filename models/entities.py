@@ -46,7 +46,6 @@ class SimulationConfig:
     companion_ratio: float = 0.25
     entrance_count: int = 1
     exit_count: int = 1
-    render_mode: str = "performance"
     show_path_debug_layer: bool = False
     show_obstacle_layer: bool = False
     seed: int | None = None

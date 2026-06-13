@@ -286,7 +286,6 @@ class MainWindow(QMainWindow):
         self.obstacle_checkbox.setChecked(config.show_obstacle_layer)
         self._stats_update_clock.invalidate()
         self._student_details_by_id.clear()
-        self.canvas.set_render_mode(config.render_mode)
         self._running = True
         self._paused = False
         self.start_button.setEnabled(False)
