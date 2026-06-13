@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from PyQt6.QtWidgets import (
+    QButtonGroup,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QPushButton,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -71,11 +73,39 @@ class ConfigDialog(QDialog):
         self.seed_spin.setValue(0)
         self.seed_spin.setSpecialValueText("\u968f\u673a")
 
+        self.showcase_mode_button = QPushButton("\u5c55\u793a")
+        self.showcase_mode_button.setObjectName("ModeButton")
+        self.showcase_mode_button.setCheckable(True)
+        self.performance_mode_button = QPushButton("\u6027\u80fd")
+        self.performance_mode_button.setObjectName("ModeButton")
+        self.performance_mode_button.setCheckable(True)
+        self.performance_mode_button.setChecked(True)
+        self.fallback_mode_button = QPushButton("\u5907\u9009")
+        self.fallback_mode_button.setObjectName("ModeButton")
+        self.fallback_mode_button.setCheckable(True)
+        for button in (
+            self.showcase_mode_button,
+            self.performance_mode_button,
+            self.fallback_mode_button,
+        ):
+            button.setFixedSize(68, 32)
+        self.mode_button_group = QButtonGroup(self)
+        self.mode_button_group.setExclusive(True)
+        self.mode_button_group.addButton(self.showcase_mode_button)
+        self.mode_button_group.addButton(self.performance_mode_button)
+        self.mode_button_group.addButton(self.fallback_mode_button)
+
         basic_form = self._form_layout()
         basic_form.addRow("\u663e\u793a\u4eff\u771f\u65f6\u957f", self.minutes_spin)
         basic_form.addRow("\u7a97\u53e3\u6570\u91cf", self.stalls_spin)
         basic_form.addRow("\u751f\u6210\u5b66\u751f\u603b\u6570", self.total_students_spin)
         basic_form.addRow("\u968f\u673a\u79cd\u5b50", self.seed_spin)
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(5)
+        mode_row.addWidget(self.showcase_mode_button)
+        mode_row.addWidget(self.performance_mode_button)
+        mode_row.addWidget(self.fallback_mode_button)
+        basic_form.addRow("\u7ed8\u5236\u6a21\u5f0f", mode_row)
 
         table_form = self._form_layout()
         table_type_row = QHBoxLayout()
@@ -158,10 +188,18 @@ class ConfigDialog(QDialog):
             companion_ratio=companion_ratio,
             companion_pair_ratio=companion_ratio * 0.7,
             companion_multi_ratio=companion_ratio * 0.3,
+            render_mode=self._selected_render_mode(),
             seed=None if seed == 0 else seed,
             total_student_count=total_students,
             max_active_students=max(55, total_students),
         )
+
+    def _selected_render_mode(self) -> str:
+        if self.showcase_mode_button.isChecked():
+            return "showcase"
+        if self.fallback_mode_button.isChecked():
+            return "fallback"
+        return "performance"
 
     def _apply_style(self) -> None:
         font_family = stylesheet_font_family()
@@ -209,6 +247,21 @@ class ConfigDialog(QDialog):
             }
             QPushButton:hover {
                 background: #cbd5e1;
+            }
+            QPushButton#ModeButton {
+                min-width: 52px;
+                max-width: 68px;
+                min-height: 24px;
+                max-height: 32px;
+                padding: 4px 7px;
+                font: 700 9pt "Microsoft YaHei UI";
+            }
+            QPushButton#ModeButton:checked {
+                color: #ffffff;
+                background: #0f766e;
+            }
+            QPushButton#ModeButton:checked:hover {
+                background: #0d9488;
             }
             """
         self.setStyleSheet(style.replace("Microsoft YaHei UI", font_family))
