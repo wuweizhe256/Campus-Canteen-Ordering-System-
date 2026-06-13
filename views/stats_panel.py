@@ -23,6 +23,32 @@ from PyQt6.QtWidgets import (
 from utils.fonts import stylesheet_font_family, ui_font
 
 
+class StatsTokens:
+    HEALTHY = "#36A37A"
+    CAUTION = "#F0913C"
+    ALERT = "#E23B3B"
+    THEME = "#0f766e"
+    MUTED = "#64748b"
+    INK = "#0f172a"
+    CARD_BG = "#f8fafc"
+    TRACK = "#e5e7eb"
+    HEAT_STOPS = (
+        (0.00, "#36A37A"),
+        (0.25, "#8CC152"),
+        (0.50, "#F4C744"),
+        (0.75, "#F0913C"),
+        (1.00, "#E23B3B"),
+    )
+    GAUGE_THRESHOLDS = {
+        "等待": {"caution": 60.0, "alert": 120.0},
+        "座位": {"low_caution": 0.18, "caution": 0.72, "alert": 0.90},
+        "人数": {"caution": 70.0, "alert": 100.0},
+        "拥堵": {"caution": 0.55, "alert": 0.80},
+        "卡住": {"caution": 3.0, "alert": 8.0},
+    }
+    TABLE_UTILIZATION_THRESHOLDS = {"caution": 0.85, "alert": 0.95}
+
+
 class StatsPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -514,19 +540,23 @@ class GaugePanel(QWidget):
         color: QColor,
     ) -> None:
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#f8fafc"))
+        painter.setBrush(QColor(StatsTokens.CARD_BG))
         painter.drawRoundedRect(rect, 8, 8)
 
         center = rect.left() + 36
         circle = QRectF(center - 22, rect.top() + 11, 44, 44)
-        painter.setPen(QPen(QColor("#e2e8f0"), 7))
+        track_pen = QPen(QColor(StatsTokens.TRACK), 7)
+        track_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(track_pen)
         painter.drawArc(circle, 210 * 16, -240 * 16)
         if value is not None:
             ratio = max(0.0, min(1.0, value / maximum if maximum > 0 else 0.0))
-            painter.setPen(QPen(color, 7))
+            progress_pen = QPen(color, 7)
+            progress_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(progress_pen)
             painter.drawArc(circle, 210 * 16, int(-240 * ratio * 16))
 
-        painter.setPen(QColor("#64748b"))
+        painter.setPen(QColor(StatsTokens.MUTED))
         painter.setFont(ui_font(8))
         painter.drawText(QRectF(rect.left() + 72, rect.top() + 12, rect.width() - 82, 18), Qt.AlignmentFlag.AlignLeft, label)
 
@@ -544,38 +574,20 @@ class GaugePanel(QWidget):
 
     def _semantic_color(self, label: str, value: float | None) -> QColor:
         if value is None:
-            return QColor("#64748b")
-        if label in {"等待", "在场"}:
-            if value >= 120:
-                return QColor("#dc4a4a")
-            if value >= 60:
-                return QColor("#d8842b")
-            return QColor("#0f766e")
-        if label == "座位":
-            if value >= 0.9:
-                return QColor("#dc4a4a")
-            if value >= 0.72 or value <= 0.18:
-                return QColor("#d8842b")
-            return QColor("#0f766e")
-        if label == "人数":
-            if value >= 100:
-                return QColor("#dc4a4a")
-            if value >= 70:
-                return QColor("#d8842b")
-            return QColor("#0f766e")
-        if label == "拥堵":
-            if value >= 0.8:
-                return QColor("#dc4a4a")
-            if value >= 0.55:
-                return QColor("#d8842b")
-            return QColor("#0f766e")
-        if label == "卡住":
-            if value >= 8:
-                return QColor("#dc4a4a")
-            if value >= 3:
-                return QColor("#d8842b")
-            return QColor("#0f766e")
-        return QColor("#0f766e")
+            return QColor(StatsTokens.MUTED)
+        if label == "在场":
+            return QColor(StatsTokens.THEME)
+        thresholds = StatsTokens.GAUGE_THRESHOLDS.get(label)
+        if thresholds is None:
+            return QColor(StatsTokens.HEALTHY)
+        low_caution = thresholds.get("low_caution")
+        if low_caution is not None and value <= low_caution:
+            return QColor(StatsTokens.CAUTION)
+        if value >= thresholds["alert"]:
+            return QColor(StatsTokens.ALERT)
+        if value >= thresholds["caution"]:
+            return QColor(StatsTokens.CAUTION)
+        return QColor(StatsTokens.HEALTHY)
 
 
 class TableTypeUtilizationPanel(QWidget):
@@ -598,20 +610,15 @@ class TableTypeUtilizationPanel(QWidget):
         top = 48.0
         bar_left = 76.0
         bar_width = max(80.0, self.width() - bar_left - 60.0)
-        colors = {
-            "2人桌": QColor("#0ea5e9"),
-            "4人桌": QColor("#14b8a6"),
-            "6人桌": QColor("#f59e0b"),
-        }
         for index, (label, ratio, used, total) in enumerate(rows):
             y = top + index * 36.0
-            color = colors.get(label, QColor("#64748b"))
+            color = _utilization_color(ratio)
             painter.setPen(QColor("#334155"))
             painter.setFont(ui_font(8, QFont.Weight.Bold))
             painter.drawText(QRectF(16, y - 2, 54, 18), Qt.AlignmentFlag.AlignLeft, label)
 
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor("#f1f5f9"))
+            painter.setBrush(QColor(StatsTokens.TRACK))
             painter.drawRoundedRect(QRectF(bar_left, y, bar_width, 12), 6, 6)
             if ratio is not None:
                 ratio = max(0.0, min(1.0, ratio))
@@ -992,9 +999,9 @@ def _draw_trend_lines(
     max_stuck = max(1.0, max(stuck_values) if stuck_values else 1.0)
 
     _draw_single_line(painter, chart, history, "avg_wait_time", max_wait, QColor("#0ea5e9"), y_offset=-3)
-    _draw_single_line(painter, chart, history, "max_active_students", max_active, QColor("#f59e0b"), y_offset=1)
-    _draw_single_line(painter, chart, history, "congestion_index", max_congestion, QColor("#ef4444"), y_offset=4)
-    _draw_single_line(painter, chart, history, "stuck_student_count", max_stuck, QColor("#f97316"), y_offset=7)
+    _draw_single_line(painter, chart, history, "max_active_students", max_active, QColor(StatsTokens.CAUTION), y_offset=1)
+    _draw_single_line(painter, chart, history, "congestion_index", max_congestion, QColor(StatsTokens.ALERT), y_offset=4)
+    _draw_single_line(painter, chart, history, "stuck_student_count", max_stuck, QColor(StatsTokens.CAUTION), y_offset=7)
 
 
 def _draw_single_line(
@@ -1048,9 +1055,9 @@ def _draw_trend_legend(painter: QPainter, width: int, height: int) -> None:
     y = height - 28
     items = [
         ("等待", QColor("#0ea5e9")),
-        ("人数", QColor("#f59e0b")),
-        ("拥堵", QColor("#ef4444")),
-        ("卡住", QColor("#f97316")),
+        ("人数", QColor(StatsTokens.CAUTION)),
+        ("拥堵", QColor(StatsTokens.ALERT)),
+        ("卡住", QColor(StatsTokens.CAUTION)),
     ]
     item_count = len(items)
     block_width = 72
@@ -1176,15 +1183,21 @@ def _card_painter(widget: QWidget) -> QPainter:
     return painter
 
 
+def _utilization_color(ratio: float | None) -> QColor:
+    if ratio is None:
+        return QColor(StatsTokens.MUTED)
+    ratio = max(0.0, min(1.0, ratio))
+    thresholds = StatsTokens.TABLE_UTILIZATION_THRESHOLDS
+    if ratio >= thresholds["alert"]:
+        return QColor(StatsTokens.ALERT)
+    if ratio >= thresholds["caution"]:
+        return QColor(StatsTokens.CAUTION)
+    return QColor(StatsTokens.HEALTHY)
+
+
 def _heat_color(ratio: float) -> QColor:
     ratio = max(0.0, min(1.0, ratio))
-    stops = [
-        (0.00, QColor("#36A37A")),
-        (0.25, QColor("#8CC152")),
-        (0.50, QColor("#F4C744")),
-        (0.75, QColor("#F0913C")),
-        (1.00, QColor("#E23B3B")),
-    ]
+    stops = [(position, QColor(color)) for position, color in StatsTokens.HEAT_STOPS]
     for index in range(len(stops) - 1):
         start_pos, start_color = stops[index]
         end_pos, end_color = stops[index + 1]

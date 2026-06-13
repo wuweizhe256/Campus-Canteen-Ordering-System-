@@ -5,6 +5,7 @@ from typing import Any
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
+    QApplication,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -16,6 +17,12 @@ from PyQt6.QtWidgets import (
 )
 
 from utils.fonts import ui_font
+from views.ui_widgets import (
+    DetailBadge,
+    DetailTokens,
+    detail_progress_stylesheet,
+    set_detail_value,
+)
 
 
 class StudentInfoPopup(QDialog):
@@ -26,7 +33,7 @@ class StudentInfoPopup(QDialog):
         self._student: dict | None = student
         self._student_id = int(_number(student.get("id"), 0) or 0)
         self._title_label: QLabel | None = None
-        self._status_label: QLabel | None = None
+        self._status_label: DetailBadge | None = None
         self._labels: dict[str, QLabel] = {}
         self._path_progress: QProgressBar | None = None
         self._eating_progress: QProgressBar | None = None
@@ -43,27 +50,24 @@ class StudentInfoPopup(QDialog):
 
     def _setup_ui(self) -> None:
         self.setWindowTitle(f"学生 S{self._student_id} 详情")
-        self.setMinimumSize(470, 560)
-        self.resize(500, 680)
+        self.setMinimumSize(340, 420)
+        _apply_compact_dialog_size(self, 380, 560)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.Dialog)
 
         root = QVBoxLayout()
-        root.setContentsMargins(18, 18, 18, 18)
-        root.setSpacing(12)
+        root.setContentsMargins(14, 14, 14, 14)
+        root.setSpacing(8)
 
         header = QHBoxLayout()
-        header.setSpacing(12)
+        header.setSpacing(8)
         self._title_label = QLabel(f"学生 S{self._student_id}")
-        self._title_label.setFont(ui_font(15, QFont.Weight.Bold))
+        self._title_label.setFont(ui_font(13, QFont.Weight.Bold))
         self._title_label.setStyleSheet("color: #4a3728;")
         header.addWidget(self._title_label)
         header.addStretch()
-        self._status_label = QLabel()
+        self._status_label = DetailBadge()
         self._status_label.setFont(ui_font(11, QFont.Weight.Bold))
-        self._status_label.setFixedHeight(28)
-        self._status_label.setMinimumWidth(74)
-        self._status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         header.addWidget(self._status_label)
         root.addLayout(header)
 
@@ -75,13 +79,13 @@ class StudentInfoPopup(QDialog):
 
         content = QWidget()
         content_layout = QVBoxLayout()
-        content_layout.setContentsMargins(2, 0, 8, 0)
-        content_layout.setSpacing(13)
+        content_layout.setContentsMargins(1, 0, 6, 0)
+        content_layout.setSpacing(8)
 
         content_layout.addWidget(_divider())
         content_layout.addWidget(_section_title("当前状态"))
         status_box = QVBoxLayout()
-        status_box.setSpacing(8)
+        status_box.setSpacing(4)
         for key, label in (
             ("state", "状态"),
             ("time_in_system", "在场时间"),
@@ -96,7 +100,7 @@ class StudentInfoPopup(QDialog):
         content_layout.addWidget(_divider())
         content_layout.addWidget(_section_title("寻路状态"))
         path_box = QVBoxLayout()
-        path_box.setSpacing(8)
+        path_box.setSpacing(4)
         for key, label in (
             ("path_status", "路径状态"),
             ("path_id", "路径编号"),
@@ -114,7 +118,7 @@ class StudentInfoPopup(QDialog):
         content_layout.addWidget(_divider())
         content_layout.addWidget(_section_title("业务信息"))
         business_box = QVBoxLayout()
-        business_box.setSpacing(8)
+        business_box.setSpacing(4)
         for key, label in (
             ("stall", "窗口/队列"),
             ("table", "餐桌/座位"),
@@ -148,29 +152,21 @@ class StudentInfoPopup(QDialog):
         if self._status_label is None:
             return
         if student is None:
-            self._apply_badge("已离场", "#475569", "#f1f5f9")
+            self._status_label.set_status("已离场", "empty")
             return
         state = str(student.get("state") or "")
-        label, fg, bg = _state_badge(state)
-        self._apply_badge(label, fg, bg)
-
-    def _apply_badge(self, text: str, fg: str, bg: str) -> None:
-        if self._status_label is None:
-            return
-        self._status_label.setText(text)
-        self._status_label.setStyleSheet(
-            f"QLabel {{ color: {fg}; background: {bg}; border-radius: 8px; padding: 2px 14px; }}"
-        )
+        label, status = _state_badge(state)
+        self._status_label.set_status(label, status)
 
     def _refresh_labels(self) -> None:
         student = self._student
         if student is None:
             for label in self._labels.values():
-                label.setText("-")
+                set_detail_value(label, None)
             _set_progress(self._path_progress, None)
             _set_progress(self._eating_progress, None)
             if "state" in self._labels:
-                self._labels["state"].setText("已离场")
+                set_detail_value(self._labels["state"], "已离场")
             return
 
         self._set("state", _state_name(str(student.get("state") or "")))
@@ -188,7 +184,11 @@ class StudentInfoPopup(QDialog):
             "stuck",
             f"{_format_seconds(student.get('stuck_time'))} / {_display(student.get('reroute_count'))} 次",
         )
-        _set_progress(self._path_progress, _number(student.get("path_progress"), None))
+        _set_progress(
+            self._path_progress,
+            _number(student.get("path_progress"), None),
+            _progress_status_key(str(student.get("state") or ""), str(student.get("path_status") or "")),
+        )
 
         stall = _indexed("窗口", student.get("stall_id"))
         queue_position = student.get("queue_position")
@@ -205,7 +205,11 @@ class StudentInfoPopup(QDialog):
 
         group_id = student.get("group_id")
         group_size = student.get("group_size")
-        group_text = "无同行" if group_id is None else f"同行组 G{group_id}，共 {group_size or '-'} 人"
+        group_text = (
+            "无同行"
+            if group_id is None
+            else f"同行组 G{group_id}，共 {group_size or DetailTokens.EMPTY_DISPLAY} 人"
+        )
         self._set("group", group_text)
         self._set(
             "door",
@@ -221,46 +225,46 @@ class StudentInfoPopup(QDialog):
                 "eating",
                 f"已用餐 {_format_seconds(student.get('eating_elapsed'))}，剩余 {_format_seconds(student.get('eating_remaining'))}",
             )
-        _set_progress(self._eating_progress, eating_progress)
+        _set_progress(self._eating_progress, eating_progress, "in_progress")
 
     def _set(self, key: str, text: str) -> None:
         label = self._labels.get(key)
         if label is not None:
-            label.setText(text)
+            set_detail_value(label, text)
 
 
 def _section_title(text: str) -> QLabel:
     label = QLabel(text)
-    label.setFont(ui_font(11, QFont.Weight.Bold))
-    label.setStyleSheet("color: #5c4a3a;")
+    label.setFont(ui_font(10, QFont.Weight.Bold))
+    label.setStyleSheet(f"color: {DetailTokens.TITLE_TEXT};")
     return label
 
 
 def _divider() -> QFrame:
     line = QFrame()
     line.setFrameShape(QFrame.Shape.HLine)
-    line.setStyleSheet("color: #d2dfc9;")
+    line.setStyleSheet(f"color: {DetailTokens.DIVIDER};")
     return line
 
 
 def _value_label() -> QLabel:
-    label = QLabel("-")
-    label.setFont(ui_font(10, QFont.Weight.Bold))
+    label = QLabel(DetailTokens.EMPTY_DISPLAY)
+    label.setFont(ui_font(9, QFont.Weight.Bold))
     label.setWordWrap(True)
-    label.setStyleSheet("color: #44403c;")
+    set_detail_value(label, None)
     return label
 
 
 def _row_widget(label: str, value_widget: QLabel) -> QWidget:
     row = QWidget()
-    row.setMinimumHeight(28)
+    row.setMinimumHeight(DetailTokens.ROW_MIN_HEIGHT)
     layout = QHBoxLayout()
     layout.setContentsMargins(0, 0, 0, 0)
-    layout.setSpacing(12)
+    layout.setSpacing(DetailTokens.ROW_SPACING)
     key = QLabel(label)
-    key.setFont(ui_font(10))
-    key.setFixedWidth(92)
-    key.setStyleSheet("color: #78716c;")
+    key.setFont(ui_font(9))
+    key.setFixedWidth(DetailTokens.LABEL_WIDTH)
+    key.setStyleSheet(f"color: {DetailTokens.LABEL_TEXT};")
     layout.addWidget(key)
     layout.addWidget(value_widget, 1)
     row.setLayout(layout)
@@ -271,51 +275,58 @@ def _progress_bar() -> QProgressBar:
     bar = QProgressBar()
     bar.setRange(0, 1000)
     bar.setTextVisible(True)
-    bar.setFixedHeight(18)
-    bar.setStyleSheet(
-        """
-        QProgressBar {
-            border: 1px solid #cbd5e1;
-            border-radius: 7px;
-            background: #f8fafc;
-            color: #334155;
-            font: 8pt "Microsoft YaHei UI";
-            text-align: center;
-        }
-        QProgressBar::chunk {
-            border-radius: 6px;
-            background: #0f766e;
-        }
-        """
-    )
+    bar.setFixedHeight(8)
+    bar.setStyleSheet(detail_progress_stylesheet("in_progress"))
     _set_progress(bar, None)
     return bar
 
 
-def _set_progress(bar: QProgressBar | None, progress: float | None) -> None:
+def _set_progress(bar: QProgressBar | None, progress: float | None, status: str = "in_progress") -> None:
     if bar is None:
         return
     if progress is None:
         bar.setValue(0)
-        bar.setFormat("-")
+        bar.setFormat("")
+        bar.setVisible(False)
         return
     progress = max(0.0, min(1.0, progress))
+    bar.setVisible(True)
+    bar.setStyleSheet(detail_progress_stylesheet(status))
     bar.setValue(int(progress * 1000))
     bar.setFormat(f"{progress * 100:.0f}%")
 
 
-def _state_badge(state: str) -> tuple[str, str, str]:
+def _apply_compact_dialog_size(dialog: QDialog, width: int, height: int) -> None:
+    screen = QApplication.primaryScreen()
+    max_height = height
+    if screen is not None:
+        max_height = min(height, int(screen.availableGeometry().height() * 0.8))
+    dialog.setMaximumSize(400, max_height)
+    dialog.resize(min(width, 400), max_height)
+
+
+def _state_badge(state: str) -> tuple[str, str]:
     if state == "eating":
-        return "用餐中", "#991b1b", "#fee2e2"
+        return "用餐中", "in_progress"
     if state in {"moving_to_queue", "moving_to_seat", "moving_to_tray_return", "leaving"}:
-        return "移动中", "#075985", "#e0f2fe"
+        return "移动中", "in_progress"
     if state in {"queued", "waiting_seat"}:
-        return "等待中", "#92400e", "#fef3c7"
+        return "等待中", "waiting"
     if state == "searching_seat":
-        return "找座中", "#115e59", "#ccfbf1"
+        return "找座中", "normal"
     if state == "deciding":
-        return "选择中", "#6d28d9", "#ede9fe"
-    return _state_name(state), "#475569", "#f1f5f9"
+        return "选择中", "normal"
+    return _state_name(state), "empty"
+
+
+def _progress_status_key(state: str, path_status: str) -> str:
+    if state in {"queued", "waiting_seat"}:
+        return "waiting"
+    if path_status in {"active", "pending", "direct"}:
+        return "in_progress"
+    if path_status == "idle":
+        return "empty"
+    return "normal"
 
 
 def _state_name(state: str) -> str:
@@ -331,7 +342,7 @@ def _state_name(state: str) -> str:
         "leaving": "离场中",
         "done": "已离场",
     }
-    return names.get(state, state or "-")
+    return names.get(state, state or DetailTokens.EMPTY_DISPLAY)
 
 
 def _path_status_name(status: str) -> str:
@@ -341,12 +352,12 @@ def _path_status_name(status: str) -> str:
         "direct": "直接朝目标移动",
         "idle": "无活动路径",
     }
-    return names.get(status, status or "-")
+    return names.get(status, status or DetailTokens.EMPTY_DISPLAY)
 
 
 def _preferences_text(value: Any) -> str:
     if not isinstance(value, dict):
-        return "-"
+        return DetailTokens.EMPTY_DISPLAY
     labels = {
         "meat": "荤",
         "veg": "素",
@@ -359,13 +370,13 @@ def _preferences_text(value: Any) -> str:
         number = _number(value.get(key), None)
         if number is not None:
             parts.append(f"{labels.get(key, key)} {number:.2f}")
-    return "，".join(parts) if parts else "-"
+    return "，".join(parts) if parts else DetailTokens.EMPTY_DISPLAY
 
 
 def _indexed(label: str, value: Any, offset: int = 1) -> str:
     number = _number(value, None)
     if number is None:
-        return f"{label} -"
+        return f"{label} {DetailTokens.EMPTY_DISPLAY}"
     return f"{label} {int(number) + offset}"
 
 
@@ -373,14 +384,14 @@ def _point_text(x_value: Any, y_value: Any) -> str:
     x = _number(x_value, None)
     y = _number(y_value, None)
     if x is None or y is None:
-        return "-"
+        return DetailTokens.EMPTY_DISPLAY
     return f"({x:.1f}, {y:.1f})"
 
 
 def _format_seconds(value: Any) -> str:
     seconds = _number(value, None)
     if seconds is None:
-        return "-"
+        return DetailTokens.EMPTY_DISPLAY
     seconds = max(0.0, seconds)
     minutes = int(seconds // 60)
     remaining = int(round(seconds % 60))
@@ -392,19 +403,19 @@ def _format_seconds(value: Any) -> str:
 def _format_decimal(value: Any) -> str:
     number = _number(value, None)
     if number is None:
-        return "-"
+        return DetailTokens.EMPTY_DISPLAY
     return f"{number:.1f}"
 
 
 def _format_distance(value: Any) -> str:
     number = _number(value, None)
     if number is None:
-        return "-"
+        return DetailTokens.EMPTY_DISPLAY
     return f"{number:.1f} px"
 
 
 def _display(value: Any) -> str:
-    return "-" if value is None else str(value)
+    return DetailTokens.EMPTY_DISPLAY if value is None else str(value)
 
 
 def _number(value: Any, default: float | None) -> float | None:

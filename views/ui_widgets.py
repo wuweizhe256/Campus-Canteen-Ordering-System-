@@ -4,7 +4,7 @@ import math
 
 from PyQt6.QtCore import QPointF, QRect, QRectF, QSize, Qt
 from PyQt6.QtGui import QColor, QCursor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
-from PyQt6.QtWidgets import QSlider, QStyle, QStyleOptionSlider
+from PyQt6.QtWidgets import QLabel, QSlider, QStyle, QStyleOptionSlider
 
 from utils.fonts import stylesheet_font_family
 
@@ -28,6 +28,118 @@ class UiColors:
     DANGER = "#dc4a4a"
     BORDER = "#dccdb8"
     CARD = "#ffffff"
+
+
+class DetailTokens:
+    LABEL_WIDTH = 86
+    ROW_MIN_HEIGHT = 24
+    ROW_SPACING = 8
+    SECTION_SPACING = 5
+    CARD_SPACING = 5
+    CARD_RADIUS = 10
+    CARD_BORDER = "#e4d4bf"
+    CARD_BG = "#fffaf0"
+    CARD_ALT_BG = "#fffdf7"
+    VALUE_TEXT = "#44403c"
+    LABEL_TEXT = "#78716c"
+    TITLE_TEXT = "#4a3728"
+    DIVIDER = "#d2dfc9"
+    EMPTY_TEXT = "#9ca3af"
+    EMPTY_DISPLAY = "—"
+    PROGRESS_TRACK = "#e5e7eb"
+
+
+STATUS_COLORS = {
+    "in_progress": {"text": "#2563eb", "bg": "#dbeafe"},
+    "waiting": {"text": "#d97706", "bg": "#fef3c7"},
+    "normal": {"text": "#059669", "bg": "#d1fae5"},
+    "occupied": {"text": "#db2777", "bg": "#fce7f3"},
+    "danger": {"text": "#dc2626", "bg": "#fee2e2"},
+    "empty": {"text": DetailTokens.EMPTY_TEXT, "bg": "transparent"},
+}
+
+
+STATUS_PROGRESS_COLORS = {
+    "in_progress": "#f59e0b",
+    "waiting": STATUS_COLORS["waiting"]["text"],
+    "normal": STATUS_COLORS["normal"]["text"],
+    "occupied": "#ec4899",
+    "danger": STATUS_COLORS["danger"]["text"],
+    "empty": DetailTokens.EMPTY_TEXT,
+}
+
+
+class DetailBadge(QLabel):
+    def __init__(self, text: str = "", status: str = "empty", parent=None) -> None:
+        super().__init__(parent)
+        self.setFixedHeight(22)
+        self.setMinimumWidth(48)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.set_status(text, status)
+
+    def set_status(self, text: str, status: str = "empty") -> None:
+        palette = status_palette(status)
+        bg = palette["bg"]
+        border = "transparent" if bg == "transparent" else palette["bg"]
+        self.setText(text or DetailTokens.EMPTY_DISPLAY)
+        self.setStyleSheet(
+            "QLabel { "
+            f"color: {palette['text']}; "
+            f"background: {bg}; "
+            f"border: 1px solid {border}; "
+            "border-radius: 7px; "
+            "padding: 1px 8px; "
+            "font-weight: 800; "
+            "}"
+        )
+
+
+def status_palette(status: str) -> dict[str, str]:
+    return STATUS_COLORS.get(status, STATUS_COLORS["empty"])
+
+
+def progress_color(status: str) -> str:
+    return STATUS_PROGRESS_COLORS.get(status, STATUS_PROGRESS_COLORS["empty"])
+
+
+def detail_value_stylesheet(empty: bool = False) -> str:
+    color = DetailTokens.EMPTY_TEXT if empty else DetailTokens.VALUE_TEXT
+    weight = 500 if empty else 700
+    return f"color: {color}; font-weight: {weight};"
+
+
+def set_detail_value(label: QLabel, text: str | None) -> None:
+    is_empty = text is None or text == "" or text == "-"
+    label.setText(DetailTokens.EMPTY_DISPLAY if is_empty else str(text))
+    label.setStyleSheet(detail_value_stylesheet(is_empty))
+
+
+def detail_card_stylesheet(object_name: str, *, bg: str | None = None) -> str:
+    return (
+        f"QWidget#{object_name} {{ "
+        f"background: {bg or DetailTokens.CARD_BG}; "
+        f"border: 1px solid {DetailTokens.CARD_BORDER}; "
+        f"border-radius: {DetailTokens.CARD_RADIUS}px; "
+        "}"
+    )
+
+
+def detail_progress_stylesheet(status: str = "in_progress") -> str:
+    fill = progress_color(status)
+    return f"""
+        QProgressBar {{
+            border: 0;
+            border-radius: 4px;
+            background: {DetailTokens.PROGRESS_TRACK};
+            color: #334155;
+            font: 7pt "Microsoft YaHei UI";
+            text-align: center;
+        }}
+        QProgressBar::chunk {{
+            border-radius: 4px;
+            background: {fill};
+        }}
+        """
 
 
 def app_stylesheet() -> str:
