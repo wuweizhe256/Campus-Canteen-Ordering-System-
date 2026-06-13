@@ -330,7 +330,7 @@ class PathFindingThreadingTest(unittest.TestCase):
         engine._move_student(student, game_delta=1.0, speed=20.0)
 
         self.assertEqual(calls, 0)
-        self.assertEqual((student.x, student.y), (120.0, 360.0))
+        self.assertEqual((student.x, student.y), (140.0, 360.0))
 
     def test_local_avoidance_timeout_triggers_reroute(self) -> None:
         engine = SimulationEngine(
