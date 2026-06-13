@@ -104,6 +104,39 @@ class P2GroupSeatingTest(unittest.TestCase):
         self.assertEqual(seat.status, SeatStatus.OCCUPIED)
         self.assertEqual((student.x, student.y), (seat_x, seat_y))
 
+    def test_students_can_leave_every_default_seat_after_eating(self) -> None:
+        engine = SimulationEngine(SimulationConfig(seed=20240522))
+        engine.initialize()
+        engine._spawn_group(1)
+        student = next(iter(engine.students.values()))
+
+        for table in engine.tables:
+            for seat_index, seat in enumerate(table.seats):
+                seat_x, seat_y = engine._seat_position(table, seat_index)
+                seat.status = SeatStatus.OCCUPIED
+                seat.student_id = student.id
+                student.table_id = table.id
+                student.seat_index = seat_index
+                student.state = StudentState.EATING
+                student.x = seat_x
+                student.y = seat_y
+                student.target_x = seat_x
+                student.target_y = seat_y
+                student.path.clear()
+                student.eating_duration = 1.0
+                student.eating_done_at = engine.game_time
+                student.stuck_time = 0.0
+                student.local_avoidance_time = 0.0
+
+                engine._update_students(0.1)
+
+                self.assertEqual(student.state, StudentState.MOVING_TO_TRAY_RETURN)
+                self.assertTrue(engine._is_static_walkable_point(student.x, student.y))
+                self.assertTrue(student.path)
+                self.assertNotEqual((student.x, student.y), (seat_x, seat_y))
+                self.assertEqual(seat.status, SeatStatus.FREE)
+                self.assertIsNone(seat.student_id)
+
     def test_table_frame_includes_occupancy_progress_and_companions(self) -> None:
         engine = SimulationEngine(
             SimulationConfig(

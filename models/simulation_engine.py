@@ -38,6 +38,16 @@ STUDENT_COLLISION_HEIGHT = 18.0
 STUDENT_COLLISION_FOOT_OFFSET_Y = 14.0
 STUDENT_COLLISION_PADDING = 2.0
 LOCAL_AVOIDANCE_REROUTE_SECONDS = 6.0
+TABLE_SEAT_OFFSETS: dict[int, list[tuple[float, float]]] = {
+    2: [(-36.0, 0.0), (36.0, 0.0)],
+    4: [(-46.0, -22.0), (46.0, -22.0), (-46.0, 26.0), (46.0, 26.0)],
+    6: [(-54.0, -32.0), (54.0, -32.0), (-54.0, 0.0), (54.0, 0.0), (-54.0, 32.0), (54.0, 32.0)],
+}
+TABLE_OBSTACLE_SIZES: dict[int, tuple[float, float]] = {
+    2: (50.0, 30.0),
+    4: (62.0, 34.0),
+    6: (74.0, 42.0),
+}
 
 
 class SimulationEngine:
@@ -745,6 +755,7 @@ class SimulationEngine:
                         to_state=StudentState.MOVING_TO_TRAY_RETURN,
                         game_time=student.eating_done_at,
                     )
+                    self._snap_student_to_seat_access(student)
                     self._release_seat(student)
                     self._set_tray_return_path(student)
                     student.state = StudentState.MOVING_TO_TRAY_RETURN
@@ -1130,6 +1141,22 @@ class SimulationEngine:
         student.path.clear()
         self._complete_path_tracking(student)
 
+    def _snap_student_to_seat_access(self, student: Student) -> None:
+        if student.table_id is None or student.seat_index is None:
+            return
+        table = self.tables[student.table_id]
+        old_x, old_y = student.x, student.y
+        access_x, access_y = self._seat_access_position(table, student.seat_index)
+        student.x = access_x
+        student.y = access_y
+        student.target_x = access_x
+        student.target_y = access_y
+        student.path.clear()
+        moved = distance(old_x, old_y, access_x, access_y)
+        if moved > 0.2:
+            student.facing_x = (access_x - old_x) / moved
+            student.facing_y = (access_y - old_y) / moved
+
     def _student_has_occupied_seat(self, student: Student) -> bool:
         if student.table_id is None or student.seat_index is None:
             return False
@@ -1167,17 +1194,10 @@ class SimulationEngine:
 
     def _seat_offsets(self, seat_count: int) -> list[tuple[float, float]]:
         if seat_count <= 2:
-            return [(-50.0, 0.0), (50.0, 0.0)]
+            return TABLE_SEAT_OFFSETS[2]
         if seat_count <= 4:
-            return [(-50.0, -42.0), (50.0, -42.0), (-50.0, 42.0), (50.0, 42.0)]
-        return [
-            (-54.0, -50.0),
-            (54.0, -50.0),
-            (-54.0, 0.0),
-            (54.0, 0.0),
-            (-54.0, 50.0),
-            (54.0, 50.0),
-        ][:seat_count]
+            return TABLE_SEAT_OFFSETS[4]
+        return TABLE_SEAT_OFFSETS[6][:seat_count]
 
     def _build_table_path(
         self,
@@ -1949,12 +1969,16 @@ class SimulationEngine:
                 }
             )
         for table in self.tables:
+            obstacle_width, obstacle_height = TABLE_OBSTACLE_SIZES.get(
+                table.seat_count,
+                TABLE_OBSTACLE_SIZES[4],
+            )
             rects.append(
                 {
-                    "left": table.x - 48.0,
-                    "top": table.y - 22.0,
-                    "right": table.x + 48.0,
-                    "bottom": table.y + 22.0,
+                    "left": table.x - obstacle_width / 2.0,
+                    "top": table.y - obstacle_height / 2.0,
+                    "right": table.x + obstacle_width / 2.0,
+                    "bottom": table.y + obstacle_height / 2.0,
                     "kind": "table",
                 }
             )
