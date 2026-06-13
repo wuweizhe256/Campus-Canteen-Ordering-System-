@@ -707,7 +707,7 @@ class QueueHeatmap(QWidget):
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(color)
             painter.drawRoundedRect(rect, 8, 8)
-            painter.setPen(QColor("#ffffff" if value / max_value > 0.55 else "#0f172a"))
+            painter.setPen(QColor("#ffffff" if value / max_value > 0.78 else "#17211f"))
             painter.setFont(ui_font(10, QFont.Weight.Bold))
             painter.drawText(rect.adjusted(8, 6, -8, -24), Qt.AlignmentFlag.AlignLeft, f"W{stall_id + 1}")
             painter.setFont(ui_font(13, QFont.Weight.Bold))
@@ -1178,18 +1178,28 @@ def _card_painter(widget: QWidget) -> QPainter:
 
 def _heat_color(ratio: float) -> QColor:
     ratio = max(0.0, min(1.0, ratio))
-    if ratio < 0.5:
-        t = ratio / 0.5
-        return QColor(
-            int(20 + (14 - 20) * t),
-            int(184 + (165 - 184) * t),
-            int(166 + (233 - 166) * t),
-        )
-    t = (ratio - 0.5) / 0.5
+    stops = [
+        (0.00, QColor("#36A37A")),
+        (0.25, QColor("#8CC152")),
+        (0.50, QColor("#F4C744")),
+        (0.75, QColor("#F0913C")),
+        (1.00, QColor("#E23B3B")),
+    ]
+    for index in range(len(stops) - 1):
+        start_pos, start_color = stops[index]
+        end_pos, end_color = stops[index + 1]
+        if ratio <= end_pos:
+            span = max(0.001, end_pos - start_pos)
+            return _mix_color(start_color, end_color, (ratio - start_pos) / span)
+    return stops[-1][1]
+
+
+def _mix_color(start: QColor, end: QColor, ratio: float) -> QColor:
+    ratio = max(0.0, min(1.0, ratio))
     return QColor(
-        int(14 + (239 - 14) * t),
-        int(165 + (68 - 165) * t),
-        int(233 + (68 - 233) * t),
+        int(start.red() + (end.red() - start.red()) * ratio),
+        int(start.green() + (end.green() - start.green()) * ratio),
+        int(start.blue() + (end.blue() - start.blue()) * ratio),
     )
 
 
