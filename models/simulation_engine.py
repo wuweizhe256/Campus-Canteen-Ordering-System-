@@ -1817,7 +1817,8 @@ class SimulationEngine:
                         blocked_by_dynamic_student = False
                         used_local_avoidance = True
                 else:
-                    self._reroute_student(student)
+                    if self.game_time < student.detour_until or not self._try_static_obstacle_detour(student):
+                        self._reroute_student(student)
                 arrived = False
         else:
             next_x, next_y, arrived = move_towards(
@@ -1843,7 +1844,10 @@ class SimulationEngine:
                 if blocked_by_dynamic_student and self._try_local_avoidance_step(student, step_distance):
                     blocked_by_dynamic_student = False
                     used_local_avoidance = True
-            elif self.game_time >= student.detour_until and self._reroute_student(student):
+            elif (
+                self.game_time >= student.detour_until
+                and (self._try_static_obstacle_detour(student) or self._reroute_student(student))
+            ):
                 student.detour_until = self.game_time + 2.0
                 arrived = False
             else:
@@ -1880,7 +1884,9 @@ class SimulationEngine:
             return False
 
         if student.local_avoidance_time >= LOCAL_AVOIDANCE_REROUTE_SECONDS:
-            if self._reroute_student(student):
+            if self._try_static_obstacle_detour(student):
+                pass
+            elif self._reroute_student(student):
                 student.reroute_count += 1
                 student.detour_until = self.game_time + 2.0
             student.local_avoidance_time = 0.0
@@ -1903,6 +1909,12 @@ class SimulationEngine:
     def _try_recover_stuck_student(self, student: Student) -> bool:
         if student.state in (StudentState.QUEUED, StudentState.EATING, StudentState.DONE):
             return False
+
+        if self._try_static_obstacle_detour(student):
+            student.stuck_time = 0.0
+            student.local_avoidance_time = 0.0
+            student.local_avoidance_count = 0
+            return True
 
         nudged = self._try_stuck_recovery_step(student)
         rerouted = self._reroute_student(student)
@@ -1951,6 +1963,107 @@ class SimulationEngine:
                         student.facing_x = (student.x - old_x) / moved
                         student.facing_y = (student.y - old_y) / moved
                     return True
+        return False
+
+    def _try_static_obstacle_detour(self, student: Student) -> bool:
+        blocking_obstacle = self._path_blocking_static_obstacle(student)
+        if blocking_obstacle is None:
+            return False
+
+        endpoint = student.path[-1] if student.path else (student.target_x, student.target_y)
+        for detour_point in self._static_obstacle_detour_candidates(blocking_obstacle, endpoint):
+            first_leg = self._build_navigation_path((student.x, student.y), detour_point, ignored_student_id=student.id)
+            if not first_leg:
+                continue
+            if distance(first_leg[-1][0], first_leg[-1][1], detour_point[0], detour_point[1]) > 8.0:
+                continue
+            second_leg = self._build_navigation_path(detour_point, endpoint, ignored_student_id=student.id)
+            path = self._compact_path([*first_leg, *second_leg])
+            if not path:
+                continue
+            if self._path_still_crosses_obstacle((student.x, student.y), path, blocking_obstacle):
+                continue
+            self._set_path(student, path)
+            student.reroute_count += 1
+            student.detour_until = self.game_time + 2.0
+            return True
+        return False
+
+    def _path_blocking_static_obstacle(self, student: Student) -> dict[str, Any] | None:
+        start = self._student_foot_point(student)
+        end = self._foot_point_from_position(student.target_x, student.target_y)
+        for obstacle in self._obstacle_frames():
+            if obstacle.get("kind") != "table":
+                continue
+            rect = (
+                float(obstacle["left"]),
+                float(obstacle["top"]),
+                float(obstacle["right"]),
+                float(obstacle["bottom"]),
+            )
+            expanded = self._expand_rect(
+                rect,
+                STUDENT_COLLISION_WIDTH / 2.0 + STUDENT_COLLISION_PADDING,
+                STUDENT_COLLISION_HEIGHT / 2.0 + STUDENT_COLLISION_PADDING,
+            )
+            if self._segment_intersects_rect(start, end, expanded):
+                return obstacle
+        return None
+
+    def _static_obstacle_detour_candidates(
+        self,
+        obstacle: dict[str, Any],
+        endpoint: tuple[float, float],
+    ) -> list[tuple[float, float]]:
+        left = float(obstacle["left"])
+        top = float(obstacle["top"])
+        right = float(obstacle["right"])
+        bottom = float(obstacle["bottom"])
+        center_x = (left + right) / 2.0
+        center_y = (top + bottom) / 2.0
+        clearance = max(44.0, LOCAL_AVOIDANCE_SIDE_STEP + STUDENT_COLLISION_PADDING)
+        raw_candidates = [
+            (left - clearance, top - clearance),
+            (right + clearance, top - clearance),
+            (left - clearance, bottom + clearance),
+            (right + clearance, bottom + clearance),
+            (center_x, top - clearance),
+            (center_x, bottom + clearance),
+            (left - clearance, center_y),
+            (right + clearance, center_y),
+        ]
+        candidates: list[tuple[float, float]] = []
+        for candidate_x, candidate_y in raw_candidates:
+            candidate_x = max(64.0, min(self.width - 64.0, candidate_x))
+            candidate_y = max(64.0, min(self.height - 64.0, candidate_y))
+            if self._is_static_walkable_point(candidate_x, candidate_y):
+                candidates.append((candidate_x, candidate_y))
+        candidates.sort(key=lambda point: distance(point[0], point[1], endpoint[0], endpoint[1]))
+        return candidates
+
+    def _path_still_crosses_obstacle(
+        self,
+        start: tuple[float, float],
+        path: list[tuple[float, float]],
+        obstacle: dict[str, Any],
+    ) -> bool:
+        rect = (
+            float(obstacle["left"]),
+            float(obstacle["top"]),
+            float(obstacle["right"]),
+            float(obstacle["bottom"]),
+        )
+        expanded = self._expand_rect(
+            rect,
+            STUDENT_COLLISION_WIDTH / 2.0 + STUDENT_COLLISION_PADDING,
+            STUDENT_COLLISION_HEIGHT / 2.0 + STUDENT_COLLISION_PADDING,
+        )
+        previous = self._foot_point_from_position(start[0], start[1])
+        for point_x, point_y in path:
+            current = self._foot_point_from_position(point_x, point_y)
+            if self._segment_intersects_rect(previous, current, expanded):
+                return True
+            previous = current
         return False
 
     def _is_entrance_release_step(self, student: Student, x: float, y: float) -> bool:

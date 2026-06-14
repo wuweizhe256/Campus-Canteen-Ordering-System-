@@ -7,6 +7,7 @@ from models.pathfinding import MAX_PATHFINDING_WORKERS, GridPathFinder, NavRect
 from models.simulation_engine import (
     STUDENT_COLLISION_HEIGHT,
     STUDENT_COLLISION_PADDING,
+    STUDENT_COLLISION_FOOT_OFFSET_Y,
     STUDENT_COLLISION_WIDTH,
     SimulationEngine,
 )
@@ -510,6 +511,74 @@ class PathFindingThreadingTest(unittest.TestCase):
 
         self.assertFalse(engine._try_recover_stuck_student(student))
         self.assertEqual(student.stuck_time, 30.0)
+
+    def test_stuck_recovery_detours_around_blocking_table(self) -> None:
+        engine = SimulationEngine(
+            SimulationConfig(
+                sim_minutes=1,
+                stall_count=2,
+                table_count=2,
+                seed=20240614,
+                total_student_count=1,
+                max_active_students=1,
+            )
+        )
+        engine.initialize()
+        engine._spawn_group(1)
+        student = next(iter(engine.students.values()))
+        table = engine.tables[0]
+        start = (table.x - 110.0, table.y - STUDENT_COLLISION_FOOT_OFFSET_Y)
+        target = (table.x + 110.0, table.y - STUDENT_COLLISION_FOOT_OFFSET_Y)
+        student.state = StudentState.MOVING_TO_SEAT
+        student.x, student.y = start
+        student.target_x, student.target_y = target
+        student.path = [target]
+        student.stuck_time = 30.0
+        blocking_obstacle = engine._path_blocking_static_obstacle(student)
+
+        recovered = engine._try_recover_stuck_student(student)
+
+        self.assertIsNotNone(blocking_obstacle)
+        self.assertTrue(recovered)
+        self.assertTrue(student.path)
+        self.assertNotEqual(student.path, [target])
+        self.assertEqual(student.reroute_count, 1)
+        self.assertEqual(student.stuck_time, 0.0)
+        self.assertFalse(engine._path_still_crosses_obstacle(start, student.path, blocking_obstacle))
+
+    def test_static_blocked_step_detours_around_table_before_reroute(self) -> None:
+        engine = SimulationEngine(
+            SimulationConfig(
+                sim_minutes=1,
+                stall_count=2,
+                table_count=2,
+                seed=20240615,
+                total_student_count=1,
+                max_active_students=1,
+            )
+        )
+        engine.initialize()
+        engine._spawn_group(1)
+        student = next(iter(engine.students.values()))
+        table = engine.tables[0]
+        start = (table.x - 110.0, table.y - STUDENT_COLLISION_FOOT_OFFSET_Y)
+        target = (table.x + 110.0, table.y - STUDENT_COLLISION_FOOT_OFFSET_Y)
+        student.state = StudentState.MOVING_TO_SEAT
+        student.x, student.y = start
+        student.target_x, student.target_y = target
+        student.path = [target]
+        engine.game_time = 5.0
+        blocking_obstacle = engine._path_blocking_static_obstacle(student)
+
+        arrived = engine._move_student(student, 1.0, 90.0)
+
+        self.assertIsNotNone(blocking_obstacle)
+        self.assertFalse(arrived)
+        self.assertTrue(student.path)
+        self.assertNotEqual(student.path, [target])
+        self.assertEqual(student.reroute_count, 1)
+        self.assertGreater(student.detour_until, engine.game_time)
+        self.assertFalse(engine._path_still_crosses_obstacle(start, student.path, blocking_obstacle))
 
     def test_congestion_can_trigger_dynamic_reroute(self) -> None:
         engine = SimulationEngine(
