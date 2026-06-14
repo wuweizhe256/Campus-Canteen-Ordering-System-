@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from PyQt6.QtCore import QElapsedTimer, Qt, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QElapsedTimer, Qt, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -35,6 +35,8 @@ class MainWindow(QMainWindow):
     pauseChanged = pyqtSignal(bool)
     timeScaleChanged = pyqtSignal(float)
     _STATS_PANEL_UPDATE_INTERVAL_MS = 500
+    _RESIZE_AFTER_RESTORE_DELAY_MS = 300
+    _MAX_RESIZE_AFTER_RESTORE_ATTEMPTS = 8
 
     def __init__(self) -> None:
         super().__init__()
@@ -45,6 +47,11 @@ class MainWindow(QMainWindow):
         self._font_point_size = 10
         self._font_scale = 1.0
         self.settings_dialog: SettingsDialog | None = None
+        self._pending_window_settings: tuple[tuple[int, int] | None, int] | None = None
+        self._settings_apply_scheduled = False
+        self._deferred_resolution: tuple[int, int] | None = None
+        self._deferred_resolution_attempts = 0
+        self._toolbar_clusters: list[QFrame] = []
         self._stall_popup: StallInfoPopup | None = None
         self._table_popup: TableInfoPopup | None = None
         self._student_popup: StudentInfoPopup | None = None
@@ -78,7 +85,6 @@ class MainWindow(QMainWindow):
         self.status_label.setMinimumWidth(180)
         self.time_scale_label = QLabel("时间倍率 6x")
         self.time_scale_label.setObjectName("ToolbarLabel")
-        self.time_scale_label.setFixedWidth(82)
         self.time_scale_slider = PigSlider(Qt.Orientation.Horizontal)
         self.time_scale_slider.setRange(1, 24)
         self.time_scale_slider.setValue(6)
@@ -90,7 +96,6 @@ class MainWindow(QMainWindow):
         self.obstacle_checkbox.setObjectName("PathToggle")
         self.zoom_label = QLabel("画布缩放 100%")
         self.zoom_label.setObjectName("ToolbarLabel")
-        self.zoom_label.setFixedWidth(92)
         self.zoom_slider = PigSlider(Qt.Orientation.Horizontal)
         self.zoom_slider.setRange(60, 180)
         self.zoom_slider.setValue(100)
@@ -98,14 +103,13 @@ class MainWindow(QMainWindow):
         self.zoom_slider.setToolTip("调整左侧食堂演示画布缩放比例")
         self.reset_view_button = QPushButton("重置视图")
         self.reset_view_button.setObjectName("SecondaryButton")
-        self.reset_view_button.setFixedWidth(92)
         self.settings_button = QPushButton("设置")
         self.settings_button.setObjectName("SecondaryButton")
-        self.settings_button.setFixedWidth(70)
+        self.settings_button.setEnabled(False)
 
         self.start_button.clicked.connect(self._open_config_dialog)
         self.pause_button.clicked.connect(self._toggle_pause)
-        self.stop_button.clicked.connect(self.stopRequested.emit)
+        self.stop_button.clicked.connect(self._request_stop_simulation)
         self.time_scale_slider.valueChanged.connect(self._time_scale_slider_changed)
         self.path_checkbox.toggled.connect(self.canvas.set_show_paths)
         self.obstacle_checkbox.toggled.connect(self.canvas.set_show_obstacles)
@@ -159,28 +163,33 @@ class MainWindow(QMainWindow):
     def _toolbar_cluster(self, *widgets: QWidget) -> QFrame:
         cluster = QFrame()
         cluster.setObjectName("ToolbarCluster")
-        cluster.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
-        cluster.setFixedHeight(64)
+        cluster.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+        cluster.setMinimumHeight(64)
         layout = QHBoxLayout()
         layout.setContentsMargins(9, 6, 9, 6)
         layout.setSpacing(7)
         for widget in widgets:
             layout.addWidget(widget)
         cluster.setLayout(layout)
+        self._toolbar_clusters.append(cluster)
         return cluster
 
     def _open_config_dialog(self) -> None:
         if self._running:
             return
-        dialog = ConfigDialog(self)
+        dialog = ConfigDialog(self, current_resolution=(self.width(), self.height()))
         if dialog.exec():
+            resolution = dialog.selected_resolution()
+            if resolution != (self.width(), self.height()):
+                self._resize_window_safely(*resolution)
             self.start_simulation(dialog.config())
 
     def _open_settings_dialog(self) -> None:
+        if not self._running:
+            return
         if self.settings_dialog is None:
             self.settings_dialog = SettingsDialog(
                 self,
-                current_resolution=(self.width(), self.height()),
                 current_font_size=self._font_point_size,
             )
             self.settings_dialog.settingsApplied.connect(self._apply_window_settings)
@@ -192,6 +201,12 @@ class MainWindow(QMainWindow):
         self._position_settings_dialog()
 
     def _settings_dialog_closed(self, *_args) -> None:
+        self.settings_dialog = None
+
+    def _close_settings_dialog(self) -> None:
+        if self.settings_dialog is None:
+            return
+        self.settings_dialog.close()
         self.settings_dialog = None
 
     def _show_stall_popup(self, stall: dict) -> None:
@@ -263,11 +278,24 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot(object, int)
     def _apply_window_settings(self, resolution: tuple[int, int] | None, font_size: int) -> None:
+        if not self._running:
+            return
+        self._pending_window_settings = (resolution, font_size)
+        if self._settings_apply_scheduled:
+            return
+        self._settings_apply_scheduled = True
+        QTimer.singleShot(0, self._flush_window_settings)
+
+    def _flush_window_settings(self) -> None:
+        self._settings_apply_scheduled = False
+        pending = self._pending_window_settings
+        self._pending_window_settings = None
+        if pending is None or not self._running:
+            return
+        resolution, font_size = pending
         if resolution is not None:
             width, height = resolution
-            if self.isMaximized():
-                self.showNormal()
-            self.resize(width, height)
+            self._resize_window_safely(width, height)
 
         self._font_point_size = font_size
         self._font_scale = font_size / 10.0
@@ -282,6 +310,37 @@ class MainWindow(QMainWindow):
             self.status_label.setText(f"设置已应用：字体 {font_size} pt")
         else:
             self.status_label.setText(f"设置已应用：{width} x {height}，字体 {font_size} pt")
+        self._position_settings_dialog()
+
+    def _resize_window_safely(self, width: int, height: int) -> None:
+        if width <= 0 or height <= 0:
+            return
+        if self.windowState() & (Qt.WindowState.WindowMaximized | Qt.WindowState.WindowFullScreen):
+            self._deferred_resolution = (width, height)
+            self._deferred_resolution_attempts = 0
+            self.showNormal()
+            QTimer.singleShot(self._RESIZE_AFTER_RESTORE_DELAY_MS, self._apply_deferred_resolution)
+            return
+        self._deferred_resolution = None
+        self.resize(width, height)
+
+    def _apply_deferred_resolution(self) -> None:
+        resolution = self._deferred_resolution
+        if resolution is None or not self._running:
+            return
+        width, height = resolution
+        if self.windowState() & (Qt.WindowState.WindowMaximized | Qt.WindowState.WindowFullScreen):
+            self._deferred_resolution_attempts += 1
+            if self._deferred_resolution_attempts >= self._MAX_RESIZE_AFTER_RESTORE_ATTEMPTS:
+                self._deferred_resolution = None
+                self._deferred_resolution_attempts = 0
+                self.status_label.setText("分辨率未应用：请先退出最大化窗口")
+                return
+            QTimer.singleShot(self._RESIZE_AFTER_RESTORE_DELAY_MS, self._apply_deferred_resolution)
+            return
+        self._deferred_resolution = None
+        self._deferred_resolution_attempts = 0
+        self.resize(width, height)
         self._position_settings_dialog()
 
     def _position_settings_dialog(self) -> None:
@@ -301,6 +360,13 @@ class MainWindow(QMainWindow):
         super().moveEvent(event)
         self._position_settings_dialog()
 
+    def _request_stop_simulation(self) -> None:
+        if not self._running:
+            return
+        self.settings_button.setEnabled(False)
+        self._close_settings_dialog()
+        self.stopRequested.emit()
+
     def start_simulation(self, config: SimulationConfig) -> None:
         config = replace(config, time_scale=float(self.time_scale_slider.value()))
         self.path_checkbox.setChecked(config.show_path_debug_layer)
@@ -316,6 +382,7 @@ class MainWindow(QMainWindow):
         self.pause_button.style().polish(self.pause_button)
         self.pause_button.setEnabled(True)
         self.stop_button.setEnabled(True)
+        self.settings_button.setEnabled(True)
         self.status_label.setText(
             f"准备启动：{config.sim_minutes} 分钟，{config.time_scale:g} 游戏秒/现实秒"
         )
@@ -323,16 +390,19 @@ class MainWindow(QMainWindow):
 
     def _time_scale_slider_changed(self, value: int) -> None:
         self.time_scale_label.setText(f"时间倍率 {value}x")
+        self._sync_toolbar_metrics()
         self.timeScaleChanged.emit(float(value))
 
     def _zoom_slider_changed(self, value: int) -> None:
         zoom = value / 100.0
         self.zoom_label.setText(f"画布缩放 {value}%")
+        self._sync_toolbar_metrics()
         self.canvas.set_view_zoom(zoom)
 
     def _canvas_zoom_changed(self, zoom: float) -> None:
         value = int(round(zoom * 100))
         self.zoom_label.setText(f"画布缩放 {value}%")
+        self._sync_toolbar_metrics()
         if self.zoom_slider.value() == value:
             return
         self.zoom_slider.blockSignals(True)
@@ -444,6 +514,9 @@ class MainWindow(QMainWindow):
         self._running = False
         self._paused = False
         self._stats_update_clock.invalidate()
+        self._pending_window_settings = None
+        self._deferred_resolution = None
+        self._close_settings_dialog()
         self.start_button.setEnabled(True)
         self.pause_button.setText("暂停")
         self.pause_button.setObjectName("SecondaryButton")
@@ -451,6 +524,7 @@ class MainWindow(QMainWindow):
         self.pause_button.style().polish(self.pause_button)
         self.pause_button.setEnabled(False)
         self.stop_button.setEnabled(False)
+        self.settings_button.setEnabled(False)
         self.status_label.setText(
             f"{summary.status}：生成 {summary.spawned_students}，离场 {summary.served_students}，场内 {summary.active_students}"
         )
@@ -459,6 +533,9 @@ class MainWindow(QMainWindow):
     def show_error(self, error: object) -> None:
         self._running = False
         self._paused = False
+        self._pending_window_settings = None
+        self._deferred_resolution = None
+        self._close_settings_dialog()
         self.start_button.setEnabled(True)
         self.pause_button.setText("暂停")
         self.pause_button.setObjectName("SecondaryButton")
@@ -466,7 +543,25 @@ class MainWindow(QMainWindow):
         self.pause_button.style().polish(self.pause_button)
         self.pause_button.setEnabled(False)
         self.stop_button.setEnabled(False)
+        self.settings_button.setEnabled(False)
         QMessageBox.critical(self, "仿真错误", str(error))
+
+    def _sync_toolbar_metrics(self) -> None:
+        self.time_scale_label.setMinimumWidth(
+            self.time_scale_label.fontMetrics().horizontalAdvance("时间倍率 24x") + 12
+        )
+        self.zoom_label.setMinimumWidth(
+            self.zoom_label.fontMetrics().horizontalAdvance("画布缩放 180%") + 12
+        )
+        self.reset_view_button.setMinimumWidth(
+            self.reset_view_button.fontMetrics().horizontalAdvance("重置视图") + 32
+        )
+        self.settings_button.setMinimumWidth(
+            self.settings_button.fontMetrics().horizontalAdvance("设置") + 32
+        )
+        cluster_height = max(64, round(64 * self._font_scale))
+        for cluster in self._toolbar_clusters:
+            cluster.setMinimumHeight(cluster_height)
 
     def _apply_style(self) -> None:
         font_family = stylesheet_font_family()
@@ -546,6 +641,11 @@ class MainWindow(QMainWindow):
                 padding-top: 9px;
                 padding-bottom: 7px;
             }
+            QPushButton#SecondaryButton:disabled {
+                color: #9aa6a0;
+                background: #edf1ec;
+                border-color: #d8ded8;
+            }
             QPushButton#PauseActiveButton {
                 color: #7a3a00;
                 background: #fff1d8;
@@ -622,3 +722,4 @@ class MainWindow(QMainWindow):
             .replace("__STATUS_SIZE__", str(status_size))
             .replace("Microsoft YaHei UI", font_family)
         )
+        self._sync_toolbar_metrics()

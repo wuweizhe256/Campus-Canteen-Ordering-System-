@@ -390,6 +390,25 @@ def dialog_stylesheet() -> str:
             background: #0f766e;
             border-color: #0f5f59;
         }
+        QRadioButton#ResolutionRadio {
+            color: #273633;
+            font: 700 9pt "Microsoft YaHei UI";
+            spacing: 7px;
+        }
+        QRadioButton#ResolutionRadio::indicator {
+            width: 16px;
+            height: 16px;
+            border-radius: 8px;
+            border: 1px solid #b8c8bd;
+            background: #ffffff;
+        }
+        QRadioButton#ResolutionRadio::indicator:hover {
+            border-color: #0f766e;
+        }
+        QRadioButton#ResolutionRadio::indicator:checked {
+            background: #0f766e;
+            border: 1px solid #0f5f59;
+        }
         QPushButton {
             border: 1px solid #dccdb8;
             border-radius: 12px;

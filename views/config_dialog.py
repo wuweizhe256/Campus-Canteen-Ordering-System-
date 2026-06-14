@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import QEasingCurve, QPoint, QParallelAnimationGroup, QPropertyAnimation, Qt, QTimer
+from PyQt6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, Qt, QTimer
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
+    QButtonGroup,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -11,6 +12,7 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QRadioButton,
     QSizePolicy,
     QSpinBox,
     QVBoxLayout,
@@ -22,11 +24,26 @@ from views.ui_widgets import dialog_stylesheet
 
 
 class ConfigDialog(QDialog):
-    def __init__(self, parent: QWidget | None = None) -> None:
+    RESOLUTIONS = (
+        (1280, 720),
+        (1366, 768),
+        (1480, 860),
+        (1600, 900),
+        (1920, 1080),
+    )
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        current_resolution: tuple[int, int] = (1600, 920),
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("\u4eff\u771f\u914d\u7f6e")
         self.setModal(True)
-        self._intro_animation: QParallelAnimationGroup | None = None
+        self._intro_animation: QPropertyAnimation | None = None
+        self._resolutions = list(self.RESOLUTIONS)
+        if current_resolution not in self._resolutions:
+            self._resolutions.append(current_resolution)
 
         self.minutes_spin = QSpinBox()
         self.minutes_spin.setRange(30, 60)
@@ -79,6 +96,8 @@ class ConfigDialog(QDialog):
         self.seed_spin.setRange(0, 999999)
         self.seed_spin.setValue(0)
         self.seed_spin.setSpecialValueText("\u968f\u673a")
+        self.resolution_group = QButtonGroup(self)
+        self.resolution_widget = self._resolution_selector(current_resolution)
 
         for spin in (
             self.minutes_spin,
@@ -98,6 +117,7 @@ class ConfigDialog(QDialog):
         basic_form.addRow("\u7a97\u53e3\u6570\u91cf", self.stalls_spin)
         basic_form.addRow("\u751f\u6210\u5b66\u751f\u603b\u6570", self.total_students_spin)
         basic_form.addRow("\u968f\u673a\u79cd\u5b50", self.seed_spin)
+        basic_form.addRow("\u7a97\u53e3\u5206\u8fa8\u7387", self.resolution_widget)
 
         table_form = self._form_layout()
         table_type_row = QHBoxLayout()
@@ -174,6 +194,27 @@ class ConfigDialog(QDialog):
         card.setLayout(layout)
         return card
 
+    def _resolution_selector(self, current_resolution: tuple[int, int]) -> QWidget:
+        widget = QWidget()
+        layout = QGridLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setHorizontalSpacing(10)
+        layout.setVerticalSpacing(6)
+        checked_index = 0
+        for index, resolution in enumerate(self._resolutions):
+            width, height = resolution
+            button = QRadioButton(f"{width} x {height}")
+            button.setObjectName("ResolutionRadio")
+            self.resolution_group.addButton(button, index)
+            layout.addWidget(button, index // 3, index % 3)
+            if resolution == current_resolution:
+                checked_index = index
+        selected_button = self.resolution_group.button(checked_index)
+        if selected_button is not None:
+            selected_button.setChecked(True)
+        widget.setLayout(layout)
+        return widget
+
     def showEvent(self, event) -> None:  # noqa: N802 - Qt override
         super().showEvent(event)
         QTimer.singleShot(0, self._play_intro_animation)
@@ -181,13 +222,6 @@ class ConfigDialog(QDialog):
     def _play_intro_animation(self) -> None:
         end_pos = self.pos()
         self.move(end_pos + QPoint(0, 10))
-        self.setWindowOpacity(0.0)
-
-        opacity = QPropertyAnimation(self, b"windowOpacity", self)
-        opacity.setDuration(220)
-        opacity.setStartValue(0.0)
-        opacity.setEndValue(1.0)
-        opacity.setEasingCurve(QEasingCurve.Type.OutCubic)
 
         position = QPropertyAnimation(self, b"pos", self)
         position.setDuration(220)
@@ -195,9 +229,7 @@ class ConfigDialog(QDialog):
         position.setEndValue(end_pos)
         position.setEasingCurve(QEasingCurve.Type.OutCubic)
 
-        self._intro_animation = QParallelAnimationGroup(self)
-        self._intro_animation.addAnimation(opacity)
-        self._intro_animation.addAnimation(position)
+        self._intro_animation = position
         self._intro_animation.start()
 
     def _update_table_count(self) -> None:
@@ -231,6 +263,12 @@ class ConfigDialog(QDialog):
             total_student_count=total_students,
             max_active_students=max(55, total_students),
         )
+
+    def selected_resolution(self) -> tuple[int, int]:
+        selected_id = self.resolution_group.checkedId()
+        if 0 <= selected_id < len(self._resolutions):
+            return self._resolutions[selected_id]
+        return self._resolutions[0]
 
     def _apply_style(self) -> None:
         self.setStyleSheet(dialog_stylesheet())

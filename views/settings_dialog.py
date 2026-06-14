@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
-    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -17,33 +16,15 @@ from utils.fonts import stylesheet_font_family
 class SettingsDialog(QDialog):
     settingsApplied = pyqtSignal(object, int)
 
-    RESOLUTIONS = (
-        (1280, 720),
-        (1366, 768),
-        (1480, 860),
-        (1600, 900),
-        (1920, 1080),
-    )
-
     def __init__(
         self,
         parent: QWidget | None = None,
-        current_resolution: tuple[int, int] = (1480, 860),
         current_font_size: int = 10,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("设置")
         self.setModal(False)
         self.setWindowFlag(Qt.WindowType.Tool, True)
-        self._applied_resolution = current_resolution
-
-        self.resolution_combo = QComboBox()
-        resolutions = list(self.RESOLUTIONS)
-        if current_resolution not in resolutions:
-            resolutions.append(current_resolution)
-        for width, height in resolutions:
-            self.resolution_combo.addItem(f"{width} x {height}", (width, height))
-        self._select_resolution(current_resolution)
 
         self.font_size_spin = QSpinBox()
         self.font_size_spin.setRange(8, 16)
@@ -53,42 +34,31 @@ class SettingsDialog(QDialog):
         form = QFormLayout()
         form.setContentsMargins(16, 16, 16, 8)
         form.setSpacing(12)
-        form.addRow("分辨率", self.resolution_combo)
         form.addRow("字体大小", self.font_size_spin)
 
-        buttons = QDialogButtonBox(
+        self.buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Apply
             | QDialogButtonBox.StandardButton.Close
         )
-        buttons.button(QDialogButtonBox.StandardButton.Apply).setText("应用")
-        buttons.button(QDialogButtonBox.StandardButton.Close).setText("关闭")
-        buttons.clicked.connect(self._button_clicked)
+        self.buttons.button(QDialogButtonBox.StandardButton.Apply).setText("应用")
+        self.buttons.button(QDialogButtonBox.StandardButton.Close).setText("关闭")
+        self.buttons.clicked.connect(self._button_clicked)
 
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addLayout(form)
-        layout.addWidget(buttons)
+        layout.addWidget(self.buttons)
         self.setLayout(layout)
         self._apply_style()
-        self.resize(300, 150)
-
-    def _select_resolution(self, resolution: tuple[int, int]) -> None:
-        for index in range(self.resolution_combo.count()):
-            if self.resolution_combo.itemData(index) == resolution:
-                self.resolution_combo.setCurrentIndex(index)
-                return
+        self.resize(260, 120)
 
     def _button_clicked(self, button) -> None:
-        role = self.sender().buttonRole(button)
+        role = self.buttons.buttonRole(button)
         if role == QDialogButtonBox.ButtonRole.ApplyRole:
-            current_resolution = self.resolution_combo.currentData()
-            resolution = current_resolution if current_resolution != self._applied_resolution else None
             self.settingsApplied.emit(
-                resolution,
+                None,
                 self.font_size_spin.value(),
             )
-            if resolution is not None:
-                self._applied_resolution = current_resolution
             return
         self.close()
 
@@ -103,7 +73,6 @@ class SettingsDialog(QDialog):
                 color: #0f172a;
                 font: 10pt "Microsoft YaHei UI";
             }
-            QComboBox,
             QSpinBox {
                 color: #0f172a;
                 background: #ffffff;
