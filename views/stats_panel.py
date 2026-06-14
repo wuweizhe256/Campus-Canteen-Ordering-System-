@@ -270,20 +270,26 @@ class StatsPanel(QWidget):
             stats = {}
 
         game_time = _number(frame.get("game_time"), None)
-        avg_wait_time = _number(stats.get("avg_wait_time"), None)
-        max_active = _number(stats.get("max_active_students"), None)
+        current_active = _number(frame.get("active_students"), None)
         congestion_index = _number(stats.get("congestion_index"), None)
         stuck_student_count = _number(stats.get("stuck_student_count"), None)
-        avg_queue_length = _number(stats.get("avg_queue_length"), None)
+
+        # 实时排队压力：当前在队列中的学生数 / 在场活跃学生数，天然 [0, 1]
+        active_students = _number(frame.get("active_students"), 1) or 1
+        total_queued = 0
+        for stall in frame.get("stalls") or []:
+            if isinstance(stall, dict):
+                total_queued += int(_number(stall.get("queue_count"), 0) or 0)
+        queue_participation_rate = total_queued / max(1, active_students)
+
         if game_time is not None:
             self.history.append(
                 {
                     "game_time": game_time,
-                    "avg_wait_time": avg_wait_time,
-                    "max_active_students": max_active,
+                    "queue_participation_rate": queue_participation_rate,
+                    "active_students": current_active,
                     "congestion_index": congestion_index,
                     "stuck_student_count": stuck_student_count,
-                    "avg_queue_length": avg_queue_length,
                 }
             )
             self.history = self.history[-160:]
@@ -984,31 +990,33 @@ class QueueDetailPopup(QDialog):
         return card
 
 
+# 共享 Y 轴归一化上限 — 确保所有线条使用同一 [0,1] 尺度
+_SHARED_MAX_QUEUE_RATIO = 1.0   # 排队占比天然 [0,1]
+_SHARED_MAX_ACTIVE = 120.0      # 场内最大人数
+_SHARED_MAX_CONGESTION = 1.0    # 拥堵指数天然 [0,1]
+_SHARED_MAX_STUCK = 20.0        # 卡住人数上限
+
+
 def _draw_trend_lines(
     painter: QPainter,
     chart: QRectF,
     history: list[dict[str, float | None]],
 ) -> None:
-    """共享的折线图核心绘图逻辑，供内嵌图表和弹窗复用。"""
+    """共享的折线图核心绘图逻辑，供内嵌图表和弹窗复用。
+
+    所有线条共享同一 Y 轴：纵轴 0% ~ 100% 对应各指标归一化后的 [0, 1] 范围。
+    排队占比和拥堵指数天然在 [0, 1]；人数、卡住人数使用固定上限归一化。
+    """
     if len(history) < 2:
         painter.setPen(QColor("#64748b"))
         painter.setFont(ui_font(9))
         painter.drawText(chart, Qt.AlignmentFlag.AlignCenter, "运行后显示趋势")
         return
 
-    wait_values = [item["avg_wait_time"] for item in history if item.get("avg_wait_time") is not None]
-    active_values = [item["max_active_students"] for item in history if item.get("max_active_students") is not None]
-    congestion_values = [item["congestion_index"] for item in history if item.get("congestion_index") is not None]
-    stuck_values = [item["stuck_student_count"] for item in history if item.get("stuck_student_count") is not None]
-    max_wait = max(1.0, max(wait_values) if wait_values else 1.0)
-    max_active = max(1.0, max(active_values) if active_values else 1.0)
-    max_congestion = max(0.15, max(congestion_values) if congestion_values else 0.15)
-    max_stuck = max(1.0, max(stuck_values) if stuck_values else 1.0)
-
-    _draw_single_line(painter, chart, history, "avg_wait_time", max_wait, QColor("#0ea5e9"), y_offset=-3)
-    _draw_single_line(painter, chart, history, "max_active_students", max_active, QColor(StatsTokens.CAUTION), y_offset=1)
-    _draw_single_line(painter, chart, history, "congestion_index", max_congestion, QColor(StatsTokens.ALERT), y_offset=4)
-    _draw_single_line(painter, chart, history, "stuck_student_count", max_stuck, QColor(StatsTokens.CAUTION), y_offset=7)
+    _draw_single_line(painter, chart, history, "queue_participation_rate", _SHARED_MAX_QUEUE_RATIO, QColor("#0ea5e9"))
+    _draw_single_line(painter, chart, history, "active_students", _SHARED_MAX_ACTIVE, QColor(StatsTokens.CAUTION))
+    _draw_single_line(painter, chart, history, "congestion_index", _SHARED_MAX_CONGESTION, QColor(StatsTokens.ALERT))
+    _draw_single_line(painter, chart, history, "stuck_student_count", _SHARED_MAX_STUCK, QColor(StatsTokens.CAUTION))
 
 
 def _draw_single_line(
@@ -1061,7 +1069,7 @@ def _draw_y_axis(painter: QPainter, chart: QRectF) -> None:
 def _draw_trend_legend(painter: QPainter, width: int, height: int) -> None:
     y = height - 28
     items = [
-        ("等待", QColor("#0ea5e9")),
+        ("排队占比", QColor("#0ea5e9")),
         ("人数", QColor(StatsTokens.CAUTION)),
         ("拥堵", QColor(StatsTokens.ALERT)),
         ("卡住", QColor(StatsTokens.CAUTION)),
@@ -1114,7 +1122,7 @@ class TrendChart(QWidget):
         painter = _card_painter(self)
         painter.setPen(QColor("#0f172a"))
         painter.setFont(ui_font(10, QFont.Weight.Bold))
-        painter.drawText(QRectF(16, 14, self.width() - 32, 20), Qt.AlignmentFlag.AlignLeft, "等待、人数与拥堵趋势")
+        painter.drawText(QRectF(16, 14, self.width() - 32, 20), Qt.AlignmentFlag.AlignLeft, "排队占比、人数与拥堵趋势")
 
         chart = QRectF(34, 54, self.width() - 58, self.height() - 92)
         painter.setPen(QPen(QColor("#e2e8f0"), 1))
@@ -1132,7 +1140,7 @@ class TrendChartPopup(QDialog):
 
     def __init__(self, history: list[dict[str, float | None]], parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("趋势图 — 等待、人数与拥堵放大")
+        self.setWindowTitle("趋势图 — 排队占比、人数与拥堵放大")
         self.setMinimumSize(720, 440)
         self.resize(880, 500)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
@@ -1161,7 +1169,7 @@ class _PopupChart(QWidget):
         title_rect = QRectF(24, 20, self.width() - 48, 28)
         painter.setPen(QColor("#0f172a"))
         painter.setFont(ui_font(14, QFont.Weight.Bold))
-        painter.drawText(title_rect, Qt.AlignmentFlag.AlignLeft, "等待、人数与拥堵趋势")
+        painter.drawText(title_rect, Qt.AlignmentFlag.AlignLeft, "排队占比、人数与拥堵趋势")
 
         chart = QRectF(48, 68, self.width() - 80, self.height() - 120)
         painter.setPen(QPen(QColor("#e2e8f0"), 1))
