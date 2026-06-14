@@ -22,6 +22,7 @@ from utils.fonts import set_ui_font_scale, stylesheet_font_family, ui_font
 from views.canvas_widget import CanvasWidget
 from views.config_dialog import ConfigDialog
 from views.settings_dialog import SettingsDialog
+from views.simulation_result_dialog import SimulationResultDialog
 from views.stall_info_popup import StallInfoPopup
 from views.stats_panel import StatsPanel
 from views.student_info_popup import StudentInfoPopup
@@ -56,6 +57,8 @@ class MainWindow(QMainWindow):
         self._table_popup: TableInfoPopup | None = None
         self._student_popup: StudentInfoPopup | None = None
         self._student_details_by_id: dict[int, dict] = {}
+        self._last_frame: dict | None = None
+        self._result_dialog: SimulationResultDialog | None = None
         self._stats_update_clock = QElapsedTimer()
         self._stats_update_clock.invalidate()
 
@@ -276,6 +279,9 @@ class MainWindow(QMainWindow):
         self._student_popup = None
         self.canvas.set_selected_student(None)
 
+    def _result_dialog_closed(self) -> None:
+        self._result_dialog = None
+
     @pyqtSlot(object, int)
     def _apply_window_settings(self, resolution: tuple[int, int] | None, font_size: int) -> None:
         if not self._running:
@@ -421,6 +427,7 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot(object)
     def update_frame(self, frame: dict) -> None:
+        self._last_frame = frame
         self._update_student_details_cache(frame)
         self.canvas.set_frame(frame)
         if self._should_update_stats_panel():
@@ -528,6 +535,14 @@ class MainWindow(QMainWindow):
         self.status_label.setText(
             f"{summary.status}：生成 {summary.spawned_students}，离场 {summary.served_students}，场内 {summary.active_students}"
         )
+
+        # 弹出仿真结果大窗口
+        if self._last_frame is not None:
+            self._result_dialog = SimulationResultDialog(
+                self._last_frame, summary, self,
+            )
+            self._result_dialog.finished.connect(self._result_dialog_closed)
+            self._result_dialog.show()
 
     @pyqtSlot(object)
     def show_error(self, error: object) -> None:
