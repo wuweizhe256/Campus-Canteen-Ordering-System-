@@ -120,6 +120,7 @@ class Student:
     detour_until: float = 0.0
     actual_speed: float = 0.0
     stuck_time: float = 0.0
+    table_overlap_time: float = 0.0
     local_avoidance_time: float = 0.0
     local_avoidance_count: int = 0
     reroute_count: int = 0

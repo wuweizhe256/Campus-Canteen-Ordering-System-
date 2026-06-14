@@ -41,15 +41,16 @@ LOCAL_AVOIDANCE_SIDE_STEP = max(STUDENT_COLLISION_WIDTH, STUDENT_COLLISION_HEIGH
 LOCAL_AVOIDANCE_REACHABILITY_CHECK_COUNT = 2
 LOCAL_AVOIDANCE_REROUTE_SECONDS = 3.0
 STUCK_RECOVERY_SECONDS = 30.0
+TABLE_OVERLAP_RELOCATION_SECONDS = 60.0
 TABLE_SEAT_OFFSETS: dict[int, list[tuple[float, float]]] = {
     2: [(-36.0, 0.0), (36.0, 0.0)],
     4: [(-46.0, -22.0), (46.0, -22.0), (-46.0, 26.0), (46.0, 26.0)],
     6: [(-54.0, -32.0), (54.0, -32.0), (-54.0, 0.0), (54.0, 0.0), (-54.0, 32.0), (54.0, 32.0)],
 }
 TABLE_OBSTACLE_SIZES: dict[int, tuple[float, float]] = {
-    2: (50.0, 30.0),
-    4: (62.0, 34.0),
-    6: (74.0, 42.0),
+    2: (74.0, 56.0),
+    4: (88.0, 74.0),
+    6: (104.0, 88.0),
 }
 
 
@@ -277,7 +278,7 @@ class SimulationEngine:
         start_x = 190.0
         start_y = 372.0
         gap_x = 172.0
-        gap_y = 118.0
+        gap_y = 108.0
         for index, (table_type, seat_count) in enumerate(table_specs):
             row = index // self.table_columns
             column = index % self.table_columns
@@ -1246,6 +1247,12 @@ class SimulationEngine:
                 (side_x, access_y),
                 (seat_x, access_y),
             ]
+        elif seat_y > table.y and self._lower_table_access_is_constrained(table):
+            candidates = [
+                (seat_x, access_y),
+                (side_x, access_y),
+                (side_x, seat_y),
+            ]
         else:
             candidates = [
                 (seat_x, access_y),
@@ -1365,7 +1372,14 @@ class SimulationEngine:
         _, seat_y = self._seat_position(table, seat_index)
         if seat_y < table.y:
             return max(self.top_walkway_y, table.y - 56.0)
+        if self._lower_table_access_is_constrained(table):
+            return max(self.top_walkway_y, table.y - 56.0)
         return min(self.height - 64.0, table.y + 56.0)
+
+    def _lower_table_access_is_constrained(self, table: Table) -> bool:
+        obstacle_height = TABLE_OBSTACLE_SIZES.get(table.seat_count, TABLE_OBSTACLE_SIZES[4])[1]
+        lower_clearance = self.height - 64.0 - (table.y + obstacle_height / 2.0)
+        return lower_clearance < 72.0
 
     def _set_navigation_path(self, student: Student, target: tuple[float, float]) -> None:
         start = (student.x, student.y)
@@ -1865,6 +1879,10 @@ class SimulationEngine:
             student.stuck_time += game_delta
         else:
             student.stuck_time = max(0.0, student.stuck_time - game_delta * 1.8)
+        if self._student_table_overlap_obstacle(student) is not None:
+            student.table_overlap_time += game_delta
+        else:
+            student.table_overlap_time = 0.0
         if used_local_avoidance:
             student.local_avoidance_time += game_delta
             student.local_avoidance_count += 1
@@ -1878,6 +1896,12 @@ class SimulationEngine:
         student.last_y = student.y
 
         if endpoint_repaired:
+            return False
+
+        if (
+            student.table_overlap_time >= TABLE_OVERLAP_RELOCATION_SECONDS
+            and self._try_relocate_from_table_obstacle(student)
+        ):
             return False
 
         if student.stuck_time >= STUCK_RECOVERY_SECONDS and self._try_recover_stuck_student(student):
@@ -1927,6 +1951,95 @@ class SimulationEngine:
             student.local_avoidance_count = 0
             return True
         return False
+
+    def _try_relocate_from_table_obstacle(self, student: Student) -> bool:
+        if student.state in (StudentState.QUEUED, StudentState.EATING, StudentState.DONE):
+            return False
+        if self._student_table_overlap_obstacle(student) is None:
+            student.table_overlap_time = 0.0
+            return False
+
+        empty_position = self._nearest_empty_position(student.x, student.y, ignored_student_id=student.id)
+        if empty_position is None:
+            return False
+
+        old_x, old_y = student.x, student.y
+        student.x, student.y = empty_position
+        moved = distance(old_x, old_y, student.x, student.y)
+        if moved > 0.2:
+            student.facing_x = (student.x - old_x) / moved
+            student.facing_y = (student.y - old_y) / moved
+
+        detoured = self._try_static_obstacle_detour(student)
+        rerouted = False
+        if not detoured:
+            rerouted = self._reroute_student(student)
+        student.table_overlap_time = 0.0
+        student.stuck_time = 0.0
+        student.local_avoidance_time = 0.0
+        student.local_avoidance_count = 0
+        student.detour_until = self.game_time + 2.0
+        if rerouted:
+            student.reroute_count += 1
+        return True
+
+    def _student_table_overlap_obstacle(self, student: Student) -> dict[str, Any] | None:
+        if student.state in (StudentState.QUEUED, StudentState.EATING, StudentState.DONE):
+            return None
+
+        student_rect = self._student_collision_rect(student)
+        foot_x, foot_y = self._student_foot_point(student)
+        for obstacle in self._obstacle_frames():
+            if obstacle.get("kind") != "table":
+                continue
+            obstacle_rect = (
+                float(obstacle["left"]),
+                float(obstacle["top"]),
+                float(obstacle["right"]),
+                float(obstacle["bottom"]),
+            )
+            foot_inside = (
+                obstacle_rect[0] <= foot_x <= obstacle_rect[2]
+                and obstacle_rect[1] <= foot_y <= obstacle_rect[3]
+            )
+            if foot_inside or self._rects_overlap(student_rect, obstacle_rect):
+                return obstacle
+        return None
+
+    def _nearest_empty_position(
+        self,
+        x: float,
+        y: float,
+        ignored_student_id: int | None = None,
+    ) -> tuple[float, float] | None:
+        x = max(64.0, min(self.width - 64.0, x))
+        y = max(64.0, min(self.height - 64.0, y))
+        students = self._collision_students(ignored_student_id)
+        if self._is_walkable_point(x, y, students, ignored_student_id=ignored_student_id):
+            return x, y
+
+        directions = (
+            (1.0, 0.0),
+            (-1.0, 0.0),
+            (0.0, 1.0),
+            (0.0, -1.0),
+            (1.0, 1.0),
+            (1.0, -1.0),
+            (-1.0, 1.0),
+            (-1.0, -1.0),
+        )
+        for radius in (18.0, 30.0, 44.0, 60.0, 78.0, 96.0, 124.0, 156.0, 192.0):
+            candidates: list[tuple[float, float]] = []
+            for direction_x, direction_y in directions:
+                length = (direction_x * direction_x + direction_y * direction_y) ** 0.5
+                candidate_x = max(64.0, min(self.width - 64.0, x + direction_x / length * radius))
+                candidate_y = max(64.0, min(self.height - 64.0, y + direction_y / length * radius))
+                candidates.append((candidate_x, candidate_y))
+            candidates.sort(key=lambda point: distance(point[0], point[1], x, y))
+            for candidate_x, candidate_y in candidates:
+                if self._is_walkable_point(candidate_x, candidate_y, students, ignored_student_id=ignored_student_id):
+                    return candidate_x, candidate_y
+        return None
 
     def _try_stuck_recovery_step(self, student: Student) -> bool:
         dx = student.target_x - student.x

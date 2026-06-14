@@ -10,6 +10,7 @@ from models.simulation_engine import (
     STUDENT_COLLISION_FOOT_OFFSET_Y,
     STUDENT_COLLISION_WIDTH,
     SimulationEngine,
+    TABLE_OBSTACLE_SIZES,
 )
 
 
@@ -380,7 +381,7 @@ class PathFindingThreadingTest(unittest.TestCase):
         engine._move_student(student, game_delta=1.0, speed=20.0)
 
         self.assertEqual(calls, 0)
-        self.assertEqual((student.x, student.y), (140.0, 360.0))
+        self.assertEqual((student.x, student.y), (120.0, 360.0))
 
     def test_local_avoidance_timeout_triggers_reroute(self) -> None:
         engine = SimulationEngine(
@@ -579,6 +580,106 @@ class PathFindingThreadingTest(unittest.TestCase):
         self.assertEqual(student.reroute_count, 1)
         self.assertGreater(student.detour_until, engine.game_time)
         self.assertFalse(engine._path_still_crosses_obstacle(start, student.path, blocking_obstacle))
+
+    def test_table_overlap_timeout_relocates_student_to_empty_space(self) -> None:
+        engine = SimulationEngine(
+            SimulationConfig(
+                sim_minutes=1,
+                stall_count=2,
+                table_count=2,
+                seed=20240616,
+                total_student_count=1,
+                max_active_students=1,
+            )
+        )
+        engine.initialize()
+        engine._spawn_group(1)
+        student = next(iter(engine.students.values()))
+        blocked_table = engine.tables[0]
+        target_table = engine.tables[1]
+        student.state = StudentState.MOVING_TO_SEAT
+        student.table_id = target_table.id
+        student.seat_index = 0
+        student.x = blocked_table.x
+        student.y = blocked_table.y - STUDENT_COLLISION_FOOT_OFFSET_Y
+        student.target_x, student.target_y = engine._seat_access_position(target_table, 0)
+        student.path = [(student.target_x, student.target_y)]
+        student.table_overlap_time = 60.0
+        student.stuck_time = 60.0
+
+        relocated = engine._try_relocate_from_table_obstacle(student)
+
+        self.assertTrue(relocated)
+        self.assertIsNone(engine._student_table_overlap_obstacle(student))
+        self.assertTrue(engine._is_static_walkable_point(student.x, student.y))
+        self.assertTrue(student.path)
+        self.assertEqual(student.table_overlap_time, 0.0)
+        self.assertEqual(student.stuck_time, 0.0)
+        self.assertGreaterEqual(student.reroute_count, 1)
+
+    def test_table_obstacle_sizes_match_table_visual_footprint(self) -> None:
+        self.assertEqual(TABLE_OBSTACLE_SIZES[2], (74.0, 56.0))
+        self.assertEqual(TABLE_OBSTACLE_SIZES[4], (88.0, 74.0))
+        self.assertEqual(TABLE_OBSTACLE_SIZES[6], (104.0, 88.0))
+
+    def test_bottom_row_tables_keep_clearance_and_use_upper_access(self) -> None:
+        engine = SimulationEngine(
+            SimulationConfig(
+                sim_minutes=1,
+                stall_count=2,
+                table_count=24,
+                seed=20240617,
+                total_student_count=1,
+                max_active_students=1,
+            )
+        )
+        engine.initialize()
+        bottom_tables = [table for table in engine.tables if table.y >= 650.0]
+
+        self.assertTrue(bottom_tables)
+        for table in bottom_tables:
+            obstacle_height = TABLE_OBSTACLE_SIZES[table.seat_count][1]
+            self.assertLessEqual(table.y + obstacle_height / 2.0, engine.height - 60.0)
+            lower_seats = [
+                index
+                for index in range(table.seat_count)
+                if engine._seat_position(table, index)[1] > table.y
+            ]
+            for seat_index in lower_seats:
+                access = engine._seat_access_position(table, seat_index)
+                self.assertLessEqual(access[1], table.y)
+                self.assertTrue(engine._is_static_walkable_point(access[0], access[1]))
+
+    def test_bottom_row_table_path_avoids_target_table_obstacle(self) -> None:
+        engine = SimulationEngine(
+            SimulationConfig(
+                sim_minutes=1,
+                stall_count=2,
+                table_count=24,
+                seed=20240618,
+                total_student_count=1,
+                max_active_students=1,
+            )
+        )
+        engine.initialize()
+        target_table = max(engine.tables, key=lambda table: table.y)
+        lower_seat_index = max(
+            range(target_table.seat_count),
+            key=lambda index: engine._seat_position(target_table, index)[1],
+        )
+        start = (target_table.x, target_table.y - 180.0)
+        seat_x, seat_y = engine._seat_position(target_table, lower_seat_index)
+        path = engine._build_table_path(start[0], start[1], target_table, lower_seat_index, seat_x, seat_y)
+        target_obstacle = next(
+            obstacle
+            for obstacle in engine._obstacle_frames()
+            if obstacle.get("kind") == "table"
+            and obstacle["left"] < target_table.x < obstacle["right"]
+            and obstacle["top"] < target_table.y < obstacle["bottom"]
+        )
+
+        self.assertTrue(path)
+        self.assertFalse(engine._path_still_crosses_obstacle(start, path, target_obstacle))
 
     def test_congestion_can_trigger_dynamic_reroute(self) -> None:
         engine = SimulationEngine(
