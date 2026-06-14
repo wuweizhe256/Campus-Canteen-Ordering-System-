@@ -345,7 +345,6 @@ class SimulationEngine:
         while due_count > 0:
             group_size = min(
                 self._choose_group_size(),
-                due_count,
                 remaining_total,
                 remaining_capacity,
             )
@@ -376,10 +375,11 @@ class SimulationEngine:
         return self.config.duration_game_seconds / 2.0
 
     def _choose_group_size(self) -> int:
+        pair_probability, multi_probability = self.config.resolved_companion_group_probabilities()
         roll = self.rng.random()
-        if roll < self.config.companion_multi_ratio:
+        if roll < multi_probability:
             return self.rng.choice([3, 4])
-        if roll < self.config.companion_multi_ratio + self.config.companion_pair_ratio:
+        if roll < multi_probability + pair_probability:
             return 2
         return 1
 

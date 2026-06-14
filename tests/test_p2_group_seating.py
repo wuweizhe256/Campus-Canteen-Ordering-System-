@@ -8,6 +8,36 @@ from utils.helpers import distance
 
 
 class P2GroupSeatingTest(unittest.TestCase):
+    def test_companion_ratio_controls_group_generation_without_split_fields(self) -> None:
+        solo_engine = SimulationEngine(SimulationConfig(companion_ratio=0.0, seed=20240619))
+        group_engine = SimulationEngine(SimulationConfig(companion_ratio=1.0, seed=20240619))
+
+        self.assertTrue(all(solo_engine._choose_group_size() == 1 for _ in range(20)))
+        self.assertTrue(all(group_engine._choose_group_size() > 1 for _ in range(20)))
+
+    def test_due_spawn_keeps_companion_group_intact_when_one_student_is_due(self) -> None:
+        engine = SimulationEngine(
+            SimulationConfig(
+                sim_minutes=1,
+                table_count=3,
+                seed=20240620,
+                total_student_count=4,
+                max_active_students=4,
+                companion_ratio=1.0,
+            )
+        )
+        engine.initialize()
+        engine._target_spawned_students = lambda: 1
+        engine._choose_group_size = lambda: 4
+
+        engine._spawn_due_students()
+
+        self.assertEqual(engine.spawned_students, 4)
+        group_ids = {student.group_id for student in engine.students.values()}
+        self.assertEqual(len(group_ids), 1)
+        self.assertNotIn(None, group_ids)
+        self.assertTrue(all(student.group_size == 4 for student in engine.students.values()))
+
     def test_group_member_prefers_same_table(self) -> None:
         engine = SimulationEngine(
             SimulationConfig(

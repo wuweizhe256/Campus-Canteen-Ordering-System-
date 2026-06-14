@@ -129,7 +129,7 @@ class ConfigDialog(QDialog):
         table_form.addRow("\u9910\u684c\u603b\u6570", self.tables_spin)
 
         behavior_form = self._form_layout()
-        behavior_form.addRow("\u540c\u884c\u6bd4\u4f8b", self.companion_ratio_spin)
+        behavior_form.addRow("\u540c\u884c\u6982\u7387", self.companion_ratio_spin)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -257,8 +257,6 @@ class ConfigDialog(QDialog):
             four_person_table_count=self.four_tables_spin.value(),
             six_person_table_count=self.six_tables_spin.value(),
             companion_ratio=companion_ratio,
-            companion_pair_ratio=companion_ratio * 0.7,
-            companion_multi_ratio=companion_ratio * 0.3,
             seed=None if seed == 0 else seed,
             total_student_count=total_students,
             max_active_students=max(55, total_students),

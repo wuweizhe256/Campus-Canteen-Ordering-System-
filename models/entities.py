@@ -51,8 +51,8 @@ class SimulationConfig:
     seed: int | None = None
     total_student_count: int = 120
     max_active_students: int = 120
-    companion_pair_ratio: float = 0.18
-    companion_multi_ratio: float = 0.08
+    companion_pair_ratio: float | None = None
+    companion_multi_ratio: float | None = None
     entrance_weights: tuple[float, ...] = (1.0, 0.7, 0.5)
 
     @property
@@ -62,6 +62,30 @@ class SimulationConfig:
     @property
     def duration_real_seconds(self) -> float:
         return self.duration_game_seconds / self.time_scale
+
+    def resolved_companion_group_probabilities(self) -> tuple[float, float]:
+        if self.companion_pair_ratio is not None or self.companion_multi_ratio is not None:
+            pair_probability = _bounded_ratio(self.companion_pair_ratio or 0.0)
+            multi_probability = _bounded_ratio(self.companion_multi_ratio or 0.0)
+            total = pair_probability + multi_probability
+            if total > 1.0:
+                pair_probability /= total
+                multi_probability /= total
+            return pair_probability, multi_probability
+
+        target_student_share = _bounded_ratio(self.companion_ratio)
+        if target_student_share <= 0.0:
+            return 0.0, 0.0
+        if target_student_share >= 1.0:
+            return 0.7, 0.3
+
+        pair_share = 0.7
+        multi_share = 0.3
+        average_group_size = pair_share * 2.0 + multi_share * 3.5
+        group_probability = target_student_share / (
+            average_group_size - target_student_share * (average_group_size - 1.0)
+        )
+        return group_probability * pair_share, group_probability * multi_share
 
     def resolved_table_type_counts(self) -> dict[str, int]:
         explicit_counts = {
@@ -82,6 +106,10 @@ class SimulationConfig:
         six_count = max(0, count // 4)
         four_count = max(0, count - two_count - six_count)
         return {"two": two_count, "four": four_count, "six": six_count}
+
+
+def _bounded_ratio(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
 
 
 @dataclass
