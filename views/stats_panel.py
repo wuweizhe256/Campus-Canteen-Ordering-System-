@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PyQt6.QtCore import QRectF, Qt
+from PyQt6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRectF, QSize, Qt, pyqtProperty, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QProgressBar,
     QScrollArea,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -20,13 +21,40 @@ from PyQt6.QtWidgets import (
 )
 
 from utils.fonts import stylesheet_font_family, ui_font
+from views.ui_widgets import apply_detail_card_shadow
+
+
+class StatsTokens:
+    HEALTHY = "#36A37A"
+    CAUTION = "#F0913C"
+    ALERT = "#E23B3B"
+    THEME = "#0f766e"
+    MUTED = "#64748b"
+    INK = "#0f172a"
+    CARD_BG = "#f8fafc"
+    TRACK = "#e5e7eb"
+    HEAT_STOPS = (
+        (0.00, "#36A37A"),
+        (0.25, "#8CC152"),
+        (0.50, "#F4C744"),
+        (0.75, "#F0913C"),
+        (1.00, "#E23B3B"),
+    )
+    GAUGE_THRESHOLDS = {
+        "等待": {"caution": 60.0, "alert": 120.0},
+        "座位": {"low_caution": 0.18, "caution": 0.72, "alert": 0.90},
+        "人数": {"caution": 70.0, "alert": 100.0},
+        "拥堵": {"caution": 0.55, "alert": 0.80},
+        "卡住": {"caution": 3.0, "alert": 8.0},
+    }
+    TABLE_UTILIZATION_THRESHOLDS = {"caution": 0.85, "alert": 0.95}
 
 
 class StatsPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setMinimumWidth(330)
-        self.setMaximumWidth(410)
+        self.setMinimumWidth(340)
+        self.setMaximumWidth(460)
         self.setObjectName("StatsPanel")
         self.history: list[dict[str, float | None]] = []
         self._font_scale = 1.0
@@ -58,21 +86,48 @@ class StatsPanel(QWidget):
         self.table_type_panel = TableTypeUtilizationPanel()
         self.heatmap = QueueHeatmap()
         self.trend = TrendChart()
+        self.sections: list[CollapsibleSection] = []
 
         content = QWidget()
         content.setObjectName("StatsScrollContent")
-        content_layout = QVBoxLayout()
-        content_layout.setContentsMargins(14, 16, 14, 16)
-        content_layout.setSpacing(12)
-        content_layout.addWidget(self.title)
-        content_layout.addWidget(self.subtitle)
-        content_layout.addWidget(self.gauge_panel)
-        content_layout.addWidget(self.table_type_panel)
-        content_layout.addWidget(table_card)
-        content_layout.addWidget(self.heatmap)
-        content_layout.addWidget(self.trend)
-        content_layout.addStretch(1)
-        content.setLayout(content_layout)
+        self.content_layout = QVBoxLayout()
+        self.content_layout.setContentsMargins(14, 16, 14, 16)
+        self.content_layout.setSpacing(14)
+        self.content_layout.addWidget(self.title)
+        self.content_layout.addWidget(self.subtitle)
+
+        self.core_section = CollapsibleSection("核心仪表盘", expanded=True)
+        self.core_section.set_content(self.gauge_panel)
+        self.core_section.setToolTip("核心运营指标。拥堵超过 80% 时标题会高亮。")
+
+        operations_content = QWidget()
+        operations_layout = QVBoxLayout()
+        operations_layout.setContentsMargins(0, 0, 0, 0)
+        operations_layout.setSpacing(12)
+        operations_layout.addWidget(self.table_type_panel)
+        operations_layout.addWidget(self.heatmap)
+        operations_content.setLayout(operations_layout)
+        self.operations_section = CollapsibleSection("运营分布", expanded=False)
+        self.operations_section.set_content(operations_content)
+        self.operations_section.setToolTip("包含桌型利用率与窗口队列热力图。点击热力图格子可看详情。")
+
+        detail_content = QWidget()
+        detail_layout = QVBoxLayout()
+        detail_layout.setContentsMargins(0, 0, 0, 0)
+        detail_layout.setSpacing(12)
+        detail_layout.addWidget(table_card)
+        detail_layout.addWidget(self.trend)
+        detail_content.setLayout(detail_layout)
+        self.detail_section = CollapsibleSection("详细指标", expanded=False)
+        self.detail_section.set_content(detail_content)
+        self.detail_section.setToolTip("展开查看完整指标表和趋势折线图，点击趋势图可放大。")
+
+        self.sections = [self.core_section, self.operations_section, self.detail_section]
+        for section in self.sections:
+            section.dragMoveRequested.connect(self._move_section_by_drag)
+            self.content_layout.addWidget(section)
+        self.content_layout.addStretch(1)
+        content.setLayout(self.content_layout)
 
         self.scroll = QScrollArea()
         self.scroll.setObjectName("StatsScroll")
@@ -126,6 +181,44 @@ class StatsPanel(QWidget):
                 background: #ffffff;
                 border: 1px solid #ead7bf;
                 border-radius: 12px;
+            }
+            QFrame#CollapsibleSection {
+                background: #fffaf0;
+                border: 1px solid #dccdb8;
+                border-radius: 16px;
+            }
+            QFrame#CollapsibleSection:hover {
+                background: #fffdf7;
+                border-color: #0f766e;
+            }
+            QFrame#CollapsibleSection[pressed="true"] {
+                background: #fff1d8;
+            }
+            QFrame#SectionHeader {
+                background: transparent;
+                border-radius: 16px;
+            }
+            QFrame#SectionHeader:hover {
+                background: rgba(15, 118, 110, 16);
+            }
+            QFrame#SectionHeader[expanded="true"] {
+                background: rgba(15, 118, 110, 12);
+            }
+            QFrame#SectionHeader[pressed="true"] {
+                background: rgba(15, 118, 110, 26);
+            }
+            QFrame#SectionHeader[alert="true"] {
+                background: rgba(217, 80, 111, 24);
+            }
+            QLabel#SectionTitle {
+                color: #17211f;
+                font: 900 15pt "Microsoft YaHei UI";
+            }
+            QFrame#SectionHeader[expanded="true"] QLabel#SectionTitle {
+                color: #0f5f59;
+            }
+            QWidget#SectionBody {
+                background: transparent;
             }
             QTableWidget#StatsTable {
                 background: transparent;
@@ -236,6 +329,177 @@ class StatsPanel(QWidget):
         self.heatmap.set_frame(frame)
         self.trend.set_history(self.history)
 
+        congestion = _number(stats.get("congestion_index"), 0.0) or 0.0
+        queue_values = self.heatmap._heatmap_values()
+        max_queue = max((value for _, value in queue_values), default=0)
+        self.core_section.set_alert(congestion >= 0.8)
+        self.operations_section.set_alert(max_queue >= 8)
+
+    def _move_section_by_drag(self, section: "CollapsibleSection", delta_y: int) -> None:
+        if abs(delta_y) < 26 or section not in self.sections:
+            return
+        index = self.sections.index(section)
+        target = index + (1 if delta_y > 0 else -1)
+        if target < 0 or target >= len(self.sections):
+            return
+        self.sections[index], self.sections[target] = self.sections[target], self.sections[index]
+        for item in self.sections:
+            self.content_layout.removeWidget(item)
+        insert_index = 2
+        for item in self.sections:
+            self.content_layout.insertWidget(insert_index, item)
+            insert_index += 1
+
+
+class CollapsibleHeader(QFrame):
+    dragMoveRequested = pyqtSignal(object, int)
+
+    def __init__(self, section: "CollapsibleSection", title: str) -> None:
+        super().__init__(section)
+        self.section = section
+        self._press_pos: QPoint | None = None
+        self.setObjectName("SectionHeader")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        self.arrow = ArrowIcon()
+        self.title = QLabel(title)
+        self.title.setObjectName("SectionTitle")
+
+        layout = QHBoxLayout()
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(12)
+        layout.addWidget(self.arrow)
+        layout.addWidget(self.title, 1)
+        self.setLayout(layout)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt override
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._press_pos = event.position().toPoint()
+            self.section.set_pressed(True)
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt override
+        if self._press_pos is not None:
+            delta = event.position().toPoint() - self._press_pos
+            if abs(delta.y()) > 26 and abs(delta.y()) > abs(delta.x()):
+                self.dragMoveRequested.emit(self.section, delta.y())
+                self._press_pos = event.position().toPoint()
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt override
+        moved = False
+        if self._press_pos is not None:
+            delta = event.position().toPoint() - self._press_pos
+            moved = abs(delta.y()) > 8 or abs(delta.x()) > 8
+        self._press_pos = None
+        self.section.set_pressed(False)
+        if event.button() == Qt.MouseButton.LeftButton and not moved:
+            self.section.toggle()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
+class ArrowIcon(QLabel):
+    def __init__(self) -> None:
+        super().__init__()
+        self._angle = 0.0
+        self.setFixedSize(18, 18)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setStyleSheet("color: #0f766e; font: 900 13pt 'Microsoft YaHei UI';")
+        self.setText("v")
+
+    def get_angle(self) -> float:
+        return self._angle
+
+    def set_angle(self, value: float) -> None:
+        self._angle = value
+        self.setText(">" if value < -45 else "v")
+
+    angle = pyqtProperty(float, fget=get_angle, fset=set_angle)
+
+
+class CollapsibleSection(QFrame):
+    dragMoveRequested = pyqtSignal(object, int)
+
+    def __init__(self, title: str, *, expanded: bool) -> None:
+        super().__init__()
+        self.setObjectName("CollapsibleSection")
+        self._expanded = expanded
+        self._pressed = False
+        self._alert = False
+        self._arrow_animation: QPropertyAnimation | None = None
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.header = CollapsibleHeader(self, title)
+        self.header.dragMoveRequested.connect(self.dragMoveRequested.emit)
+        self.body = QWidget()
+        self.body.setObjectName("SectionBody")
+        self.body.setVisible(expanded)
+        self.body_layout = QVBoxLayout()
+        self.body_layout.setContentsMargins(14, 10, 14, 14)
+        self.body_layout.setSpacing(12)
+        self.body.setLayout(self.body_layout)
+
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self.header)
+        layout.addWidget(self.body)
+        self.setLayout(layout)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        self._sync_state(animated=False)
+
+    def set_content(self, widget: QWidget) -> None:
+        while self.body_layout.count():
+            item = self.body_layout.takeAt(0)
+            existing = item.widget()
+            if existing is not None:
+                existing.setParent(None)
+        self.body_layout.addWidget(widget)
+
+    def toggle(self) -> None:
+        self._expanded = not self._expanded
+        self._sync_state(animated=True)
+
+    def set_alert(self, alert: bool) -> None:
+        if self._alert == alert:
+            return
+        self._alert = alert
+        self._sync_state(animated=False)
+
+    def set_pressed(self, pressed: bool) -> None:
+        self._pressed = pressed
+        self._sync_state(animated=False)
+
+    def sizeHint(self) -> QSize:
+        hint = super().sizeHint()
+        return QSize(hint.width(), max(62, hint.height()))
+
+    def _sync_state(self, *, animated: bool) -> None:
+        self.setProperty("pressed", self._pressed)
+        self.header.setProperty("pressed", self._pressed)
+        self.header.setProperty("alert", self._alert)
+        self.header.setProperty("expanded", self._expanded)
+        for widget in (self, self.header):
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
+
+        target_angle = 0.0 if self._expanded else -90.0
+        if not animated:
+            self.header.arrow.set_angle(target_angle)
+            self.body.setVisible(self._expanded)
+            return
+
+        self.body.setVisible(self._expanded)
+        if self._arrow_animation is not None:
+            self._arrow_animation.stop()
+        self._arrow_animation = QPropertyAnimation(self.header.arrow, b"angle", self)
+        self._arrow_animation.setDuration(220)
+        self._arrow_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._arrow_animation.setStartValue(self.header.arrow.get_angle())
+        self._arrow_animation.setEndValue(target_angle)
+        self._arrow_animation.start()
+
 
 class GaugePanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -249,24 +513,21 @@ class GaugePanel(QWidget):
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
         painter = _card_painter(self)
-        painter.setPen(QColor("#0f172a"))
-        painter.setFont(ui_font(10, QFont.Weight.Bold))
-        painter.drawText(QRectF(16, 14, self.width() - 32, 20), Qt.AlignmentFlag.AlignLeft, "核心仪表盘")
-
         gauges = [
-            ("等待", _number(self.stats.get("avg_wait_time"), None), 120.0, "s", QColor("#0ea5e9")),
-            ("在场", _number(self.stats.get("avg_total_time"), None), 600.0, "s", QColor("#8b5cf6")),
-            ("座位", _number(self.stats.get("seat_utilization"), None), 1.0, "%", QColor("#14b8a6")),
-            ("人数", _number(self.stats.get("max_active_students"), None), 120.0, "人", QColor("#f59e0b")),
-            ("拥堵", _number(self.stats.get("congestion_index"), None), 1.0, "%", QColor("#ef4444")),
-            ("卡住", _number(self.stats.get("stuck_student_count"), None), 20.0, "人", QColor("#f97316")),
+            ("等待", _number(self.stats.get("avg_wait_time"), None), 120.0, "s"),
+            ("在场", _number(self.stats.get("avg_total_time"), None), 600.0, "s"),
+            ("座位", _number(self.stats.get("seat_utilization"), None), 1.0, "%"),
+            ("人数", _number(self.stats.get("max_active_students"), None), 120.0, "人"),
+            ("拥堵", _number(self.stats.get("congestion_index"), None), 1.0, "%"),
+            ("卡住", _number(self.stats.get("stuck_student_count"), None), 20.0, "人"),
         ]
 
         cell_width = (self.width() - 44) / 2
-        for index, (label, value, maximum, unit, color) in enumerate(gauges):
+        for index, (label, value, maximum, unit) in enumerate(gauges):
             col = index % 2
             row = index // 2
-            rect = QRectF(16 + col * (cell_width + 12), 46 + row * 78, cell_width, 66)
+            rect = QRectF(16 + col * (cell_width + 12), 18 + row * 76, cell_width, 66)
+            color = self._semantic_color(label, value)
             self._draw_gauge(painter, rect, label, value, maximum, unit, color)
 
     def _draw_gauge(
@@ -280,23 +541,27 @@ class GaugePanel(QWidget):
         color: QColor,
     ) -> None:
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#f8fafc"))
+        painter.setBrush(QColor(StatsTokens.CARD_BG))
         painter.drawRoundedRect(rect, 8, 8)
 
         center = rect.left() + 36
         circle = QRectF(center - 22, rect.top() + 11, 44, 44)
-        painter.setPen(QPen(QColor("#e2e8f0"), 7))
+        track_pen = QPen(QColor(StatsTokens.TRACK), 7)
+        track_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(track_pen)
         painter.drawArc(circle, 210 * 16, -240 * 16)
         if value is not None:
             ratio = max(0.0, min(1.0, value / maximum if maximum > 0 else 0.0))
-            painter.setPen(QPen(color, 7))
+            progress_pen = QPen(color, 7)
+            progress_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(progress_pen)
             painter.drawArc(circle, 210 * 16, int(-240 * ratio * 16))
 
-        painter.setPen(QColor("#64748b"))
+        painter.setPen(QColor(StatsTokens.MUTED))
         painter.setFont(ui_font(8))
         painter.drawText(QRectF(rect.left() + 72, rect.top() + 12, rect.width() - 82, 18), Qt.AlignmentFlag.AlignLeft, label)
 
-        painter.setPen(QColor("#0f172a"))
+        painter.setPen(color.darker(125))
         painter.setFont(ui_font(11, QFont.Weight.Bold))
         if value is None:
             display = "-"
@@ -307,6 +572,23 @@ class GaugePanel(QWidget):
         else:
             display = f"{int(value)}{unit}"
         painter.drawText(QRectF(rect.left() + 72, rect.top() + 32, rect.width() - 82, 22), Qt.AlignmentFlag.AlignLeft, display)
+
+    def _semantic_color(self, label: str, value: float | None) -> QColor:
+        if value is None:
+            return QColor(StatsTokens.MUTED)
+        if label == "在场":
+            return QColor(StatsTokens.THEME)
+        thresholds = StatsTokens.GAUGE_THRESHOLDS.get(label)
+        if thresholds is None:
+            return QColor(StatsTokens.HEALTHY)
+        low_caution = thresholds.get("low_caution")
+        if low_caution is not None and value <= low_caution:
+            return QColor(StatsTokens.CAUTION)
+        if value >= thresholds["alert"]:
+            return QColor(StatsTokens.ALERT)
+        if value >= thresholds["caution"]:
+            return QColor(StatsTokens.CAUTION)
+        return QColor(StatsTokens.HEALTHY)
 
 
 class TableTypeUtilizationPanel(QWidget):
@@ -329,20 +611,15 @@ class TableTypeUtilizationPanel(QWidget):
         top = 48.0
         bar_left = 76.0
         bar_width = max(80.0, self.width() - bar_left - 60.0)
-        colors = {
-            "2人桌": QColor("#0ea5e9"),
-            "4人桌": QColor("#14b8a6"),
-            "6人桌": QColor("#f59e0b"),
-        }
         for index, (label, ratio, used, total) in enumerate(rows):
             y = top + index * 36.0
-            color = colors.get(label, QColor("#64748b"))
+            color = _utilization_color(ratio)
             painter.setPen(QColor("#334155"))
             painter.setFont(ui_font(8, QFont.Weight.Bold))
             painter.drawText(QRectF(16, y - 2, 54, 18), Qt.AlignmentFlag.AlignLeft, label)
 
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor("#f1f5f9"))
+            painter.setBrush(QColor(StatsTokens.TRACK))
             painter.drawRoundedRect(QRectF(bar_left, y, bar_width, 12), 6, 6)
             if ratio is not None:
                 ratio = max(0.0, min(1.0, ratio))
@@ -438,7 +715,7 @@ class QueueHeatmap(QWidget):
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(color)
             painter.drawRoundedRect(rect, 8, 8)
-            painter.setPen(QColor("#ffffff" if value / max_value > 0.55 else "#0f172a"))
+            painter.setPen(QColor("#ffffff" if value / max_value > 0.78 else "#17211f"))
             painter.setFont(ui_font(10, QFont.Weight.Bold))
             painter.drawText(rect.adjusted(8, 6, -8, -24), Qt.AlignmentFlag.AlignLeft, f"W{stall_id + 1}")
             painter.setFont(ui_font(13, QFont.Weight.Bold))
@@ -493,18 +770,20 @@ class QueueDetailPopup(QDialog):
         self._orders_scroll: QScrollArea | None = None
 
         self.setWindowTitle(f"窗口 {stall_id + 1} 队列详情")
-        self.setMinimumSize(420, 520)
-        self.resize(460, 600)
+        self.setMinimumSize(360, 420)
+        self.resize(400, 520)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
 
         root = QVBoxLayout()
-        root.setContentsMargins(18, 18, 18, 18)
-        root.setSpacing(12)
+        root.setContentsMargins(20, 20, 20, 20)
+        root.setSpacing(14)
 
         title = QLabel(f"窗口 {stall_id + 1} 队列详情")
-        title.setFont(ui_font(14, QFont.Weight.Bold))
-        title.setStyleSheet("color: #0f172a;")
+        title.setFont(ui_font(15, QFont.Weight.Bold))
+        title.setStyleSheet("color: #4a3728;")
         root.addWidget(title)
+
+        root.addWidget(_popup_divider())
 
         metrics = QHBoxLayout()
         metrics.setSpacing(8)
@@ -517,9 +796,11 @@ class QueueDetailPopup(QDialog):
             metrics.addWidget(self._metric_card(key, label))
         root.addLayout(metrics)
 
+        root.addWidget(_popup_divider())
+
         subtitle = QLabel("学生订单")
-        subtitle.setFont(ui_font(10, QFont.Weight.Bold))
-        subtitle.setStyleSheet("color: #334155; padding-top: 2px;")
+        subtitle.setFont(ui_font(11, QFont.Weight.Bold))
+        subtitle.setStyleSheet("color: #5c4a3a;")
         root.addWidget(subtitle)
 
         self._orders_scroll = QScrollArea()
@@ -543,26 +824,26 @@ class QueueDetailPopup(QDialog):
         self.setStyleSheet(
             """
             QDialog {
-                background: #ffffff;
+                background: #fffaf0;
             }
             QFrame#QueueMetricCard {
-                background: #f8fafc;
-                border: 1px solid #e2e8f0;
-                border-radius: 8px;
+                background: #fffbeb;
+                border: 1px solid #e7cda9;
+                border-radius: 10px;
             }
             QFrame#QueueOrderCard {
-                background: #ffffff;
-                border: 1px solid #e2e8f0;
-                border-radius: 8px;
+                background: #fffbeb;
+                border: 1px solid #e7cda9;
+                border-radius: 10px;
             }
             QProgressBar {
-                background: #e2e8f0;
+                background: #e5e7eb;
                 border: 0;
                 border-radius: 5px;
                 height: 10px;
             }
             QProgressBar::chunk {
-                background: #0ea5e9;
+                background: #f59e0b;
                 border-radius: 5px;
             }
             """
@@ -571,16 +852,17 @@ class QueueDetailPopup(QDialog):
     def _metric_card(self, key: str, label: str) -> QFrame:
         card = QFrame()
         card.setObjectName("QueueMetricCard")
+        apply_detail_card_shadow(card)
         layout = QVBoxLayout()
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(3)
 
         name = QLabel(label)
         name.setFont(ui_font(8))
-        name.setStyleSheet("color: #64748b;")
+        name.setStyleSheet("color: #78716c;")
         value = QLabel("-")
         value.setFont(ui_font(13, QFont.Weight.Bold))
-        value.setStyleSheet("color: #0f172a;")
+        value.setStyleSheet("color: #44403c;")
         value.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._metric_labels[key] = value
 
@@ -619,7 +901,7 @@ class QueueDetailPopup(QDialog):
         if not orders:
             empty = QLabel("当前没有等待取餐的学生")
             empty.setFont(ui_font(10))
-            empty.setStyleSheet("color: #94a3b8; padding: 30px;")
+            empty.setStyleSheet("color: #9ca3af; padding: 24px;")
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             layout.addWidget(empty)
             layout.addStretch()
@@ -642,6 +924,7 @@ class QueueDetailPopup(QDialog):
     ) -> QFrame:
         card = QFrame()
         card.setObjectName("QueueOrderCard")
+        apply_detail_card_shadow(card)
         layout = QVBoxLayout()
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(8)
@@ -659,11 +942,11 @@ class QueueDetailPopup(QDialog):
         top.setSpacing(8)
         student_label = QLabel(f"S{student_id}")
         student_label.setFont(ui_font(11, QFont.Weight.Bold))
-        student_label.setStyleSheet("color: #0f172a;")
+        student_label.setStyleSheet("color: #4a3728;")
         top.addWidget(student_label)
         dish_label = QLabel(dish_name)
         dish_label.setFont(ui_font(10, QFont.Weight.Bold))
-        dish_label.setStyleSheet("color: #334155;")
+        dish_label.setStyleSheet("color: #4a3728;")
         top.addWidget(dish_label, 1)
         status_label = QLabel(_order_status_label(status))
         status_label.setFont(ui_font(9, QFont.Weight.Bold))
@@ -688,12 +971,12 @@ class QueueDetailPopup(QDialog):
             wait_text = f"还需 {_format_seconds(remaining)}"
         left = QLabel(wait_text)
         left.setFont(ui_font(9))
-        left.setStyleSheet("color: #475569;")
+        left.setStyleSheet("color: #78716c;")
         detail.addWidget(left)
         detail.addStretch()
         right = QLabel(state or f"订单 #{_display_value(order.get('id'))}")
         right.setFont(ui_font(9))
-        right.setStyleSheet("color: #64748b;")
+        right.setStyleSheet("color: #78716c;")
         detail.addWidget(right)
         layout.addLayout(detail)
 
@@ -722,10 +1005,10 @@ def _draw_trend_lines(
     max_congestion = max(0.15, max(congestion_values) if congestion_values else 0.15)
     max_stuck = max(1.0, max(stuck_values) if stuck_values else 1.0)
 
-    _draw_single_line(painter, chart, history, "avg_wait_time", max_wait, QColor("#0ea5e9"))
-    _draw_single_line(painter, chart, history, "max_active_students", max_active, QColor("#f59e0b"))
-    _draw_single_line(painter, chart, history, "congestion_index", max_congestion, QColor("#ef4444"))
-    _draw_single_line(painter, chart, history, "stuck_student_count", max_stuck, QColor("#f97316"))
+    _draw_single_line(painter, chart, history, "avg_wait_time", max_wait, QColor("#0ea5e9"), y_offset=-3)
+    _draw_single_line(painter, chart, history, "max_active_students", max_active, QColor(StatsTokens.CAUTION), y_offset=1)
+    _draw_single_line(painter, chart, history, "congestion_index", max_congestion, QColor(StatsTokens.ALERT), y_offset=4)
+    _draw_single_line(painter, chart, history, "stuck_student_count", max_stuck, QColor(StatsTokens.CAUTION), y_offset=7)
 
 
 def _draw_single_line(
@@ -735,6 +1018,7 @@ def _draw_single_line(
     key: str,
     maximum: float,
     color: QColor,
+    y_offset: float = 0.0,
 ) -> None:
     points: list[tuple[float, float]] = []
     total = max(1, len(history) - 1)
@@ -743,7 +1027,8 @@ def _draw_single_line(
         if value is None:
             continue
         x = chart.left() + chart.width() * index / total
-        y = chart.bottom() - chart.height() * max(0.0, min(1.0, float(value) / maximum))
+        y = chart.bottom() - chart.height() * max(0.0, min(1.0, float(value) / maximum)) + y_offset
+        y = max(chart.top(), min(chart.bottom(), y))
         points.append((x, y))
     if len(points) < 2:
         return
@@ -777,9 +1062,9 @@ def _draw_trend_legend(painter: QPainter, width: int, height: int) -> None:
     y = height - 28
     items = [
         ("等待", QColor("#0ea5e9")),
-        ("人数", QColor("#f59e0b")),
-        ("拥堵", QColor("#ef4444")),
-        ("卡住", QColor("#f97316")),
+        ("人数", QColor(StatsTokens.CAUTION)),
+        ("拥堵", QColor(StatsTokens.ALERT)),
+        ("卡住", QColor(StatsTokens.CAUTION)),
     ]
     item_count = len(items)
     block_width = 72
@@ -895,6 +1180,13 @@ def _card() -> QFrame:
     return frame
 
 
+def _popup_divider() -> QFrame:
+    line = QFrame()
+    line.setFrameShape(QFrame.Shape.HLine)
+    line.setStyleSheet("color: #d2dfc9;")
+    return line
+
+
 def _card_painter(widget: QWidget) -> QPainter:
     painter = QPainter(widget)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -905,20 +1197,36 @@ def _card_painter(widget: QWidget) -> QPainter:
     return painter
 
 
+def _utilization_color(ratio: float | None) -> QColor:
+    if ratio is None:
+        return QColor(StatsTokens.MUTED)
+    ratio = max(0.0, min(1.0, ratio))
+    thresholds = StatsTokens.TABLE_UTILIZATION_THRESHOLDS
+    if ratio >= thresholds["alert"]:
+        return QColor(StatsTokens.ALERT)
+    if ratio >= thresholds["caution"]:
+        return QColor(StatsTokens.CAUTION)
+    return QColor(StatsTokens.HEALTHY)
+
+
 def _heat_color(ratio: float) -> QColor:
     ratio = max(0.0, min(1.0, ratio))
-    if ratio < 0.5:
-        t = ratio / 0.5
-        return QColor(
-            int(20 + (14 - 20) * t),
-            int(184 + (165 - 184) * t),
-            int(166 + (233 - 166) * t),
-        )
-    t = (ratio - 0.5) / 0.5
+    stops = [(position, QColor(color)) for position, color in StatsTokens.HEAT_STOPS]
+    for index in range(len(stops) - 1):
+        start_pos, start_color = stops[index]
+        end_pos, end_color = stops[index + 1]
+        if ratio <= end_pos:
+            span = max(0.001, end_pos - start_pos)
+            return _mix_color(start_color, end_color, (ratio - start_pos) / span)
+    return stops[-1][1]
+
+
+def _mix_color(start: QColor, end: QColor, ratio: float) -> QColor:
+    ratio = max(0.0, min(1.0, ratio))
     return QColor(
-        int(14 + (239 - 14) * t),
-        int(165 + (68 - 165) * t),
-        int(233 + (68 - 233) * t),
+        int(start.red() + (end.red() - start.red()) * ratio),
+        int(start.green() + (end.green() - start.green()) * ratio),
+        int(start.blue() + (end.blue() - start.blue()) * ratio),
     )
 
 
@@ -1092,9 +1400,9 @@ def _order_status_label(status: str) -> str:
 
 def _order_status_style(status: str) -> str:
     fg, bg = {
-        "queued": ("#1d4ed8", "#dbeafe"),
-        "cooking": ("#c2410c", "#ffedd5"),
-        "done": ("#15803d", "#dcfce7"),
+        "queued": ("#92400e", "#fef3c7"),
+        "cooking": ("#b45309", "#ffedd5"),
+        "done": ("#166534", "#dcfce7"),
         "cancelled": ("#475569", "#f1f5f9"),
     }.get(status, ("#475569", "#f1f5f9"))
     return f"color: {fg}; background: {bg}; border-radius: 6px; padding: 3px 8px;"

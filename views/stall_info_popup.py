@@ -25,6 +25,7 @@ class StallInfoPopup(QDialog):
         self._status_label: QLabel | None = None
         self._info_labels: dict[str, QLabel] = {}
         self._dishes_scroll: QScrollArea | None = None
+        self._dishes_signature: tuple | None = None
         self._setup_ui()
 
     # ------------------------------------------------------------------
@@ -52,6 +53,20 @@ class StallInfoPopup(QDialog):
         self.resize(400, 520)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.Dialog)
+        self.setStyleSheet(
+            """
+            QDialog {
+                background: #fffaf0;
+            }
+            QScrollArea {
+                background: #fffaf0;
+                border: 0;
+            }
+            QScrollArea > QWidget > QWidget {
+                background: #fffaf0;
+            }
+            """
+        )
 
         root = QVBoxLayout()
         root.setContentsMargins(20, 20, 20, 20)
@@ -207,6 +222,9 @@ class StallInfoPopup(QDialog):
     def _refresh_dishes(self) -> None:
         if self._dishes_scroll is None:
             return
+        signature = self._dishes_state_signature()
+        if signature == self._dishes_signature:
+            return
         self._dishes_scroll.setWidget(self._dishes_content())
 
     # ------------------------------------------------------------------
@@ -222,10 +240,13 @@ class StallInfoPopup(QDialog):
     def _dishes_content(self) -> QWidget:
         """构建菜品列表内容 widget（不含滚动区域），供初始化和刷新复用。"""
         dishes = self._stall_dishes()
+        self._dishes_signature = self._dishes_state_signature(dishes)
 
         container = QWidget()
+        container.setObjectName("PopupContent")
+        container.setStyleSheet("QWidget#PopupContent { background: #fffaf0; }")
         layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(0, 0, 10, 0)
         layout.setSpacing(8)
 
         if not dishes:
@@ -250,7 +271,25 @@ class StallInfoPopup(QDialog):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setStyleSheet(
+            """
+            QScrollArea { background: transparent; }
+            QScrollBar:vertical {
+                width: 0px;
+                background: transparent;
+            }
+            QScrollBar::handle:vertical,
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical {
+                width: 0px;
+                height: 0px;
+                background: transparent;
+                border: 0;
+            }
+            """
+        )
         scroll.setWidget(self._dishes_content())
         self._dishes_scroll = scroll
         return scroll
@@ -258,7 +297,7 @@ class StallInfoPopup(QDialog):
     def _dish_card(self, dish: dict) -> QWidget:
         card = QWidget()
         card.setStyleSheet(
-            "QWidget#DishCard { background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; }"
+            "QWidget#DishCard { background: #fffbeb; border: 1px solid #e7cda9; border-radius: 10px; }"
         )
         card.setObjectName("DishCard")
         layout = QVBoxLayout()
@@ -350,10 +389,43 @@ class StallInfoPopup(QDialog):
             "soup": "汤",
         }
         display = name_map.get(key, key)
-        intensity = "●" if value >= 0.6 else "◐" if value >= 0.3 else "○"
+        intensity = _feature_intensity_text(key, value)
         tag = QLabel(f"{display} {intensity}")
-        tag.setFont(ui_font(8))
+        tag.setFont(ui_font(9, QFont.Weight.Bold))
         tag.setStyleSheet(
-            "color: #6b7280; background: #f3f4f6; border-radius: 4px; padding: 1px 6px;"
+            "color: #5c4a3a; background: #fff1d8; border: 1px solid #e7cda9; border-radius: 6px; padding: 2px 7px;"
         )
         return tag
+
+    def _dishes_state_signature(self, dishes: list[dict] | None = None) -> tuple:
+        source = dishes if dishes is not None else self._stall_dishes()
+        signature = []
+        for dish in source:
+            features = dish.get("features")
+            feature_items = tuple(sorted(features.items())) if isinstance(features, dict) else ()
+            signature.append(
+                (
+                    dish.get("id"),
+                    dish.get("name"),
+                    dish.get("price"),
+                    dish.get("available"),
+                    dish.get("stock"),
+                    dish.get("cook_time"),
+                    feature_items,
+                )
+            )
+        return tuple(signature)
+
+
+def _feature_intensity_text(key: str, value: float) -> str:
+    if key == "spicy":
+        if value >= 0.66:
+            return "重辣"
+        if value >= 0.33:
+            return "中辣"
+        return "微辣"
+    if value >= 0.66:
+        return "高"
+    if value >= 0.33:
+        return "中"
+    return "低"

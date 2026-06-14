@@ -6,12 +6,13 @@ from PyQt6.QtCore import QElapsedTimer, Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QSlider,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -25,6 +26,7 @@ from views.stall_info_popup import StallInfoPopup
 from views.stats_panel import StatsPanel
 from views.student_info_popup import StudentInfoPopup
 from views.table_info_popup import TableInfoPopup
+from views.ui_widgets import PigSlider
 
 
 class MainWindow(QMainWindow):
@@ -52,9 +54,13 @@ class MainWindow(QMainWindow):
 
         self.canvas = CanvasWidget()
         self.stats_panel = StatsPanel()
+        self.brand_block = QWidget()
+        self.brand_block.setObjectName("BrandBlock")
         self.app_title = QLabel("校园食堂就餐仿真系统")
         self.app_title.setObjectName("AppTitle")
         self.app_title.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        self.app_subtitle = QLabel("实时排队 · 座位 · 出餐可视化")
+        self.app_subtitle.setObjectName("AppSubtitle")
 
         self.start_button = QPushButton("开始仿真")
         self.start_button.setObjectName("PrimaryButton")
@@ -69,12 +75,14 @@ class MainWindow(QMainWindow):
         self.status_label = QLabel("就绪")
         self.status_label.setObjectName("StatusBadge")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        self.status_label.setMinimumWidth(180)
         self.time_scale_label = QLabel("时间倍率 6x")
         self.time_scale_label.setObjectName("ToolbarLabel")
-        self.time_scale_slider = QSlider(Qt.Orientation.Horizontal)
+        self.time_scale_label.setFixedWidth(82)
+        self.time_scale_slider = PigSlider(Qt.Orientation.Horizontal)
         self.time_scale_slider.setRange(1, 24)
         self.time_scale_slider.setValue(6)
-        self.time_scale_slider.setFixedWidth(180)
+        self.time_scale_slider.setFixedWidth(150)
         self.time_scale_slider.setToolTip("调整仿真内时间和现实时间的比例")
         self.path_checkbox = QCheckBox("显示调试层")
         self.path_checkbox.setObjectName("PathToggle")
@@ -82,15 +90,18 @@ class MainWindow(QMainWindow):
         self.obstacle_checkbox.setObjectName("PathToggle")
         self.zoom_label = QLabel("画布缩放 100%")
         self.zoom_label.setObjectName("ToolbarLabel")
-        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
+        self.zoom_label.setFixedWidth(92)
+        self.zoom_slider = PigSlider(Qt.Orientation.Horizontal)
         self.zoom_slider.setRange(60, 180)
         self.zoom_slider.setValue(100)
-        self.zoom_slider.setFixedWidth(130)
+        self.zoom_slider.setFixedWidth(112)
         self.zoom_slider.setToolTip("调整左侧食堂演示画布缩放比例")
         self.reset_view_button = QPushButton("重置视图")
         self.reset_view_button.setObjectName("SecondaryButton")
+        self.reset_view_button.setFixedWidth(92)
         self.settings_button = QPushButton("设置")
         self.settings_button.setObjectName("SecondaryButton")
+        self.settings_button.setFixedWidth(70)
 
         self.start_button.clicked.connect(self._open_config_dialog)
         self.pause_button.clicked.connect(self._toggle_pause)
@@ -106,25 +117,22 @@ class MainWindow(QMainWindow):
         self.reset_view_button.clicked.connect(self.canvas.reset_view)
         self.settings_button.clicked.connect(self._open_settings_dialog)
 
+        brand_layout = QVBoxLayout()
+        brand_layout.setContentsMargins(0, 0, 0, 0)
+        brand_layout.setSpacing(1)
+        brand_layout.addWidget(self.app_title)
+        brand_layout.addWidget(self.app_subtitle)
+        self.brand_block.setLayout(brand_layout)
+
         top_bar = QHBoxLayout()
-        top_bar.setContentsMargins(18, 12, 18, 12)
+        top_bar.setContentsMargins(18, 10, 18, 10)
         top_bar.setSpacing(12)
-        top_bar.addWidget(self.app_title)
-        top_bar.addSpacing(16)
-        top_bar.addWidget(self.start_button)
-        top_bar.addWidget(self.pause_button)
-        top_bar.addWidget(self.stop_button)
-        top_bar.addSpacing(18)
-        top_bar.addWidget(self.time_scale_label)
-        top_bar.addWidget(self.time_scale_slider)
-        top_bar.addWidget(self.path_checkbox)
-        top_bar.addWidget(self.obstacle_checkbox)
-        top_bar.addWidget(self.zoom_label)
-        top_bar.addWidget(self.zoom_slider)
-        top_bar.addWidget(self.reset_view_button)
-        top_bar.addWidget(self.settings_button)
-        top_bar.addSpacing(18)
-        top_bar.addWidget(self.status_label, 1)
+        top_bar.addWidget(self.brand_block)
+        top_bar.addWidget(self._toolbar_cluster(self.start_button, self.pause_button, self.stop_button))
+        top_bar.addWidget(self._toolbar_cluster(self.time_scale_label, self.time_scale_slider))
+        top_bar.addWidget(self._toolbar_cluster(self.path_checkbox, self.obstacle_checkbox, self.zoom_label, self.zoom_slider, self.reset_view_button, self.settings_button))
+        top_bar.addStretch(1)
+        top_bar.addWidget(self.status_label)
 
         toolbar = QWidget()
         toolbar.setObjectName("TopBar")
@@ -147,6 +155,19 @@ class MainWindow(QMainWindow):
         container.setLayout(root)
         self.setCentralWidget(container)
         self._apply_style()
+
+    def _toolbar_cluster(self, *widgets: QWidget) -> QFrame:
+        cluster = QFrame()
+        cluster.setObjectName("ToolbarCluster")
+        cluster.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        cluster.setFixedHeight(64)
+        layout = QHBoxLayout()
+        layout.setContentsMargins(9, 6, 9, 6)
+        layout.setSpacing(7)
+        for widget in widgets:
+            layout.addWidget(widget)
+        cluster.setLayout(layout)
+        return cluster
 
     def _open_config_dialog(self) -> None:
         if self._running:
@@ -290,6 +311,9 @@ class MainWindow(QMainWindow):
         self._paused = False
         self.start_button.setEnabled(False)
         self.pause_button.setText("暂停")
+        self.pause_button.setObjectName("SecondaryButton")
+        self.pause_button.style().unpolish(self.pause_button)
+        self.pause_button.style().polish(self.pause_button)
         self.pause_button.setEnabled(True)
         self.stop_button.setEnabled(True)
         self.status_label.setText(
@@ -320,6 +344,9 @@ class MainWindow(QMainWindow):
             return
         self._paused = not self._paused
         self.pause_button.setText("继续" if self._paused else "暂停")
+        self.pause_button.setObjectName("PauseActiveButton" if self._paused else "SecondaryButton")
+        self.pause_button.style().unpolish(self.pause_button)
+        self.pause_button.style().polish(self.pause_button)
         self.pauseChanged.emit(self._paused)
 
     @pyqtSlot(object)
@@ -419,6 +446,9 @@ class MainWindow(QMainWindow):
         self._stats_update_clock.invalidate()
         self.start_button.setEnabled(True)
         self.pause_button.setText("暂停")
+        self.pause_button.setObjectName("SecondaryButton")
+        self.pause_button.style().unpolish(self.pause_button)
+        self.pause_button.style().polish(self.pause_button)
         self.pause_button.setEnabled(False)
         self.stop_button.setEnabled(False)
         self.status_label.setText(
@@ -431,6 +461,9 @@ class MainWindow(QMainWindow):
         self._paused = False
         self.start_button.setEnabled(True)
         self.pause_button.setText("暂停")
+        self.pause_button.setObjectName("SecondaryButton")
+        self.pause_button.style().unpolish(self.pause_button)
+        self.pause_button.style().polish(self.pause_button)
         self.pause_button.setEnabled(False)
         self.stop_button.setEnabled(False)
         QMessageBox.critical(self, "仿真错误", str(error))
@@ -442,94 +475,145 @@ class MainWindow(QMainWindow):
         status_size = max(8, round(9 * self._font_scale))
         style = """
             QWidget#Root {
-                background: #e7efe2;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #e7efe2, stop:0.55 #f7efe2, stop:1 #f0e4d3);
                 font-family: "Microsoft YaHei UI";
             }
             QWidget#TopBar {
-                background: #fff7ed;
-                border-bottom: 1px solid #d6c2a8;
+                background: rgba(255, 250, 240, 242);
+                border-bottom: 1px solid #dccdb8;
+            }
+            QWidget#BrandBlock {
+                background: transparent;
             }
             QLabel#AppTitle {
-                color: #0f172a;
-                font: 700 __TITLE_SIZE__pt "Microsoft YaHei UI";
-                padding-right: 6px;
+                color: #17211f;
+                font: 800 __TITLE_SIZE__pt "Microsoft YaHei UI";
+                padding: 0;
+            }
+            QLabel#AppSubtitle {
+                color: #64736e;
+                font: 9pt "Microsoft YaHei UI";
             }
             QLabel#ToolbarLabel {
-                color: #334155;
+                color: #33423f;
                 font: 700 __TOOLBAR_SIZE__pt "Microsoft YaHei UI";
             }
             QLabel#StatusBadge {
-                color: #0f172a;
-                background: #eaf1f8;
-                border: 1px solid #cbd5e1;
-                border-radius: 12px;
-                padding: 5px 12px;
-                font: __STATUS_SIZE__pt "Microsoft YaHei UI";
+                color: #0f5f59;
+                background: #dff4ef;
+                border: 1px solid #9ccfc6;
+                border-radius: 14px;
+                padding: 6px 13px;
+                font: 700 __STATUS_SIZE__pt "Microsoft YaHei UI";
+            }
+            QFrame#ToolbarCluster {
+                background: rgba(255, 255, 255, 155);
+                border: 1px solid rgba(220, 205, 184, 170);
+                border-radius: 16px;
             }
             QPushButton {
-                border: 0;
-                border-radius: 8px;
-                padding: 8px 18px;
-                min-width: 78px;
-                font: 700 __TOOLBAR_SIZE__pt "Microsoft YaHei UI";
+                border: 1px solid transparent;
+                border-radius: 12px;
+                padding: 7px 12px;
+                min-width: 58px;
+                font: 800 __TOOLBAR_SIZE__pt "Microsoft YaHei UI";
             }
             QPushButton#PrimaryButton {
                 color: #ffffff;
                 background: #0f766e;
+                border-color: #0f5f59;
             }
             QPushButton#PrimaryButton:hover {
-                background: #0d9488;
+                background: #13887f;
+            }
+            QPushButton#PrimaryButton:pressed {
+                background: #0f5f59;
+                padding-top: 9px;
+                padding-bottom: 7px;
             }
             QPushButton#SecondaryButton {
-                color: #0f172a;
-                background: #e2e8f0;
+                color: #17211f;
+                background: #fffaf0;
+                border-color: #dccdb8;
             }
             QPushButton#SecondaryButton:hover {
-                background: #cbd5e1;
+                background: #fff1d8;
+                border-color: #d8842b;
+            }
+            QPushButton#SecondaryButton:pressed {
+                background: #f7e1bd;
+                padding-top: 9px;
+                padding-bottom: 7px;
+            }
+            QPushButton#PauseActiveButton {
+                color: #7a3a00;
+                background: #fff1d8;
+                border-color: #d8842b;
             }
             QPushButton#DangerButton {
                 color: #ffffff;
-                background: #dc2626;
+                background: #dc4a4a;
+                border-color: #b93232;
             }
             QPushButton#DangerButton:hover {
-                background: #ef4444;
+                background: #e45d5d;
+            }
+            QPushButton#DangerButton:pressed {
+                background: #b93232;
+                padding-top: 9px;
+                padding-bottom: 7px;
             }
             QPushButton:disabled {
-                color: #94a3b8;
-                background: #f1f5f9;
+                color: #9aa6a0;
+                background: #edf1ec;
+                border-color: #d8ded8;
             }
             QCheckBox#PathToggle {
-                color: #0f172a;
-                font: __TOOLBAR_SIZE__pt "Microsoft YaHei UI";
+                color: #273633;
+                font: 700 9pt "Microsoft YaHei UI";
                 spacing: 8px;
             }
             QCheckBox#PathToggle::indicator {
-                width: 18px;
-                height: 18px;
-                border-radius: 5px;
-                border: 1px solid #94a3b8;
-                background: #ffffff;
+                width: 19px;
+                height: 19px;
+                border-radius: 7px;
+                border: 1px solid #b8c8bd;
+                background: #fffaf0;
+            }
+            QCheckBox#PathToggle::indicator:hover {
+                border-color: #0f766e;
             }
             QCheckBox#PathToggle::indicator:checked {
                 background: #0f766e;
-                border: 1px solid #0f766e;
+                border: 1px solid #0f5f59;
             }
             QSlider::groove:horizontal {
-                height: 6px;
-                border-radius: 3px;
-                background: #cbd5e1;
+                height: 10px;
+                border-radius: 5px;
+                background: #efe3d3;
             }
             QSlider::sub-page:horizontal {
-                border-radius: 3px;
+                border-radius: 5px;
                 background: #0f766e;
             }
+            QSlider::add-page:horizontal {
+                border-radius: 5px;
+                background: #efe3d3;
+            }
             QSlider::handle:horizontal {
-                width: 18px;
-                height: 18px;
-                margin: -7px 0;
-                border-radius: 9px;
-                background: #ffffff;
-                border: 2px solid #0f766e;
+                width: 36px;
+                height: 36px;
+                margin: -13px 0;
+                border: 0;
+                background: transparent;
+            }
+            QToolTip {
+                color: #17211f;
+                background: #fffaf0;
+                border: 1px solid #dccdb8;
+                border-radius: 8px;
+                padding: 6px;
             }
             """
         self.setStyleSheet(

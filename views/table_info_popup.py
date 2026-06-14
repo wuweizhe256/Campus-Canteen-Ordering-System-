@@ -5,8 +5,10 @@ from typing import Any
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
+    QApplication,
     QDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QProgressBar,
@@ -16,6 +18,14 @@ from PyQt6.QtWidgets import (
 )
 
 from utils.fonts import ui_font
+from views.ui_widgets import (
+    DetailBadge,
+    DetailTokens,
+    apply_detail_card_shadow,
+    detail_card_stylesheet,
+    detail_progress_stylesheet,
+    set_detail_value,
+)
 
 
 class TableInfoPopup(QDialog):
@@ -25,7 +35,7 @@ class TableInfoPopup(QDialog):
         super().__init__(parent)
         self._table = table
         self._table_id = int(_number(table.get("id"), 0) or 0)
-        self._status_label: QLabel | None = None
+        self._status_label: DetailBadge | None = None
         self._info_labels: dict[str, QLabel] = {}
         self._seats_scroll: QScrollArea | None = None
         self._companions_scroll: QScrollArea | None = None
@@ -46,20 +56,34 @@ class TableInfoPopup(QDialog):
 
     def _setup_ui(self) -> None:
         self.setWindowTitle(f"餐桌 {self._table_id + 1} 详情")
-        self.setMinimumSize(390, 520)
-        self.resize(430, 620)
+        self.setMinimumSize(340, 420)
+        _apply_compact_dialog_size(self, 380, 560)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.Dialog)
+        self.setStyleSheet(
+            """
+            QDialog {
+                background: #fffaf0;
+            }
+            QScrollArea {
+                background: #fffaf0;
+                border: 0;
+            }
+            QScrollArea > QWidget > QWidget {
+                background: #fffaf0;
+            }
+            """
+        )
 
         root = QVBoxLayout()
-        root.setContentsMargins(20, 20, 20, 20)
-        root.setSpacing(14)
+        root.setContentsMargins(14, 14, 14, 14)
+        root.setSpacing(8)
 
         header = QHBoxLayout()
-        header.setSpacing(12)
+        header.setSpacing(8)
         title = QLabel(f"餐桌 {self._table_id + 1}")
-        title.setFont(ui_font(15, QFont.Weight.Bold))
-        title.setStyleSheet("color: #4a3728;")
+        title.setFont(ui_font(13, QFont.Weight.Bold))
+        title.setStyleSheet(f"color: {DetailTokens.TITLE_TEXT};")
         header.addWidget(title)
         header.addStretch()
         self._status_label = self._build_status_label()
@@ -80,35 +104,27 @@ class TableInfoPopup(QDialog):
 
         self.setLayout(root)
 
-    def _build_status_label(self) -> QLabel:
-        label = QLabel()
+    def _build_status_label(self) -> DetailBadge:
+        label = DetailBadge()
         label.setFont(ui_font(11, QFont.Weight.Bold))
-        label.setFixedHeight(28)
-        label.setMinimumWidth(64)
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._apply_status_label(label)
         return label
 
-    def _info_grid(self) -> QHBoxLayout:
-        layout = QHBoxLayout()
-        layout.setSpacing(24)
+    def _info_grid(self) -> QGridLayout:
+        layout = QGridLayout()
+        layout.setHorizontalSpacing(6)
+        layout.setVerticalSpacing(4)
 
-        left = QVBoxLayout()
-        left.setSpacing(6)
         self._info_labels["table_type"] = _info_value_label(self._table_type_display())
-        left.addWidget(_info_row_widget("餐桌类型", self._info_labels["table_type"]))
+        _add_info_grid_row(layout, 0, 0, "餐桌类型", self._info_labels["table_type"])
         self._info_labels["seats"] = _info_value_label(str(self._seat_count()))
-        left.addWidget(_info_row_widget("座位数", self._info_labels["seats"]))
-        layout.addLayout(left)
-
-        right = QVBoxLayout()
-        right.setSpacing(6)
+        _add_info_grid_row(layout, 1, 0, "座位数", self._info_labels["seats"])
         self._info_labels["occupied"] = _info_value_label(self._occupied_display())
-        right.addWidget(_info_row_widget("已占用", self._info_labels["occupied"]))
+        _add_info_grid_row(layout, 0, 2, "已占用", self._info_labels["occupied"])
         self._info_labels["reserved"] = _info_value_label(self._reserved_display())
-        right.addWidget(_info_row_widget("预占座", self._info_labels["reserved"]))
-        layout.addLayout(right)
-        layout.addStretch()
+        _add_info_grid_row(layout, 1, 2, "预占座", self._info_labels["reserved"])
+        layout.setColumnStretch(1, 1)
+        layout.setColumnStretch(3, 1)
         return layout
 
     def _refresh_status(self) -> None:
@@ -117,13 +133,13 @@ class TableInfoPopup(QDialog):
 
     def _refresh_info(self) -> None:
         if "table_type" in self._info_labels:
-            self._info_labels["table_type"].setText(self._table_type_display())
+            set_detail_value(self._info_labels["table_type"], self._table_type_display())
         if "seats" in self._info_labels:
-            self._info_labels["seats"].setText(str(self._seat_count()))
+            set_detail_value(self._info_labels["seats"], str(self._seat_count()))
         if "occupied" in self._info_labels:
-            self._info_labels["occupied"].setText(self._occupied_display())
+            set_detail_value(self._info_labels["occupied"], self._occupied_display())
         if "reserved" in self._info_labels:
-            self._info_labels["reserved"].setText(self._reserved_display())
+            set_detail_value(self._info_labels["reserved"], self._reserved_display())
 
     def _refresh_seats(self) -> None:
         if self._seats_scroll is None:
@@ -137,6 +153,7 @@ class TableInfoPopup(QDialog):
     def _refresh_companions(self) -> None:
         if self._companions_scroll is None:
             return
+        self._companions_scroll.setMaximumHeight(self._companions_height())
         signature = self._companion_signature()
         if signature == self._companions_signature:
             return
@@ -155,7 +172,7 @@ class TableInfoPopup(QDialog):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setMaximumHeight(150)
+        scroll.setMaximumHeight(self._companions_height())
         scroll.setStyleSheet("QScrollArea { background: transparent; }")
         scroll.setWidget(self._companions_content())
         self._companions_scroll = scroll
@@ -163,15 +180,19 @@ class TableInfoPopup(QDialog):
 
     def _seats_content(self) -> QWidget:
         container = QWidget()
+        container.setObjectName("PopupContent")
+        container.setStyleSheet("QWidget#PopupContent { background: #fffaf0; }")
         layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        layout.setContentsMargins(0, 0, 10, 0)
+        layout.setSpacing(DetailTokens.CARD_SPACING)
         self._seat_widgets = {}
         self._seats_signature = self._seat_signature()
 
         seats = self._seat_frames()
         if not seats:
             layout.addWidget(_empty_label("暂无座位信息"))
+        elif _all_seats_free(seats):
+            layout.addWidget(_free_seats_summary(len(seats)))
         else:
             for seat in seats:
                 layout.addWidget(self._seat_card(seat))
@@ -181,9 +202,11 @@ class TableInfoPopup(QDialog):
 
     def _companions_content(self) -> QWidget:
         container = QWidget()
+        container.setObjectName("PopupContent")
+        container.setStyleSheet("QWidget#PopupContent { background: #fffaf0; }")
         layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        layout.setContentsMargins(0, 0, 10, 0)
+        layout.setSpacing(DetailTokens.CARD_SPACING)
         self._companions_signature = self._companion_signature()
 
         groups = self._companion_groups()
@@ -192,19 +215,21 @@ class TableInfoPopup(QDialog):
         else:
             for group in groups:
                 layout.addWidget(self._companion_card(group))
-        layout.addStretch()
+            layout.addStretch()
         container.setLayout(layout)
         return container
 
     def _seat_card(self, seat: dict) -> QWidget:
         card = QWidget()
         card.setObjectName("SeatCard")
-        card.setStyleSheet(
-            "QWidget#SeatCard { background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; }"
-        )
+        card.setStyleSheet(detail_card_stylesheet("SeatCard"))
+        apply_detail_card_shadow(card)
         layout = QVBoxLayout()
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(7)
+        is_free = _seat_is_free(seat)
+        layout.setContentsMargins(8, 4, 8, 4) if is_free else layout.setContentsMargins(9, 7, 9, 7)
+        layout.setSpacing(4)
+        if is_free:
+            card.setFixedHeight(34)
 
         seat_index = int(_number(seat.get("index"), 0) or 0)
         status = str(seat.get("status") or "free")
@@ -213,10 +238,15 @@ class TableInfoPopup(QDialog):
         widgets: dict[str, Any] = {}
 
         top_row = QHBoxLayout()
-        top_row.setSpacing(8)
-        seat_label = QLabel(f"座位 {seat_index + 1}")
-        seat_label.setFont(ui_font(11, QFont.Weight.Bold))
-        seat_label.setStyleSheet("color: #4a3728;")
+        top_row.setSpacing(6)
+        seat_title = f"座位 {seat_index + 1}"
+        if student is not None:
+            seat_title = f"{seat_title} · S{student.get('id')}"
+        elif student_id is not None:
+            seat_title = f"{seat_title} · S{student_id}"
+        seat_label = QLabel(seat_title)
+        seat_label.setFont(ui_font(10, QFont.Weight.Bold))
+        seat_label.setStyleSheet(f"color: {DetailTokens.TITLE_TEXT};")
         top_row.addWidget(seat_label)
         top_row.addStretch()
         status_badge = self._status_badge(status)
@@ -225,20 +255,16 @@ class TableInfoPopup(QDialog):
         layout.addLayout(top_row)
 
         if student is None:
-            detail = "空座" if student_id is None else f"学生 S{student_id}"
-            detail_label = _small_label(detail)
-            widgets["detail_label"] = detail_label
-            layout.addWidget(detail_label)
             card.setLayout(layout)
             self._seat_widgets[seat_index] = widgets
             return card
 
         state = _state_name(str(student.get("state") or ""))
         group_id = student.get("group_id")
-        group_text = f"  同行组 G{group_id}" if group_id is not None else ""
-        student_label = _small_label(f"学生 S{student.get('id')}  {state}{group_text}")
+        group_text = f" · G{group_id}" if group_id is not None else ""
+        student_label = _small_label(f"{state}{group_text}")
         widgets["student_label"] = student_label
-        layout.addWidget(student_label)
+        top_row.insertWidget(1, student_label, 1)
 
         companion_ids = [
             item
@@ -246,25 +272,30 @@ class TableInfoPopup(QDialog):
             if item is not None
         ] if isinstance(student.get("companion_ids"), list) else []
         if companion_ids:
-            companion_label = _small_label(f"本桌同行：{_student_list(companion_ids)}")
+            companion_label = _tiny_label(f"同行：{_student_list(companion_ids)}")
             widgets["companion_label"] = companion_label
             layout.addWidget(companion_label)
 
         progress = _number(student.get("eating_progress"), None)
         if progress is None:
             hint = "等待开始用餐" if status == "reserved" else "暂未进入用餐计时"
-            hint_label = _small_label(hint)
+            hint_label = _tiny_label(hint)
             widgets["hint_label"] = hint_label
             layout.addWidget(hint_label)
         else:
+            progress_row = QHBoxLayout()
+            progress_row.setSpacing(6)
             progress_bar = _progress_bar(progress)
             widgets["progress_bar"] = progress_bar
-            layout.addWidget(progress_bar)
-            elapsed = _format_seconds(student.get("eating_elapsed"))
+            progress_row.addWidget(progress_bar, 1)
+            progress_label = _tiny_label(_progress_text(progress))
+            widgets["progress_label"] = progress_label
+            progress_row.addWidget(progress_label)
             remaining = _format_seconds(student.get("eating_remaining"))
-            time_label = _small_label(f"已用餐 {elapsed}，剩余 {remaining}")
+            time_label = _tiny_label(f"剩余 {remaining}")
             widgets["time_label"] = time_label
-            layout.addWidget(time_label)
+            progress_row.addWidget(time_label)
+            layout.addLayout(progress_row)
 
         card.setLayout(layout)
         self._seat_widgets[seat_index] = widgets
@@ -293,8 +324,8 @@ class TableInfoPopup(QDialog):
             if isinstance(student_label, QLabel):
                 state = _state_name(str(student.get("state") or ""))
                 group_id = student.get("group_id")
-                group_text = f"  同行组 G{group_id}" if group_id is not None else ""
-                student_label.setText(f"学生 S{student.get('id')}  {state}{group_text}")
+                group_text = f" · G{group_id}" if group_id is not None else ""
+                student_label.setText(f"{state}{group_text}")
 
             companion_label = widgets.get("companion_label")
             companion_ids = [
@@ -309,22 +340,23 @@ class TableInfoPopup(QDialog):
             progress = _number(student.get("eating_progress"), None)
             if isinstance(progress_bar, QProgressBar) and progress is not None:
                 _set_progress_bar_value(progress_bar, progress)
+            progress_label = widgets.get("progress_label")
+            if isinstance(progress_label, QLabel) and progress is not None:
+                progress_label.setText(_progress_text(progress))
 
             time_label = widgets.get("time_label")
             if isinstance(time_label, QLabel):
-                elapsed = _format_seconds(student.get("eating_elapsed"))
                 remaining = _format_seconds(student.get("eating_remaining"))
-                time_label.setText(f"已用餐 {elapsed}，剩余 {remaining}")
+                time_label.setText(f"剩余 {remaining}")
 
     def _companion_card(self, group: dict) -> QWidget:
         card = QWidget()
         card.setObjectName("CompanionCard")
-        card.setStyleSheet(
-            "QWidget#CompanionCard { background: #f0fdfa; border: 1px solid #99f6e4; border-radius: 10px; }"
-        )
+        card.setStyleSheet(detail_card_stylesheet("CompanionCard", bg=DetailTokens.CARD_ALT_BG))
+        apply_detail_card_shadow(card)
         layout = QVBoxLayout()
-        layout.setContentsMargins(14, 10, 14, 10)
-        layout.setSpacing(5)
+        layout.setContentsMargins(9, 7, 9, 7)
+        layout.setSpacing(4)
 
         group_id = group.get("group_id")
         group_size = int(_number(group.get("group_size"), 0) or 0)
@@ -357,15 +389,12 @@ class TableInfoPopup(QDialog):
         reserved = self._reserved_count()
         used = occupied + reserved
         if used <= 0:
-            text, fg, bg = "空桌", "#166534", "#dcfce7"
+            text, status = "空桌", "normal"
         elif used >= total:
-            text, fg, bg = "满座", "#991b1b", "#fee2e2"
+            text, status = "满座", "occupied"
         else:
-            text, fg, bg = "部分占用", "#92400e", "#fef3c7"
-        label.setText(text)
-        label.setStyleSheet(
-            f"QLabel {{ color: {fg}; background: {bg}; border-radius: 8px; padding: 2px 14px; }}"
-        )
+            text, status = "部分占用", "occupied"
+        label.set_status(text, status)
 
     def _table_type_display(self) -> str:
         table_type = str(self._table.get("table_type") or "")
@@ -409,6 +438,9 @@ class TableInfoPopup(QDialog):
             return [group for group in raw if isinstance(group, dict)]
         return []
 
+    def _companions_height(self) -> int:
+        return 28 if not self._companion_groups() else 96
+
     def _seat_signature(self) -> tuple[Any, ...]:
         signature = []
         for seat in self._seat_frames():
@@ -443,9 +475,9 @@ class TableInfoPopup(QDialog):
 
     @staticmethod
     def _status_badge(status: str) -> QLabel:
-        label = QLabel()
+        label = DetailBadge()
         label.setFont(ui_font(9, QFont.Weight.Bold))
-        label.setFixedHeight(22)
+        label.setFixedHeight(24)
         label.setMinimumWidth(44)
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         _apply_status_badge(label, status)
@@ -454,33 +486,43 @@ class TableInfoPopup(QDialog):
 
 def _section_title(text: str) -> QLabel:
     label = QLabel(text)
-    label.setFont(ui_font(11, QFont.Weight.Bold))
-    label.setStyleSheet("color: #5c4a3a;")
+    label.setFont(ui_font(10, QFont.Weight.Bold))
+    label.setStyleSheet(f"color: {DetailTokens.TITLE_TEXT};")
     return label
 
 
 def _divider() -> QFrame:
     line = QFrame()
     line.setFrameShape(QFrame.Shape.HLine)
-    line.setStyleSheet("color: #d2dfc9;")
+    line.setStyleSheet(f"color: {DetailTokens.DIVIDER};")
     return line
 
 
 def _info_value_label(text: str) -> QLabel:
     val = QLabel(text)
-    val.setFont(ui_font(10, QFont.Weight.Bold))
-    val.setStyleSheet("color: #44403c;")
+    val.setFont(ui_font(9, QFont.Weight.Bold))
+    set_detail_value(val, text)
     return val
+
+
+def _add_info_grid_row(layout: QGridLayout, row: int, column: int, label: str, value_widget: QLabel) -> None:
+    lbl = QLabel(label)
+    lbl.setFont(ui_font(9))
+    lbl.setFixedWidth(DetailTokens.LABEL_WIDTH)
+    lbl.setStyleSheet(f"color: {DetailTokens.LABEL_TEXT};")
+    layout.addWidget(lbl, row, column)
+    layout.addWidget(value_widget, row, column + 1)
 
 
 def _info_row_widget(label: str, value_widget: QLabel) -> QWidget:
     row = QWidget()
     layout = QHBoxLayout()
     layout.setContentsMargins(0, 0, 0, 0)
-    layout.setSpacing(8)
+    layout.setSpacing(DetailTokens.ROW_SPACING)
     lbl = QLabel(label)
-    lbl.setFont(ui_font(10))
-    lbl.setStyleSheet("color: #78716c;")
+    lbl.setFont(ui_font(9))
+    lbl.setFixedWidth(DetailTokens.LABEL_WIDTH)
+    lbl.setStyleSheet(f"color: {DetailTokens.LABEL_TEXT};")
     layout.addWidget(lbl)
     layout.addWidget(value_widget)
     layout.addStretch()
@@ -490,30 +532,74 @@ def _info_row_widget(label: str, value_widget: QLabel) -> QWidget:
 
 def _small_label(text: str) -> QLabel:
     label = QLabel(text)
-    label.setFont(ui_font(9))
+    label.setFont(ui_font(8))
     label.setWordWrap(True)
-    label.setStyleSheet("color: #78716c;")
+    label.setStyleSheet(f"color: {DetailTokens.LABEL_TEXT};")
+    return label
+
+
+def _tiny_label(text: str) -> QLabel:
+    label = QLabel(text)
+    label.setFont(ui_font(8))
+    label.setStyleSheet(f"color: {DetailTokens.LABEL_TEXT};")
     return label
 
 
 def _empty_label(text: str) -> QLabel:
     label = QLabel(text)
-    label.setFont(ui_font(10))
-    label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    label.setStyleSheet("color: #9ca3af; padding: 18px;")
+    label.setFont(ui_font(8))
+    label.setFixedHeight(22)
+    label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+    label.setStyleSheet(f"color: {DetailTokens.EMPTY_TEXT}; padding: 2px 0;")
     return label
 
 
-def _apply_status_badge(label: QLabel, status: str) -> None:
-    text, fg, bg = {
-        "free": ("空闲", "#166534", "#dcfce7"),
-        "reserved": ("预占", "#92400e", "#fef3c7"),
-        "occupied": ("占用", "#991b1b", "#fee2e2"),
-    }.get(status, ("未知", "#475569", "#f1f5f9"))
-    label.setText(text)
-    label.setStyleSheet(
-        f"color: {fg}; background: {bg}; border-radius: 6px; padding: 1px 8px;"
+def _free_seats_summary(count: int) -> QWidget:
+    card = QWidget()
+    card.setObjectName("SeatCard")
+    card.setStyleSheet(detail_card_stylesheet("SeatCard"))
+    apply_detail_card_shadow(card)
+    layout = QHBoxLayout()
+    layout.setContentsMargins(10, 6, 10, 6)
+    layout.setSpacing(8)
+
+    label = QLabel(f"{count} 个座位全部空闲")
+    label.setFont(ui_font(10, QFont.Weight.Bold))
+    label.setStyleSheet(f"color: {DetailTokens.TITLE_TEXT};")
+    layout.addWidget(label)
+    layout.addStretch()
+    badge = DetailBadge("空闲", "normal")
+    badge.setFont(ui_font(9, QFont.Weight.Bold))
+    layout.addWidget(badge)
+    card.setLayout(layout)
+    card.setFixedHeight(38)
+    return card
+
+
+def _all_seats_free(seats: list[dict]) -> bool:
+    return bool(seats) and all(_seat_is_free(seat) for seat in seats)
+
+
+def _seat_is_free(seat: dict) -> bool:
+    return (
+        str(seat.get("status") or "free") == "free"
+        and seat.get("student") is None
+        and seat.get("student_id") is None
     )
+
+
+def _apply_status_badge(label: QLabel, status: str) -> None:
+    text, status_key = {
+        "free": ("空闲", "normal"),
+        "reserved": ("预占", "waiting"),
+        "occupied": ("占用", "occupied"),
+    }.get(status, ("未知", "empty"))
+    if isinstance(label, DetailBadge):
+        label.set_status(text, status_key)
+        return
+    badge = DetailBadge(text, status_key)
+    label.setText(badge.text())
+    label.setStyleSheet(badge.styleSheet())
 
 
 def _set_scroll_widget_preserving_position(scroll: QScrollArea, widget: QWidget) -> None:
@@ -540,24 +626,9 @@ def _progress_bar(progress: float) -> QProgressBar:
     progress = max(0.0, min(1.0, progress))
     bar = QProgressBar()
     bar.setRange(0, 1000)
-    bar.setTextVisible(True)
-    bar.setFixedHeight(18)
-    bar.setStyleSheet(
-        """
-        QProgressBar {
-            border: 1px solid #cbd5e1;
-            border-radius: 7px;
-            background: #f8fafc;
-            color: #334155;
-            font: 8pt "Microsoft YaHei UI";
-            text-align: center;
-        }
-        QProgressBar::chunk {
-            border-radius: 6px;
-            background: #0f766e;
-        }
-        """
-    )
+    bar.setTextVisible(False)
+    bar.setFixedHeight(7)
+    bar.setStyleSheet(detail_progress_stylesheet("in_progress"))
     _set_progress_bar_value(bar, progress)
     return bar
 
@@ -565,7 +636,21 @@ def _progress_bar(progress: float) -> QProgressBar:
 def _set_progress_bar_value(bar: QProgressBar, progress: float) -> None:
     progress = max(0.0, min(1.0, progress))
     bar.setValue(int(progress * 1000))
-    bar.setFormat(f"{progress * 100:.0f}%")
+    bar.setFormat("")
+
+
+def _progress_text(progress: float) -> str:
+    progress = max(0.0, min(1.0, progress))
+    return f"{progress * 100:.0f}%"
+
+
+def _apply_compact_dialog_size(dialog: QDialog, width: int, height: int) -> None:
+    screen = QApplication.primaryScreen()
+    max_height = height
+    if screen is not None:
+        max_height = min(height, int(screen.availableGeometry().height() * 0.8))
+    dialog.setMaximumSize(400, max_height)
+    dialog.resize(min(width, 400), max_height)
 
 
 def _state_name(state: str) -> str:
@@ -581,18 +666,18 @@ def _state_name(state: str) -> str:
         "leaving": "离场中",
         "done": "已离场",
     }
-    return names.get(state, state or "-")
+    return names.get(state, state or DetailTokens.EMPTY_DISPLAY)
 
 
 def _student_list(student_ids: list[Any]) -> str:
     values = [f"S{student_id}" for student_id in student_ids if student_id is not None]
-    return "、".join(values) if values else "-"
+    return "、".join(values) if values else DetailTokens.EMPTY_DISPLAY
 
 
 def _format_seconds(value: Any) -> str:
     seconds = _number(value, None)
     if seconds is None:
-        return "-"
+        return DetailTokens.EMPTY_DISPLAY
     seconds = max(0.0, seconds)
     minutes = int(seconds // 60)
     remaining = int(round(seconds % 60))
