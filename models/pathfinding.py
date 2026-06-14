@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from heapq import heappop, heappush
@@ -146,6 +147,61 @@ class GridPathFinder:
         worker_count = self._resolve_worker_count(len(materialized), max_workers)
         with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="astar") as executor:
             return list(executor.map(self._find_path_request, materialized))
+
+    def find_line_of_sight_relay(
+        self,
+        start: Point,
+        target: Point,
+        dynamic_obstacles: tuple[NavRect, ...] = (),
+        max_search_radius: float = 300.0,
+    ) -> Point | None:
+        """搜素一个从 start 出发、可通过直线（无任何障碍物）到达的安全中继点。
+
+        以 start 为圆心在多层半径上搜索，返回向 target 方向偏移的最佳候选点。
+        当学生长期卡顿时，用中继点分段导航有助于跳出局部阻塞。
+        """
+        dx = target[0] - start[0]
+        dy = target[1] - start[1]
+        target_distance = (dx * dx + dy * dy) ** 0.5
+        if target_distance > 0.0:
+            target_dir_x = dx / target_distance
+            target_dir_y = dy / target_distance
+        else:
+            target_dir_x, target_dir_y = 1.0, 0.0
+
+        radii = (36.0, 72.0, 108.0, 144.0, 192.0, 240.0, max_search_radius)
+        angle_count = 12
+        margin = 24.0
+        candidates: list[tuple[float, Point]] = []
+
+        for radius in radii:
+            for index in range(angle_count):
+                angle = 2.0 * math.pi * index / angle_count
+                point_x = start[0] + math.cos(angle) * radius
+                point_y = start[1] + math.sin(angle) * radius
+
+                point_x = max(margin, min(self.width - margin, point_x))
+                point_y = max(margin, min(self.height - margin, point_y))
+
+                if not self._is_passable_point(point_x, point_y):
+                    continue
+                if any(rect.contains(point_x, point_y) for rect in dynamic_obstacles):
+                    continue
+                if not self._has_line_of_sight(start, (point_x, point_y), dynamic_obstacles):
+                    continue
+
+                # 综合评分：方向对齐程度 + 距离惩罚
+                dir_x = (point_x - start[0]) / radius
+                dir_y = (point_y - start[1]) / radius
+                dir_dot = dir_x * target_dir_x + dir_y * target_dir_y
+                score = dir_dot * 0.7 - radius / max_search_radius * 0.3
+                candidates.append((score, (point_x, point_y)))
+
+        if not candidates:
+            return None
+
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        return candidates[0][1]
 
     def _materialize_request(
         self,

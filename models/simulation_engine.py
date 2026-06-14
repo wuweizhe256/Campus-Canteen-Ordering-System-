@@ -41,6 +41,7 @@ LOCAL_AVOIDANCE_SIDE_STEP = max(STUDENT_COLLISION_WIDTH, STUDENT_COLLISION_HEIGH
 LOCAL_AVOIDANCE_REACHABILITY_CHECK_COUNT = 2
 LOCAL_AVOIDANCE_REROUTE_SECONDS = 3.0
 STUCK_RECOVERY_SECONDS = 30.0
+RELAY_RECOVERY_SECONDS = 100.0
 TABLE_OVERLAP_RELOCATION_SECONDS = 60.0
 TABLE_SEAT_OFFSETS: dict[int, list[tuple[float, float]]] = {
     2: [(-36.0, 0.0), (36.0, 0.0)],
@@ -1966,6 +1967,9 @@ class SimulationEngine:
         if student.stuck_time >= STUCK_RECOVERY_SECONDS and self._try_recover_stuck_student(student):
             return False
 
+        if student.stuck_time >= RELAY_RECOVERY_SECONDS and self._try_relay_recovery(student):
+            return False
+
         if student.local_avoidance_time >= LOCAL_AVOIDANCE_REROUTE_SECONDS:
             if self._try_static_obstacle_detour(student):
                 pass
@@ -2010,6 +2014,57 @@ class SimulationEngine:
             student.local_avoidance_count = 0
             return True
         return False
+
+    def _try_relay_recovery(self, student: Student) -> bool:
+        """卡顿超过 RELAY_RECOVERY_SECONDS 时，先找一个可直线到达的中继点分段导航。
+
+        当长期卡顿无法通过常规恢复机制逃脱时，该策略帮助跳出局部阻塞：
+        1. 搜索当前位置可通过直线（无障碍物）到达的安全中继点
+        2. 先走到中继点，再从中继点导航到最终目的地
+        """
+        if student.state in (StudentState.QUEUED, StudentState.EATING, StudentState.DONE):
+            return False
+
+        pathfinder = self._navigation_pathfinder()
+        start = self._student_foot_point(student)
+
+        # 获取最终目标（脚底坐标）
+        if student.path:
+            endpoint = student.path[-1]
+        else:
+            endpoint = (student.target_x, student.target_y)
+        foot_endpoint = self._foot_point_from_position(endpoint[0], endpoint[1])
+
+        dynamic_obstacles = tuple(
+            self._navigation_dynamic_obstacles(
+                ignored_student_id=student.id,
+                start=start,
+                target=foot_endpoint,
+            )
+        )
+
+        relay = pathfinder.find_line_of_sight_relay(start, foot_endpoint, dynamic_obstacles)
+        if relay is None:
+            return False
+
+        # 将脚底坐标的中继点转为世界坐标
+        relay_world = (relay[0], relay[1] - STUDENT_COLLISION_FOOT_OFFSET_Y)
+
+        # 从中继点到终点的第二段路径
+        second_leg = self._build_navigation_path(relay_world, endpoint, ignored_student_id=student.id)
+
+        # 合并路径：当前位置 → 中继点 → 终点
+        path = self._compact_path([relay_world, *second_leg])
+        if not path:
+            return False
+
+        self._set_path(student, path)
+        student.stuck_time = 0.0
+        student.local_avoidance_time = 0.0
+        student.local_avoidance_count = 0
+        student.reroute_count += 1
+        student.detour_until = self.game_time + 3.0
+        return True
 
     def _try_relocate_from_table_obstacle(self, student: Student) -> bool:
         if student.state in (StudentState.QUEUED, StudentState.EATING, StudentState.DONE):
