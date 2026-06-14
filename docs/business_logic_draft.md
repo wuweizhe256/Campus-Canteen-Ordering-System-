@@ -361,7 +361,7 @@ P4 建议包含：
 | `total_student_count` | `done` | 学生总数，范围 `10 ~ 100000` |
 | `max_active_students` | `doing` | 数据模型中已是独立字段，配置弹窗仍传 `max(55, total_students)` |
 | 独立 `max_active_students` 配置 | `doing` | 默认值已为 `120`，UI 输入还未独立 |
-| `stall_count` | `done` | 窗口数量，范围 `1 ~ 20` |
+| `stall_count` | `done` | 窗口数量，范围 `1 ~ 12` |
 | `table_count` | `done` | 餐桌数量，范围 `6 ~ 36` |
 | `seed` | `done` | 随机种子，范围 `0 ~ 999999`，`0` 表示随机 |
 

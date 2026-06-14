@@ -110,7 +110,7 @@ class SimulationEngine:
 
         game_delta = max(0.0, float(game_delta))
         previous_game_time = self.game_time
-        next_game_time = min(self.config.duration_game_seconds, self.game_time + game_delta)
+        next_game_time = min(self._hard_stop_game_time(), self.game_time + game_delta)
         spawn_cutoff_time = self._student_spawn_cutoff_time()
         if previous_game_time < spawn_cutoff_time < next_game_time:
             self.game_time = spawn_cutoff_time
@@ -119,8 +119,9 @@ class SimulationEngine:
         self.game_time = next_game_time
         self._spawn_due_students()
         self._complete_ready_food()
-        self._update_students(game_delta)
-        self._separate_students(game_delta)
+        effective_game_delta = self.game_time - previous_game_time
+        self._update_students(effective_game_delta)
+        self._separate_students(effective_game_delta)
         self._refresh_orders_and_stalls()
         self._record_queue_samples()
         self._record_runtime_sample()
@@ -147,7 +148,7 @@ class SimulationEngine:
     def summary(self, status: str) -> RunSummary:
         return RunSummary(
             status=status,
-            game_time=min(self.game_time, self.config.duration_game_seconds),
+            game_time=min(self.game_time, self._hard_stop_game_time()),
             spawned_students=self.spawned_students,
             finished_eating_students=self.finished_eating_students,
             active_students=self._active_student_count(),
@@ -155,7 +156,16 @@ class SimulationEngine:
 
     @property
     def is_finished(self) -> bool:
-        return self.game_time >= self.config.duration_game_seconds
+        return self._all_spawned_students_left() or self.game_time >= self._hard_stop_game_time()
+
+    def _hard_stop_game_time(self) -> float:
+        return self.config.duration_game_seconds * 1.5
+
+    def _all_spawned_students_left(self) -> bool:
+        return self._active_student_count() == 0 and (
+            self.spawned_students >= self.config.total_student_count
+            or self.game_time >= self._student_spawn_cutoff_time()
+        )
 
     def stop(self) -> None:
         self._stop_requested = True
@@ -229,11 +239,31 @@ class SimulationEngine:
     def _build_stalls(self) -> None:
         self.stalls.clear()
         count = max(1, self.config.stall_count)
+        windows = self.menu_config.get("windows") or []
+        flat_dishes = self.menu_config.get("dishes") or []
+
+        # Build a shuffled list of window indices; repeat if we need more stalls than windows
+        if windows:
+            win_indices = list(range(len(windows)))
+            self.rng.shuffle(win_indices)
+        else:
+            win_indices = []
+
         left = 160.0
         right = self.width - 170.0
         gap = 0.0 if count == 1 else (right - left) / (count - 1)
         for index in range(count):
-            dishes = self._build_stall_dishes(index)
+            if windows and win_indices:
+                win_idx = win_indices[index % len(win_indices)]
+                window = windows[win_idx]
+                stall_name = str(window.get("name", ""))
+                dishes = self._build_stall_dishes_from_window(window)
+            elif flat_dishes:
+                stall_name = ""
+                dishes = self._build_stall_dishes_flat(index)
+            else:
+                stall_name = ""
+                dishes = []
             cook_time = self.rng.uniform(STALL_COOK_TIME_MIN_SECONDS, STALL_COOK_TIME_MAX_SECONDS)
             for dish in dishes:
                 dish.cook_time = cook_time
@@ -246,12 +276,41 @@ class SimulationEngine:
                     meat_ratio=self.rng.uniform(0.0, 1.0),
                     veg_ratio=self.rng.uniform(0.0, 1.0),
                     cook_time=cook_time,
+                    name=stall_name,
                     status=status,
                     dishes=dishes,
                 )
             )
 
-    def _build_stall_dishes(self, stall_index: int) -> list[Dish]:
+    def _build_stall_dishes_from_window(self, window: dict[str, Any]) -> list[Dish]:
+        """Build dishes from a window definition, picking up to dishes_per_stall dishes."""
+        win_dishes = window.get("dishes") or []
+        dishes_per_stall = int(self.menu_config.get("dishes_per_stall", 4))
+        price_jitter = self.menu_config.get("price_jitter", (-0.5, 0.8))
+        cook_time_jitter = self.menu_config.get("cook_time_jitter", (-2.0, 3.0))
+        count = min(dishes_per_stall, len(win_dishes))
+        if count == 0:
+            return []
+        # Shuffle and pick 'count' dishes from the window
+        shuffled = list(win_dishes)
+        self.rng.shuffle(shuffled)
+        selected = shuffled[:count]
+        dishes: list[Dish] = []
+        for dish_data in selected:
+            dishes.append(
+                Dish(
+                    id=int(dish_data["id"]),
+                    name=str(dish_data["name"]),
+                    features=dict(dish_data["features"]),
+                    price=float(dish_data["price"]) + self.rng.uniform(*price_jitter),
+                    stock=max(0, int(dish_data["stock"])),
+                    cook_time=max(1.0, float(dish_data["cook_time"]) + self.rng.uniform(*cook_time_jitter)),
+                )
+            )
+        return dishes
+
+    def _build_stall_dishes_flat(self, stall_index: int) -> list[Dish]:
+        """Legacy: build dishes from a flat dish list using round-robin assignment."""
         menu = self.menu_config["dishes"]
         dishes_per_stall = int(self.menu_config["dishes_per_stall"])
         price_jitter = self.menu_config["price_jitter"]
@@ -2695,7 +2754,7 @@ class SimulationEngine:
             if student.state != StudentState.DONE
         ]
         frame = {
-            "game_time": min(self.game_time, self.config.duration_game_seconds),
+            "game_time": min(self.game_time, self._hard_stop_game_time()),
             "duration": self.config.duration_game_seconds,
             "time_scale": self.time_scale,
             "spawned_students": self.spawned_students,
@@ -2873,6 +2932,7 @@ class SimulationEngine:
         queue_count = len(stall.queue or [])
         return {
             "id": stall.id,
+            "name": stall.name or "",
             "x": stall.x,
             "y": stall.y,
             "meat_ratio": stall.meat_ratio,
@@ -3183,32 +3243,74 @@ def _load_menu_config(path: Path) -> tuple[dict[str, Any], list[str]]:
         return fallback, [f"menu config invalid json: {exc}"]
 
     try:
-        dishes = raw["dishes"]
-        if not isinstance(dishes, list) or not dishes:
-            raise ValueError("dishes must be a non-empty list")
-        normalized_dishes: list[dict[str, Any]] = []
-        for index, dish in enumerate(dishes):
-            if not isinstance(dish, dict):
-                raise ValueError(f"dish {index} must be an object")
-            features = dish.get("features")
-            if not isinstance(features, dict):
-                raise ValueError(f"dish {index} missing features")
-            normalized_dishes.append(
-                {
+        dishes_per_stall = max(1, int(raw.get("dishes_per_stall", 3)))
+        price_jitter = _two_float_tuple(raw.get("price_jitter"), (-0.5, 0.8))
+        cook_time_jitter = _two_float_tuple(raw.get("cook_time_jitter"), (-2.0, 3.0))
+
+        windows = raw.get("windows")
+        if isinstance(windows, list) and windows:
+            # New window-based menu structure
+            normalized_windows: list[dict[str, Any]] = []
+            for win in windows:
+                if not isinstance(win, dict):
+                    raise ValueError("each window must be an object")
+                win_name = str(win.get("name", ""))
+                win_dishes_raw = win.get("dishes")
+                if not isinstance(win_dishes_raw, list) or not win_dishes_raw:
+                    raise ValueError(f"window '{win_name}' dishes must be a non-empty list")
+                normalized_win_dishes: list[dict[str, Any]] = []
+                for dish in win_dishes_raw:
+                    if not isinstance(dish, dict):
+                        raise ValueError(f"dish in window '{win_name}' must be an object")
+                    features = dish.get("features")
+                    if not isinstance(features, dict):
+                        raise ValueError(f"dish {dish.get('id')} in window '{win_name}' missing features")
+                    normalized_win_dishes.append({
+                        "id": int(dish["id"]),
+                        "name": str(dish["name"]),
+                        "features": {str(key): float(value) for key, value in features.items()},
+                        "price": float(dish["price"]),
+                        "stock": max(0, int(dish["stock"])),
+                        "cook_time": max(1.0, float(dish["cook_time"])),
+                    })
+                normalized_windows.append({
+                    "name": win_name,
+                    "dishes": normalized_win_dishes,
+                })
+            return {
+                "dishes_per_stall": dishes_per_stall,
+                "price_jitter": price_jitter,
+                "cook_time_jitter": cook_time_jitter,
+                "windows": normalized_windows,
+                "dishes": [],  # placeholder for backward compat
+            }, issues
+        else:
+            # Legacy flat dish list
+            dishes = raw.get("dishes")
+            if not isinstance(dishes, list) or not dishes:
+                raise ValueError("dishes must be a non-empty list")
+            normalized_dishes: list[dict[str, Any]] = []
+            for index, dish in enumerate(dishes):
+                if not isinstance(dish, dict):
+                    raise ValueError(f"dish {index} must be an object")
+                features = dish.get("features")
+                if not isinstance(features, dict):
+                    raise ValueError(f"dish {index} missing features")
+                normalized_dishes.append({
                     "id": int(dish["id"]),
                     "name": str(dish["name"]),
                     "features": {str(key): float(value) for key, value in features.items()},
                     "price": float(dish["price"]),
                     "stock": max(0, int(dish["stock"])),
                     "cook_time": max(1.0, float(dish["cook_time"])),
-                }
-            )
-        return {
-            "dishes_per_stall": max(1, int(raw.get("dishes_per_stall", 3))),
-            "price_jitter": _two_float_tuple(raw.get("price_jitter"), (-0.5, 0.8)),
-            "cook_time_jitter": _two_float_tuple(raw.get("cook_time_jitter"), (-2.0, 3.0)),
-            "dishes": normalized_dishes,
-        }, issues
+                })
+            return {
+                "dishes_per_stall": dishes_per_stall,
+                "price_jitter": price_jitter,
+                "cook_time_jitter": cook_time_jitter,
+                "windows": [],
+                "dishes": normalized_dishes,
+            }, issues
     except (KeyError, TypeError, ValueError) as exc:
         return fallback, [f"menu config invalid schema: {exc}"]
 
@@ -3223,15 +3325,50 @@ def _two_float_tuple(value: Any, default: tuple[float, float]) -> tuple[float, f
 
 def _default_menu_config() -> dict[str, Any]:
     return {
-        "dishes_per_stall": 3,
+        "dishes_per_stall": 4,
         "price_jitter": (-0.5, 0.8),
         "cook_time_jitter": (-2.0, 3.0),
-        "dishes": [
-            {"id": 1, "name": "Braised Chicken Rice", "features": {"meat": 0.88, "veg": 0.22, "spicy": 0.35}, "price": 13.0, "stock": 24, "cook_time": 22.0},
-            {"id": 2, "name": "Tomato Egg Noodles", "features": {"meat": 0.18, "veg": 0.72, "spicy": 0.05}, "price": 9.5, "stock": 24, "cook_time": 16.0},
-            {"id": 3, "name": "Beef Noodles", "features": {"meat": 0.78, "veg": 0.34, "spicy": 0.42}, "price": 15.0, "stock": 24, "cook_time": 24.0},
-            {"id": 4, "name": "Vegetable Set Meal", "features": {"meat": 0.08, "veg": 0.92, "spicy": 0.12}, "price": 10.0, "stock": 24, "cook_time": 18.0},
-            {"id": 5, "name": "Spicy Pork Rice", "features": {"meat": 0.72, "veg": 0.38, "spicy": 0.82}, "price": 12.0, "stock": 24, "cook_time": 20.0},
-            {"id": 6, "name": "Mushroom Chicken Soup", "features": {"meat": 0.56, "veg": 0.66, "spicy": 0.02}, "price": 11.5, "stock": 24, "cook_time": 19.0},
+        "windows": [
+            {
+                "name": "川湘风味",
+                "dishes": [
+                    {"id": 101, "name": "麻辣香锅", "features": {"meat": 0.65, "veg": 0.45, "spicy": 0.95}, "price": 16.0, "stock": 24, "cook_time": 25.0},
+                    {"id": 102, "name": "回锅肉盖饭", "features": {"meat": 0.78, "veg": 0.32, "spicy": 0.80}, "price": 14.0, "stock": 24, "cook_time": 22.0},
+                    {"id": 103, "name": "酸菜鱼", "features": {"meat": 0.60, "veg": 0.50, "spicy": 0.70}, "price": 17.0, "stock": 20, "cook_time": 28.0},
+                    {"id": 104, "name": "麻婆豆腐饭", "features": {"meat": 0.20, "veg": 0.85, "spicy": 0.88}, "price": 11.0, "stock": 30, "cook_time": 15.0},
+                    {"id": 105, "name": "干锅花菜", "features": {"meat": 0.15, "veg": 0.90, "spicy": 0.65}, "price": 10.0, "stock": 28, "cook_time": 18.0},
+                ],
+            },
+            {
+                "name": "粤式烧腊",
+                "dishes": [
+                    {"id": 201, "name": "蜜汁叉烧饭", "features": {"meat": 0.85, "veg": 0.25, "spicy": 0.05}, "price": 15.0, "stock": 24, "cook_time": 20.0},
+                    {"id": 202, "name": "烧鸭饭", "features": {"meat": 0.82, "veg": 0.28, "spicy": 0.08}, "price": 16.0, "stock": 22, "cook_time": 22.0},
+                    {"id": 203, "name": "白切鸡饭", "features": {"meat": 0.80, "veg": 0.30, "spicy": 0.02}, "price": 14.0, "stock": 24, "cook_time": 18.0},
+                    {"id": 204, "name": "腊味煲仔饭", "features": {"meat": 0.75, "veg": 0.35, "spicy": 0.10}, "price": 18.0, "stock": 18, "cook_time": 30.0},
+                    {"id": 205, "name": "卤水拼盘", "features": {"meat": 0.70, "veg": 0.40, "spicy": 0.15}, "price": 13.0, "stock": 20, "cook_time": 16.0},
+                ],
+            },
+            {
+                "name": "西北面食",
+                "dishes": [
+                    {"id": 301, "name": "兰州拉面", "features": {"meat": 0.55, "veg": 0.55, "spicy": 0.20}, "price": 12.0, "stock": 30, "cook_time": 14.0},
+                    {"id": 302, "name": "油泼扯面", "features": {"meat": 0.10, "veg": 0.90, "spicy": 0.60}, "price": 10.0, "stock": 30, "cook_time": 12.0},
+                    {"id": 303, "name": "羊肉泡馍", "features": {"meat": 0.70, "veg": 0.40, "spicy": 0.30}, "price": 17.0, "stock": 20, "cook_time": 26.0},
+                    {"id": 304, "name": "岐山臊子面", "features": {"meat": 0.45, "veg": 0.60, "spicy": 0.50}, "price": 11.0, "stock": 28, "cook_time": 14.0},
+                    {"id": 305, "name": "肉夹馍套餐", "features": {"meat": 0.72, "veg": 0.38, "spicy": 0.15}, "price": 13.0, "stock": 24, "cook_time": 16.0},
+                ],
+            },
+            {
+                "name": "家常套餐",
+                "dishes": [
+                    {"id": 1401, "name": "红烧肉饭", "features": {"meat": 0.82, "veg": 0.28, "spicy": 0.15}, "price": 14.0, "stock": 24, "cook_time": 24.0},
+                    {"id": 1402, "name": "番茄炒蛋饭", "features": {"meat": 0.15, "veg": 0.88, "spicy": 0.02}, "price": 9.0, "stock": 30, "cook_time": 12.0},
+                    {"id": 1403, "name": "土豆炖牛肉", "features": {"meat": 0.68, "veg": 0.42, "spicy": 0.20}, "price": 16.0, "stock": 22, "cook_time": 28.0},
+                    {"id": 1404, "name": "清蒸鲈鱼", "features": {"meat": 0.72, "veg": 0.38, "spicy": 0.05}, "price": 18.0, "stock": 16, "cook_time": 24.0},
+                    {"id": 1405, "name": "青椒肉丝", "features": {"meat": 0.60, "veg": 0.50, "spicy": 0.35}, "price": 12.0, "stock": 26, "cook_time": 14.0},
+                ],
+            },
         ],
+        "dishes": [],
     }

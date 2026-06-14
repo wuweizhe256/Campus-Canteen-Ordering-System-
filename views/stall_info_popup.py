@@ -47,8 +47,10 @@ class StallInfoPopup(QDialog):
     # ------------------------------------------------------------------
 
     def _setup_ui(self) -> None:
+        stall_name = str(self._stall.get("name") or "")
         stall_id = int(self._stall.get("id", 0))
-        self.setWindowTitle(f"窗口 {stall_id + 1} 详情")
+        display_name = stall_name if stall_name else f"窗口 {stall_id + 1}"
+        self.setWindowTitle(f"{display_name} 详情")
         self.setMinimumSize(360, 420)
         self.resize(400, 520)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
@@ -75,7 +77,7 @@ class StallInfoPopup(QDialog):
         # ---- 标题与状态 ----
         header = QHBoxLayout()
         header.setSpacing(12)
-        title = QLabel(f"窗口 {stall_id + 1}")
+        title = QLabel(display_name)
         title.setFont(ui_font(15, QFont.Weight.Bold))
         title.setStyleSheet("color: #4a3728;")
         header.addWidget(title)

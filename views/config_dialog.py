@@ -46,12 +46,12 @@ class ConfigDialog(QDialog):
             self._resolutions.append(current_resolution)
 
         self.minutes_spin = QSpinBox()
-        self.minutes_spin.setRange(30, 60)
-        self.minutes_spin.setValue(30)
+        self.minutes_spin.setRange(60, 120)
+        self.minutes_spin.setValue(60)
         self.minutes_spin.setSuffix(" \u5206\u949f")
 
         self.stalls_spin = QSpinBox()
-        self.stalls_spin.setRange(1, 20)
+        self.stalls_spin.setRange(1, 12)
         self.stalls_spin.setValue(10)
         self.stalls_spin.setSuffix(" \u4e2a")
 

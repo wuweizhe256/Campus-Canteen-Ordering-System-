@@ -1,55 +1,147 @@
 {
-  "dishes_per_stall": 3,
+  "dishes_per_stall": 4,
   "price_jitter": [-0.5, 0.8],
   "cook_time_jitter": [-2.0, 3.0],
-  "dishes": [
+  "windows": [
     {
-      "id": 1,
-      "name": "Braised Chicken Rice",
-      "features": {"meat": 0.88, "veg": 0.22, "spicy": 0.35},
-      "price": 13.0,
-      "stock": 24,
-      "cook_time": 22.0
+      "name": "川湘风味",
+      "dishes": [
+        {"id": 101, "name": "麻辣香锅", "features": {"meat": 0.65, "veg": 0.45, "spicy": 0.95}, "price": 16.0, "stock": 24, "cook_time": 25.0},
+        {"id": 102, "name": "回锅肉盖饭", "features": {"meat": 0.78, "veg": 0.32, "spicy": 0.80}, "price": 14.0, "stock": 24, "cook_time": 22.0},
+        {"id": 103, "name": "酸菜鱼", "features": {"meat": 0.60, "veg": 0.50, "spicy": 0.70}, "price": 17.0, "stock": 20, "cook_time": 28.0},
+        {"id": 104, "name": "麻婆豆腐饭", "features": {"meat": 0.20, "veg": 0.85, "spicy": 0.88}, "price": 11.0, "stock": 30, "cook_time": 15.0},
+        {"id": 105, "name": "干锅花菜", "features": {"meat": 0.15, "veg": 0.90, "spicy": 0.65}, "price": 10.0, "stock": 28, "cook_time": 18.0}
+      ]
     },
     {
-      "id": 2,
-      "name": "Tomato Egg Noodles",
-      "features": {"meat": 0.18, "veg": 0.72, "spicy": 0.05},
-      "price": 9.5,
-      "stock": 24,
-      "cook_time": 16.0
+      "name": "粤式烧腊",
+      "dishes": [
+        {"id": 201, "name": "蜜汁叉烧饭", "features": {"meat": 0.85, "veg": 0.25, "spicy": 0.05}, "price": 15.0, "stock": 24, "cook_time": 20.0},
+        {"id": 202, "name": "烧鸭饭", "features": {"meat": 0.82, "veg": 0.28, "spicy": 0.08}, "price": 16.0, "stock": 22, "cook_time": 22.0},
+        {"id": 203, "name": "白切鸡饭", "features": {"meat": 0.80, "veg": 0.30, "spicy": 0.02}, "price": 14.0, "stock": 24, "cook_time": 18.0},
+        {"id": 204, "name": "腊味煲仔饭", "features": {"meat": 0.75, "veg": 0.35, "spicy": 0.10}, "price": 18.0, "stock": 18, "cook_time": 30.0},
+        {"id": 205, "name": "卤水拼盘", "features": {"meat": 0.70, "veg": 0.40, "spicy": 0.15}, "price": 13.0, "stock": 20, "cook_time": 16.0}
+      ]
     },
     {
-      "id": 3,
-      "name": "Beef Noodles",
-      "features": {"meat": 0.78, "veg": 0.34, "spicy": 0.42},
-      "price": 15.0,
-      "stock": 24,
-      "cook_time": 24.0
+      "name": "西北面食",
+      "dishes": [
+        {"id": 301, "name": "兰州拉面", "features": {"meat": 0.55, "veg": 0.55, "spicy": 0.20}, "price": 12.0, "stock": 30, "cook_time": 14.0},
+        {"id": 302, "name": "油泼扯面", "features": {"meat": 0.10, "veg": 0.90, "spicy": 0.60}, "price": 10.0, "stock": 30, "cook_time": 12.0},
+        {"id": 303, "name": "羊肉泡馍", "features": {"meat": 0.70, "veg": 0.40, "spicy": 0.30}, "price": 17.0, "stock": 20, "cook_time": 26.0},
+        {"id": 304, "name": "岐山臊子面", "features": {"meat": 0.45, "veg": 0.60, "spicy": 0.50}, "price": 11.0, "stock": 28, "cook_time": 14.0},
+        {"id": 305, "name": "肉夹馍套餐", "features": {"meat": 0.72, "veg": 0.38, "spicy": 0.15}, "price": 13.0, "stock": 24, "cook_time": 16.0}
+      ]
     },
     {
-      "id": 4,
-      "name": "Vegetable Set Meal",
-      "features": {"meat": 0.08, "veg": 0.92, "spicy": 0.12},
-      "price": 10.0,
-      "stock": 24,
-      "cook_time": 18.0
+      "name": "东北炖菜",
+      "dishes": [
+        {"id": 401, "name": "猪肉炖粉条", "features": {"meat": 0.68, "veg": 0.42, "spicy": 0.10}, "price": 14.0, "stock": 24, "cook_time": 24.0},
+        {"id": 402, "name": "锅包肉", "features": {"meat": 0.88, "veg": 0.22, "spicy": 0.05}, "price": 16.0, "stock": 22, "cook_time": 20.0},
+        {"id": 403, "name": "地三鲜", "features": {"meat": 0.05, "veg": 0.95, "spicy": 0.08}, "price": 10.0, "stock": 30, "cook_time": 16.0},
+        {"id": 404, "name": "小鸡炖蘑菇", "features": {"meat": 0.65, "veg": 0.45, "spicy": 0.12}, "price": 15.0, "stock": 22, "cook_time": 26.0},
+        {"id": 405, "name": "酸菜白肉", "features": {"meat": 0.75, "veg": 0.35, "spicy": 0.15}, "price": 13.0, "stock": 24, "cook_time": 22.0}
+      ]
     },
     {
-      "id": 5,
-      "name": "Spicy Pork Rice",
-      "features": {"meat": 0.72, "veg": 0.38, "spicy": 0.82},
-      "price": 12.0,
-      "stock": 24,
-      "cook_time": 20.0
+      "name": "鲁菜经典",
+      "dishes": [
+        {"id": 501, "name": "宫保鸡丁", "features": {"meat": 0.70, "veg": 0.40, "spicy": 0.55}, "price": 14.0, "stock": 24, "cook_time": 18.0},
+        {"id": 502, "name": "葱烧海参饭", "features": {"meat": 0.55, "veg": 0.55, "spicy": 0.08}, "price": 22.0, "stock": 15, "cook_time": 28.0},
+        {"id": 503, "name": "九转大肠", "features": {"meat": 0.85, "veg": 0.25, "spicy": 0.35}, "price": 18.0, "stock": 16, "cook_time": 32.0},
+        {"id": 504, "name": "糖醋鲤鱼", "features": {"meat": 0.72, "veg": 0.38, "spicy": 0.05}, "price": 17.0, "stock": 18, "cook_time": 24.0},
+        {"id": 505, "name": "德州扒鸡", "features": {"meat": 0.80, "veg": 0.30, "spicy": 0.10}, "price": 16.0, "stock": 20, "cook_time": 22.0}
+      ]
     },
     {
-      "id": 6,
-      "name": "Mushroom Chicken Soup",
-      "features": {"meat": 0.56, "veg": 0.66, "spicy": 0.02},
-      "price": 11.5,
-      "stock": 24,
-      "cook_time": 19.0
+      "name": "闽南小吃",
+      "dishes": [
+        {"id": 601, "name": "沙茶面", "features": {"meat": 0.50, "veg": 0.60, "spicy": 0.25}, "price": 12.0, "stock": 28, "cook_time": 14.0},
+        {"id": 602, "name": "蚵仔煎", "features": {"meat": 0.45, "veg": 0.65, "spicy": 0.08}, "price": 11.0, "stock": 26, "cook_time": 16.0},
+        {"id": 603, "name": "佛跳墙", "features": {"meat": 0.70, "veg": 0.40, "spicy": 0.05}, "price": 28.0, "stock": 10, "cook_time": 40.0},
+        {"id": 604, "name": "五香卷", "features": {"meat": 0.60, "veg": 0.50, "spicy": 0.10}, "price": 10.0, "stock": 28, "cook_time": 15.0},
+        {"id": 605, "name": "海蛎豆腐汤", "features": {"meat": 0.35, "veg": 0.75, "spicy": 0.02}, "price": 9.0, "stock": 30, "cook_time": 16.0}
+      ]
+    },
+    {
+      "name": "苏式面点",
+      "dishes": [
+        {"id": 701, "name": "小笼包", "features": {"meat": 0.68, "veg": 0.42, "spicy": 0.02}, "price": 12.0, "stock": 30, "cook_time": 16.0},
+        {"id": 702, "name": "阳春面", "features": {"meat": 0.08, "veg": 0.92, "spicy": 0.05}, "price": 8.0, "stock": 35, "cook_time": 10.0},
+        {"id": 703, "name": "生煎包", "features": {"meat": 0.65, "veg": 0.45, "spicy": 0.03}, "price": 10.0, "stock": 28, "cook_time": 15.0},
+        {"id": 704, "name": "糖醋排骨", "features": {"meat": 0.80, "veg": 0.30, "spicy": 0.08}, "price": 16.0, "stock": 22, "cook_time": 22.0},
+        {"id": 705, "name": "蟹黄汤包", "features": {"meat": 0.55, "veg": 0.55, "spicy": 0.02}, "price": 15.0, "stock": 20, "cook_time": 20.0}
+      ]
+    },
+    {
+      "name": "清真食堂",
+      "dishes": [
+        {"id": 801, "name": "大盘鸡", "features": {"meat": 0.72, "veg": 0.38, "spicy": 0.60}, "price": 16.0, "stock": 22, "cook_time": 25.0},
+        {"id": 802, "name": "手抓饭", "features": {"meat": 0.58, "veg": 0.52, "spicy": 0.08}, "price": 13.0, "stock": 26, "cook_time": 22.0},
+        {"id": 803, "name": "烤羊肉串饭", "features": {"meat": 0.85, "veg": 0.25, "spicy": 0.45}, "price": 17.0, "stock": 20, "cook_time": 22.0},
+        {"id": 804, "name": "拉条子", "features": {"meat": 0.35, "veg": 0.70, "spicy": 0.25}, "price": 11.0, "stock": 28, "cook_time": 14.0},
+        {"id": 805, "name": "馕包肉", "features": {"meat": 0.78, "veg": 0.32, "spicy": 0.30}, "price": 15.0, "stock": 20, "cook_time": 20.0}
+      ]
+    },
+    {
+      "name": "日韩料理",
+      "dishes": [
+        {"id": 901, "name": "照烧鸡腿饭", "features": {"meat": 0.78, "veg": 0.32, "spicy": 0.10}, "price": 15.0, "stock": 24, "cook_time": 20.0},
+        {"id": 902, "name": "韩式拌饭", "features": {"meat": 0.40, "veg": 0.68, "spicy": 0.50}, "price": 14.0, "stock": 26, "cook_time": 18.0},
+        {"id": 903, "name": "豚骨拉面", "features": {"meat": 0.62, "veg": 0.48, "spicy": 0.15}, "price": 17.0, "stock": 24, "cook_time": 16.0},
+        {"id": 904, "name": "炸猪排定食", "features": {"meat": 0.82, "veg": 0.28, "spicy": 0.05}, "price": 18.0, "stock": 20, "cook_time": 22.0},
+        {"id": 905, "name": "泡菜炒饭", "features": {"meat": 0.25, "veg": 0.78, "spicy": 0.72}, "price": 11.0, "stock": 28, "cook_time": 14.0}
+      ]
+    },
+    {
+      "name": "西式简餐",
+      "dishes": [
+        {"id": 1001, "name": "黑椒牛排饭", "features": {"meat": 0.88, "veg": 0.22, "spicy": 0.30}, "price": 20.0, "stock": 18, "cook_time": 24.0},
+        {"id": 1002, "name": "意式肉酱面", "features": {"meat": 0.60, "veg": 0.50, "spicy": 0.08}, "price": 14.0, "stock": 24, "cook_time": 16.0},
+        {"id": 1003, "name": "芝士焗饭", "features": {"meat": 0.45, "veg": 0.62, "spicy": 0.02}, "price": 13.0, "stock": 24, "cook_time": 20.0},
+        {"id": 1004, "name": "炸鸡汉堡餐", "features": {"meat": 0.78, "veg": 0.32, "spicy": 0.20}, "price": 15.0, "stock": 22, "cook_time": 15.0},
+        {"id": 1005, "name": "蔬菜沙拉碗", "features": {"meat": 0.05, "veg": 0.95, "spicy": 0.02}, "price": 10.0, "stock": 30, "cook_time": 8.0}
+      ]
+    },
+    {
+      "name": "江南小炒",
+      "dishes": [
+        {"id": 1101, "name": "鱼香肉丝", "features": {"meat": 0.65, "veg": 0.45, "spicy": 0.40}, "price": 13.0, "stock": 26, "cook_time": 16.0},
+        {"id": 1102, "name": "东坡肉", "features": {"meat": 0.88, "veg": 0.22, "spicy": 0.05}, "price": 18.0, "stock": 18, "cook_time": 30.0},
+        {"id": 1103, "name": "清炒时蔬", "features": {"meat": 0.05, "veg": 0.95, "spicy": 0.02}, "price": 8.0, "stock": 35, "cook_time": 10.0},
+        {"id": 1104, "name": "蒜蓉西兰花", "features": {"meat": 0.08, "veg": 0.92, "spicy": 0.10}, "price": 9.0, "stock": 30, "cook_time": 12.0},
+        {"id": 1105, "name": "红烧狮子头", "features": {"meat": 0.78, "veg": 0.32, "spicy": 0.08}, "price": 15.0, "stock": 20, "cook_time": 25.0}
+      ]
+    },
+    {
+      "name": "湘鄂风味",
+      "dishes": [
+        {"id": 1201, "name": "剁椒鱼头", "features": {"meat": 0.65, "veg": 0.45, "spicy": 0.90}, "price": 18.0, "stock": 16, "cook_time": 28.0},
+        {"id": 1202, "name": "小炒肉", "features": {"meat": 0.75, "veg": 0.35, "spicy": 0.85}, "price": 14.0, "stock": 24, "cook_time": 16.0},
+        {"id": 1203, "name": "热干面", "features": {"meat": 0.15, "veg": 0.88, "spicy": 0.30}, "price": 8.0, "stock": 35, "cook_time": 10.0},
+        {"id": 1204, "name": "腊肉炒蒜苔", "features": {"meat": 0.60, "veg": 0.50, "spicy": 0.55}, "price": 13.0, "stock": 24, "cook_time": 16.0},
+        {"id": 1205, "name": "口味虾", "features": {"meat": 0.55, "veg": 0.55, "spicy": 0.92}, "price": 22.0, "stock": 14, "cook_time": 30.0}
+      ]
+    },
+    {
+      "name": "粤港茶餐",
+      "dishes": [
+        {"id": 1301, "name": "叉烧滑蛋饭", "features": {"meat": 0.72, "veg": 0.38, "spicy": 0.02}, "price": 15.0, "stock": 24, "cook_time": 18.0},
+        {"id": 1302, "name": "干炒牛河", "features": {"meat": 0.65, "veg": 0.45, "spicy": 0.08}, "price": 14.0, "stock": 24, "cook_time": 16.0},
+        {"id": 1303, "name": "云吞面", "features": {"meat": 0.50, "veg": 0.60, "spicy": 0.05}, "price": 11.0, "stock": 28, "cook_time": 12.0},
+        {"id": 1304, "name": "肠粉", "features": {"meat": 0.35, "veg": 0.72, "spicy": 0.03}, "price": 9.0, "stock": 30, "cook_time": 10.0},
+        {"id": 1305, "name": "咖喱鱼蛋饭", "features": {"meat": 0.40, "veg": 0.68, "spicy": 0.35}, "price": 12.0, "stock": 26, "cook_time": 14.0}
+      ]
+    },
+    {
+      "name": "家常套餐",
+      "dishes": [
+        {"id": 1401, "name": "红烧肉饭", "features": {"meat": 0.82, "veg": 0.28, "spicy": 0.15}, "price": 14.0, "stock": 24, "cook_time": 24.0},
+        {"id": 1402, "name": "番茄炒蛋饭", "features": {"meat": 0.15, "veg": 0.88, "spicy": 0.02}, "price": 9.0, "stock": 30, "cook_time": 12.0},
+        {"id": 1403, "name": "土豆炖牛肉", "features": {"meat": 0.68, "veg": 0.42, "spicy": 0.20}, "price": 16.0, "stock": 22, "cook_time": 28.0},
+        {"id": 1404, "name": "清蒸鲈鱼", "features": {"meat": 0.72, "veg": 0.38, "spicy": 0.05}, "price": 18.0, "stock": 16, "cook_time": 24.0},
+        {"id": 1405, "name": "青椒肉丝", "features": {"meat": 0.60, "veg": 0.50, "spicy": 0.35}, "price": 12.0, "stock": 26, "cook_time": 14.0}
+      ]
     }
   ]
 }

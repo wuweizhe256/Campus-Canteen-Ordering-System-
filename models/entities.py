@@ -180,6 +180,7 @@ class Stall:
     meat_ratio: float
     veg_ratio: float
     cook_time: float
+    name: str = ""
     queue: list[int] = field(default_factory=list)
     ready_times: list[tuple[int, float, int]] = field(default_factory=list)
     next_food_ready_time: float = 0.0
