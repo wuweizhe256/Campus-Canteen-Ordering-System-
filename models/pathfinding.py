@@ -107,6 +107,30 @@ class GridPathFinder:
         dynamic_costs = self._build_dynamic_obstacle_costs(dynamic_obstacles)
         return self._find_path(start, target, congestion_costs, dynamic_costs, dynamic_blocked_cells, dynamic_obstacles)
 
+    def find_path_to_reachable_target(
+        self,
+        start: Point,
+        target: Point,
+        congestion_points: Iterable[Point] | None = None,
+        dynamic_obstacles: Iterable[NavRect] = (),
+    ) -> tuple[list[Point], Point, bool]:
+        congestion_costs = (
+            self.congestion_costs
+            if congestion_points is None
+            else self._build_congestion_costs(congestion_points)
+        )
+        dynamic_obstacles = tuple(dynamic_obstacles)
+        dynamic_blocked_cells = self._build_dynamic_blocked_cells(dynamic_obstacles)
+        dynamic_costs = self._build_dynamic_obstacle_costs(dynamic_obstacles)
+        return self._find_path_to_reachable_target(
+            start,
+            target,
+            congestion_costs,
+            dynamic_costs,
+            dynamic_blocked_cells,
+            dynamic_obstacles,
+        )
+
     def find_paths_parallel(
         self,
         requests: Iterable[PathRequest],
@@ -171,6 +195,72 @@ class GridPathFinder:
         points = [self.cell_to_point(cell) for cell in cells[1:]]
         points.append(target)
         return self._smooth_points(start, points, dynamic_obstacles)
+
+    def _find_path_to_reachable_target(
+        self,
+        start: Point,
+        target: Point,
+        congestion_costs: dict[Cell, float],
+        dynamic_costs: dict[Cell, float],
+        dynamic_blocked_cells: set[Cell],
+        dynamic_obstacles: tuple[NavRect, ...],
+    ) -> tuple[list[Point], Point, bool]:
+        requested_target_cell = self.point_to_cell(target)
+        start_cell = self._nearest_passable_cell(self.point_to_cell(start), dynamic_blocked_cells)
+        target_cell = self._nearest_passable_cell(requested_target_cell, dynamic_blocked_cells)
+        if start_cell is None:
+            return [], target, False
+        if target_cell is None:
+            reachable_target = self.cell_to_point(start_cell)
+            return [reachable_target], reachable_target, False
+
+        target_inside_dynamic_obstacle = any(rect.contains(target[0], target[1]) for rect in dynamic_obstacles)
+        if start_cell == target_cell:
+            target_reachable = not target_inside_dynamic_obstacle and self._is_passable_point(target[0], target[1])
+            reachable_target = target if target_reachable else self.cell_to_point(start_cell)
+            return [reachable_target], reachable_target, target_reachable
+
+        came_from = self._astar(start_cell, target_cell, congestion_costs, dynamic_costs, dynamic_blocked_cells)
+        target_reachable = target_cell in came_from and not target_inside_dynamic_obstacle
+        if target_reachable:
+            cells = self._reconstruct_cells(came_from, target_cell)
+            points = [self.cell_to_point(cell) for cell in cells[1:]]
+            points.append(target)
+            return self._smooth_points(start, points, dynamic_obstacles), target, True
+
+        reachable_cell = self._nearest_reached_cell(
+            came_from,
+            requested_target_cell,
+            start_cell,
+            dynamic_obstacles,
+        )
+        reachable_target = self.cell_to_point(reachable_cell)
+        if reachable_cell == start_cell:
+            return [reachable_target], reachable_target, False
+
+        cells = self._reconstruct_cells(came_from, reachable_cell)
+        points = [self.cell_to_point(cell) for cell in cells[1:]]
+        if not points or points[-1] != reachable_target:
+            points.append(reachable_target)
+        return self._smooth_points(start, points, dynamic_obstacles), reachable_target, False
+
+    def _nearest_reached_cell(
+        self,
+        came_from: dict[Cell, Cell | None],
+        target: Cell,
+        fallback: Cell,
+        dynamic_obstacles: tuple[NavRect, ...] = (),
+    ) -> Cell:
+        if not came_from:
+            return fallback
+        candidates = [
+            cell
+            for cell in came_from
+            if not any(rect.contains(*self.cell_to_point(cell)) for rect in dynamic_obstacles)
+        ]
+        if not candidates:
+            return fallback
+        return min(candidates, key=lambda cell: (self._heuristic(cell, target), self._heuristic(cell, fallback)))
 
     def point_to_cell(self, point: Point) -> Cell:
         x, y = point

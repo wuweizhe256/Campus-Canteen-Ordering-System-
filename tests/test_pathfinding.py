@@ -67,6 +67,40 @@ class PathFindingThreadingTest(unittest.TestCase):
         self.assertTrue(pathfinder._build_dynamic_blocked_cells([queued_obstacle]))
         self.assertEqual(pathfinder._build_dynamic_obstacle_costs([queued_obstacle]), {})
 
+    def test_reachable_target_falls_back_when_dynamic_obstacle_covers_goal(self) -> None:
+        pathfinder = GridPathFinder(width=320.0, height=240.0, obstacles=[])
+        target_obstacle = NavRect(248.0, 92.0, 304.0, 148.0, "queued_student")
+        target = (280.0, 120.0)
+
+        path, reachable_target, target_reachable = pathfinder.find_path_to_reachable_target(
+            (48.0, 120.0),
+            target,
+            dynamic_obstacles=[target_obstacle],
+        )
+
+        self.assertFalse(target_reachable)
+        self.assertTrue(path)
+        self.assertEqual(path[-1], reachable_target)
+        self.assertFalse(target_obstacle.contains(reachable_target[0], reachable_target[1]))
+        self.assertNotEqual(reachable_target, target)
+
+    def test_reachable_target_falls_back_outside_soft_dynamic_goal_obstacle(self) -> None:
+        pathfinder = GridPathFinder(width=320.0, height=240.0, obstacles=[])
+        target_obstacle = NavRect(248.0, 92.0, 304.0, 148.0, "student")
+        target = (280.0, 120.0)
+
+        path, reachable_target, target_reachable = pathfinder.find_path_to_reachable_target(
+            (48.0, 120.0),
+            target,
+            dynamic_obstacles=[target_obstacle],
+        )
+
+        self.assertFalse(target_reachable)
+        self.assertTrue(path)
+        self.assertEqual(path[-1], reachable_target)
+        self.assertFalse(target_obstacle.contains(reachable_target[0], reachable_target[1]))
+        self.assertNotEqual(reachable_target, target)
+
     def test_parallel_paths_with_dynamic_obstacles_match_serial_paths(self) -> None:
         pathfinder = GridPathFinder(width=360.0, height=260.0, obstacles=[])
         requests = [
@@ -369,6 +403,37 @@ class PathFindingThreadingTest(unittest.TestCase):
         self.assertEqual(reroute_calls, 1)
         self.assertEqual(first.reroute_count, 1)
         self.assertEqual(first.local_avoidance_time, 0.0)
+
+    def test_unreachable_endpoint_repair_replaces_path_target(self) -> None:
+        engine = SimulationEngine(
+            SimulationConfig(
+                sim_minutes=1,
+                stall_count=2,
+                table_count=2,
+                seed=20240611,
+                total_student_count=1,
+                max_active_students=1,
+            )
+        )
+        engine.initialize()
+        engine._spawn_group(1)
+        student = next(iter(engine.students.values()))
+        student.state = StudentState.MOVING_TO_QUEUE
+        student.x, student.y = 200.0, 300.0
+        student.target_x, student.target_y = 280.0, 300.0
+        student.path = [(280.0, 300.0)]
+
+        def reachable_path(_start, _target, ignored_student_id=None):
+            return [(240.0, 332.0)], (240.0, 332.0), False
+
+        engine._build_navigation_path_to_reachable_target = reachable_path
+
+        repaired = engine._repair_unreachable_path_endpoint(student)
+
+        self.assertTrue(repaired)
+        self.assertEqual(student.path, [(240.0, 332.0)])
+        self.assertEqual((student.target_x, student.target_y), (240.0, 332.0))
+        self.assertEqual(student.reroute_count, 1)
 
     def test_congestion_can_trigger_dynamic_reroute(self) -> None:
         engine = SimulationEngine(

@@ -37,7 +37,9 @@ STUDENT_COLLISION_WIDTH = 22.0
 STUDENT_COLLISION_HEIGHT = 18.0
 STUDENT_COLLISION_FOOT_OFFSET_Y = 14.0
 STUDENT_COLLISION_PADDING = 2.0
-LOCAL_AVOIDANCE_REROUTE_SECONDS = 6.0
+LOCAL_AVOIDANCE_SIDE_STEP = max(STUDENT_COLLISION_WIDTH, STUDENT_COLLISION_HEIGHT) * 1.5
+LOCAL_AVOIDANCE_REACHABILITY_CHECK_COUNT = 2
+LOCAL_AVOIDANCE_REROUTE_SECONDS = 3.0
 TABLE_SEAT_OFFSETS: dict[int, list[tuple[float, float]]] = {
     2: [(-36.0, 0.0), (36.0, 0.0)],
     4: [(-46.0, -22.0), (46.0, -22.0), (-46.0, 26.0), (46.0, 26.0)],
@@ -1208,7 +1210,30 @@ class SimulationEngine:
         seat_x: float,
         seat_y: float,
     ) -> list[tuple[float, float]]:
-        return self._build_navigation_path((start_x, start_y), self._seat_access_position(table, seat_index))
+        start = (start_x, start_y)
+        side_step = self._post_pickup_side_step_position(start_x, start_y, table)
+        if side_step is None:
+            return self._build_navigation_path(start, self._seat_access_position(table, seat_index))
+
+        seat_path = self._build_navigation_path(side_step, self._seat_access_position(table, seat_index))
+        return self._compact_path([side_step, *seat_path])
+
+    def _post_pickup_side_step_position(
+        self,
+        start_x: float,
+        start_y: float,
+        table: Table,
+    ) -> tuple[float, float] | None:
+        preferred_side = 1.0 if table.x >= start_x else -1.0
+        for side in (preferred_side, -preferred_side):
+            for side_step in (72.0, 96.0, 120.0):
+                candidate_x = max(64.0, min(self.width - 64.0, start_x + side * side_step))
+                candidate_y = max(64.0, min(self.height - 64.0, start_y))
+                if distance(start_x, start_y, candidate_x, candidate_y) <= 3.0:
+                    continue
+                if self._is_static_walkable_point(candidate_x, candidate_y):
+                    return candidate_x, candidate_y
+        return None
 
     def _seat_access_position(self, table: Table, seat_index: int) -> tuple[float, float]:
         seat_x, seat_y = self._seat_position(table, seat_index)
@@ -1393,6 +1418,28 @@ class SimulationEngine:
             self._navigation_dynamic_obstacles(ignored_student_id, foot_start, foot_target),
         )
         return self._compact_path([(x, y - STUDENT_COLLISION_FOOT_OFFSET_Y) for x, y in foot_path])
+
+    def _build_navigation_path_to_reachable_target(
+        self,
+        start: tuple[float, float],
+        target: tuple[float, float],
+        ignored_student_id: int | None = None,
+    ) -> tuple[list[tuple[float, float]], tuple[float, float], bool]:
+        pathfinder = self._navigation_pathfinder()
+        foot_start = self._foot_point_from_position(start[0], start[1])
+        foot_target = self._foot_point_from_position(target[0], target[1])
+        foot_path, reachable_foot_target, target_reachable = pathfinder.find_path_to_reachable_target(
+            foot_start,
+            foot_target,
+            self._navigation_congestion_points(ignored_student_id),
+            self._navigation_dynamic_obstacles(ignored_student_id, foot_start, foot_target),
+        )
+        path = self._compact_path([(x, y - STUDENT_COLLISION_FOOT_OFFSET_Y) for x, y in foot_path])
+        reachable_target = (
+            reachable_foot_target[0],
+            reachable_foot_target[1] - STUDENT_COLLISION_FOOT_OFFSET_Y,
+        )
+        return path, reachable_target, target_reachable
 
     def _build_navigation_paths_parallel(
         self,
@@ -1670,6 +1717,75 @@ class SimulationEngine:
             and min(first[3], second[3]) + padding > max(first[1], second[1])
         )
 
+    def _student_path_pressed_by_dynamic_collision(self, student: Student, x: float, y: float) -> bool:
+        if not self._student_uses_collision_box(student):
+            return False
+
+        candidate_rect = self._student_collision_rect_from_position(x, y)
+        start = self._student_foot_point(student)
+        end = self._foot_point_from_position(student.target_x, student.target_y)
+        for other in self._collision_students(student.id):
+            other_rect = self._student_collision_rect(other)
+            if not self._rects_overlap(candidate_rect, other_rect, STUDENT_COLLISION_PADDING):
+                continue
+            if self._segment_intersects_rect(
+                start,
+                end,
+                self._expand_rect(
+                    other_rect,
+                    STUDENT_COLLISION_WIDTH / 2.0 + STUDENT_COLLISION_PADDING,
+                    STUDENT_COLLISION_HEIGHT / 2.0 + STUDENT_COLLISION_PADDING,
+                ),
+            ):
+                return True
+        return False
+
+    def _expand_rect(
+        self,
+        rect: tuple[float, float, float, float],
+        padding_x: float,
+        padding_y: float,
+    ) -> tuple[float, float, float, float]:
+        return (
+            rect[0] - padding_x,
+            rect[1] - padding_y,
+            rect[2] + padding_x,
+            rect[3] + padding_y,
+        )
+
+    def _segment_intersects_rect(
+        self,
+        start: tuple[float, float],
+        end: tuple[float, float],
+        rect: tuple[float, float, float, float],
+    ) -> bool:
+        start_x, start_y = start
+        end_x, end_y = end
+        left, top, right, bottom = rect
+        delta_x = end_x - start_x
+        delta_y = end_y - start_y
+        t_min = 0.0
+        t_max = 1.0
+
+        for direction, lower, upper in (
+            (delta_x, left - start_x, right - start_x),
+            (delta_y, top - start_y, bottom - start_y),
+        ):
+            if abs(direction) <= 1e-9:
+                if lower > 0.0 or upper < 0.0:
+                    return False
+                continue
+
+            near = lower / direction
+            far = upper / direction
+            if near > far:
+                near, far = far, near
+            t_min = max(t_min, near)
+            t_max = min(t_max, far)
+            if t_min > t_max:
+                return False
+        return True
+
     def _move_student(self, student: Student, game_delta: float, speed: float) -> bool:
         if student.path:
             student.target_x, student.target_y = student.path[0]
@@ -1680,6 +1796,7 @@ class SimulationEngine:
         arrival_radius = 3.0 if not student.path else 5.5
         blocked_by_dynamic_student = False
         used_local_avoidance = False
+        endpoint_repaired = False
         if target_distance <= max(arrival_radius, step_distance):
             arrived = self._try_place_student_at(student, student.target_x, student.target_y)
             if arrived:
@@ -1690,8 +1807,12 @@ class SimulationEngine:
                     student.target_y,
                 )
                 if target_is_static_walkable:
-                    blocked_by_dynamic_student = True
-                    if self._try_local_avoidance_step(student, step_distance):
+                    blocked_by_dynamic_student = self._student_path_pressed_by_dynamic_collision(
+                        student,
+                        student.target_x,
+                        student.target_y,
+                    )
+                    if blocked_by_dynamic_student and self._try_local_avoidance_step(student, step_distance):
                         blocked_by_dynamic_student = False
                         used_local_avoidance = True
                 else:
@@ -1713,7 +1834,11 @@ class SimulationEngine:
                     student.x = next_x
                     student.y = next_y
                 else:
-                    blocked_by_dynamic_student = True
+                    blocked_by_dynamic_student = self._student_path_pressed_by_dynamic_collision(
+                        student,
+                        next_x,
+                        next_y,
+                    )
                 if blocked_by_dynamic_student and self._try_local_avoidance_step(student, step_distance):
                     blocked_by_dynamic_student = False
                     used_local_avoidance = True
@@ -1737,16 +1862,25 @@ class SimulationEngine:
             student.stuck_time = max(0.0, student.stuck_time - game_delta * 1.8)
         if used_local_avoidance:
             student.local_avoidance_time += game_delta
+            student.local_avoidance_count += 1
+            if student.local_avoidance_count >= LOCAL_AVOIDANCE_REACHABILITY_CHECK_COUNT:
+                endpoint_repaired = self._repair_unreachable_path_endpoint(student)
+                student.local_avoidance_count = 0
         else:
             student.local_avoidance_time = max(0.0, student.local_avoidance_time - game_delta * 2.0)
+            student.local_avoidance_count = 0
         student.last_x = student.x
         student.last_y = student.y
+
+        if endpoint_repaired:
+            return False
 
         if student.local_avoidance_time >= LOCAL_AVOIDANCE_REROUTE_SECONDS:
             if self._reroute_student(student):
                 student.reroute_count += 1
                 student.detour_until = self.game_time + 2.0
             student.local_avoidance_time = 0.0
+            student.local_avoidance_count = 0
             student.stuck_time = 0.0
             return False
 
@@ -1789,7 +1923,7 @@ class SimulationEngine:
         forward_y = dy / gap
         side_x = -forward_y
         side_y = forward_x
-        side_step = min(10.0, max(4.0, step_distance * 1.25))
+        side_step = max(LOCAL_AVOIDANCE_SIDE_STEP, step_distance * 1.25)
         forward_step = min(step_distance, 4.0)
         candidates: list[tuple[float, float]] = []
         for side in (1.0, -1.0):
@@ -1806,6 +1940,32 @@ class SimulationEngine:
             if self._try_place_student_at(student, candidate_x, candidate_y):
                 return True
         return False
+
+    def _repair_unreachable_path_endpoint(self, student: Student) -> bool:
+        if student.state in (StudentState.QUEUED, StudentState.EATING, StudentState.DONE):
+            return False
+
+        endpoint = student.path[-1] if student.path else (student.target_x, student.target_y)
+        if distance(student.x, student.y, endpoint[0], endpoint[1]) <= 3.0:
+            return False
+
+        path, reachable_endpoint, endpoint_reachable = self._build_navigation_path_to_reachable_target(
+            (student.x, student.y),
+            endpoint,
+            ignored_student_id=student.id,
+        )
+        if endpoint_reachable or not path:
+            return False
+
+        if distance(endpoint[0], endpoint[1], reachable_endpoint[0], reachable_endpoint[1]) <= 3.0:
+            return False
+
+        self._set_path(student, path)
+        student.reroute_count += 1
+        student.detour_until = self.game_time + 2.0
+        student.local_avoidance_time = 0.0
+        student.stuck_time = 0.0
+        return True
 
     def _separate_students(self, game_delta: float) -> None:
         movable = self._collision_students()
