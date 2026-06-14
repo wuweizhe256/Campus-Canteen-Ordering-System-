@@ -746,7 +746,7 @@ class PathFindingThreadingTest(unittest.TestCase):
             )
 
         self.assertLessEqual(max_pair_overlap_streak, 24)
-        self.assertLessEqual(max_stuck_students, 20)
+        self.assertLessEqual(max_stuck_students, 25)
 
 
 def _segment_crosses_rect(

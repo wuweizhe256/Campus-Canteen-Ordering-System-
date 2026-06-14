@@ -456,13 +456,13 @@ class SimulationEngine:
             )
 
         meat_pref = self.rng.uniform(0.0, 1.0)
-        veg_pref = self.rng.uniform(0.0, 1.0)
+        veg_pref = clamp(1.0 - meat_pref + self.rng.uniform(-0.30, 0.30), 0.0, 1.0)  # 荤素负相关，模拟真实偏好
         shared_preferences = {
             "meat": meat_pref,
             "veg": veg_pref,
             "price_sensitivity": self.rng.uniform(0.2, 1.0),
             "wait_tolerance": self.rng.uniform(0.2, 1.0),
-            "spicy": self.rng.uniform(0.0, 1.0),
+            "spicy": self.rng.betavariate(2.0, 5.0),  # 辣度偏好偏右分布，大多数人偏淡
         }
         entrance = self._choose_entrance()
         sample_student = self._build_student(
@@ -611,7 +611,7 @@ class SimulationEngine:
                 if dish.id in seen_dishes or not self._dish_has_order_capacity(stall, dish):
                     continue
                 seen_dishes.add(dish.id)
-                score = self._dish_preference_cost(student, dish)
+                score = self._dish_preference_cost(student, dish) + self._stall_choice_cost(student, stall, dish)
                 if best_dish_score is None or score < best_dish_score:
                     best_dish_score = score
                     best_dish_id = dish.id
@@ -665,7 +665,7 @@ class SimulationEngine:
 
     def _stall_choice_cost(self, student: Student, stall: Stall, dish: Dish) -> float:
         wait_tolerance = max(0.1, student.preferences.get("wait_tolerance", 0.5))
-        queue_cost = len(stall.queue) * (1.1 - wait_tolerance) * 0.75
+        queue_cost = len(stall.queue) * (1.1 - wait_tolerance) * 2.0
         corridor_x = (student.x + stall.x) / 2.0
         corridor_y = (student.y + self.queue_walkway_y) / 2.0
         corridor_density = self._density_near(corridor_x, corridor_y, 120.0)
