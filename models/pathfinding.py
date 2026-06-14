@@ -185,7 +185,7 @@ class GridPathFinder:
         if start_cell is None or target_cell is None:
             return [target]
         if start_cell == target_cell:
-            return [target]
+            return [self._final_target_point(start, target, dynamic_obstacles)]
 
         came_from = self._astar(start_cell, target_cell, congestion_costs, dynamic_costs, dynamic_blocked_cells)
         if target_cell not in came_from:
@@ -193,7 +193,9 @@ class GridPathFinder:
 
         cells = self._reconstruct_cells(came_from, target_cell)
         points = [self.cell_to_point(cell) for cell in cells[1:]]
-        points.append(target)
+        target_point = self._final_target_point(points[-1] if points else start, target, dynamic_obstacles)
+        if not points or points[-1] != target_point:
+            points.append(target_point)
         return self._smooth_points(start, points, dynamic_obstacles)
 
     def _find_path_to_reachable_target(
@@ -225,8 +227,11 @@ class GridPathFinder:
         if target_reachable:
             cells = self._reconstruct_cells(came_from, target_cell)
             points = [self.cell_to_point(cell) for cell in cells[1:]]
-            points.append(target)
-            return self._smooth_points(start, points, dynamic_obstacles), target, True
+            final_target = self._final_target_point(points[-1] if points else start, target, dynamic_obstacles)
+            if not points or points[-1] != final_target:
+                points.append(final_target)
+            target_reachable = final_target == target
+            return self._smooth_points(start, points, dynamic_obstacles), final_target, target_reachable
 
         reachable_cell = self._nearest_reached_cell(
             came_from,
@@ -261,6 +266,20 @@ class GridPathFinder:
         if not candidates:
             return fallback
         return min(candidates, key=lambda cell: (self._heuristic(cell, target), self._heuristic(cell, fallback)))
+
+    def _final_target_point(
+        self,
+        anchor: Point,
+        target: Point,
+        dynamic_obstacles: tuple[NavRect, ...] = (),
+    ) -> Point:
+        if (
+            self._is_passable_point(target[0], target[1])
+            and not any(rect.contains(target[0], target[1]) for rect in dynamic_obstacles)
+            and self._has_line_of_sight(anchor, target, dynamic_obstacles)
+        ):
+            return target
+        return anchor
 
     def point_to_cell(self, point: Point) -> Cell:
         x, y = point

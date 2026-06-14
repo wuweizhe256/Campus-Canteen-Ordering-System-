@@ -40,6 +40,7 @@ STUDENT_COLLISION_PADDING = 2.0
 LOCAL_AVOIDANCE_SIDE_STEP = max(STUDENT_COLLISION_WIDTH, STUDENT_COLLISION_HEIGHT) * 1.5
 LOCAL_AVOIDANCE_REACHABILITY_CHECK_COUNT = 2
 LOCAL_AVOIDANCE_REROUTE_SECONDS = 3.0
+STUCK_RECOVERY_SECONDS = 30.0
 TABLE_SEAT_OFFSETS: dict[int, list[tuple[float, float]]] = {
     2: [(-36.0, 0.0), (36.0, 0.0)],
     4: [(-46.0, -22.0), (46.0, -22.0), (-46.0, 26.0), (46.0, 26.0)],
@@ -1875,6 +1876,9 @@ class SimulationEngine:
         if endpoint_repaired:
             return False
 
+        if student.stuck_time >= STUCK_RECOVERY_SECONDS and self._try_recover_stuck_student(student):
+            return False
+
         if student.local_avoidance_time >= LOCAL_AVOIDANCE_REROUTE_SECONDS:
             if self._reroute_student(student):
                 student.reroute_count += 1
@@ -1895,6 +1899,59 @@ class SimulationEngine:
         if arrived:
             self._complete_path_tracking(student)
         return arrived
+
+    def _try_recover_stuck_student(self, student: Student) -> bool:
+        if student.state in (StudentState.QUEUED, StudentState.EATING, StudentState.DONE):
+            return False
+
+        nudged = self._try_stuck_recovery_step(student)
+        rerouted = self._reroute_student(student)
+        if rerouted:
+            student.reroute_count += 1
+            student.detour_until = self.game_time + 2.0
+        if nudged or rerouted:
+            student.stuck_time = 0.0
+            student.local_avoidance_time = 0.0
+            student.local_avoidance_count = 0
+            return True
+        return False
+
+    def _try_stuck_recovery_step(self, student: Student) -> bool:
+        dx = student.target_x - student.x
+        dy = student.target_y - student.y
+        gap = (dx * dx + dy * dy) ** 0.5
+        if gap < 1.0:
+            dx, dy, gap = student.facing_x, student.facing_y, 1.0
+
+        forward_x = dx / gap
+        forward_y = dy / gap
+        side_x = -forward_y
+        side_y = forward_x
+        directions = (
+            (side_x, side_y),
+            (-side_x, -side_y),
+            (-forward_x, -forward_y),
+            (forward_x, forward_y),
+            (side_x - forward_x, side_y - forward_y),
+            (-side_x - forward_x, -side_y - forward_y),
+            (side_x + forward_x, side_y + forward_y),
+            (-side_x + forward_x, -side_y + forward_y),
+        )
+        for step in (24.0, 40.0, 64.0):
+            for direction_x, direction_y in directions:
+                length = (direction_x * direction_x + direction_y * direction_y) ** 0.5
+                if length <= 0.0:
+                    continue
+                candidate_x = student.x + direction_x / length * step
+                candidate_y = student.y + direction_y / length * step
+                old_x, old_y = student.x, student.y
+                if self._try_place_student_at(student, candidate_x, candidate_y):
+                    moved = distance(old_x, old_y, student.x, student.y)
+                    if moved > 0.2:
+                        student.facing_x = (student.x - old_x) / moved
+                        student.facing_y = (student.y - old_y) / moved
+                    return True
+        return False
 
     def _is_entrance_release_step(self, student: Student, x: float, y: float) -> bool:
         if student.state != StudentState.MOVING_TO_QUEUE or x <= student.x:

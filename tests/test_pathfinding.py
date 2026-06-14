@@ -60,6 +60,21 @@ class PathFindingThreadingTest(unittest.TestCase):
         for first, second in zip(path, path[1:]):
             self.assertFalse(_segment_crosses_rect(first, second, dynamic_obstacle))
 
+    def test_static_obstacle_covering_target_does_not_force_blocked_endpoint(self) -> None:
+        table_obstacle = NavRect(248.0, 92.0, 304.0, 148.0, "table")
+        pathfinder = GridPathFinder(width=320.0, height=240.0, obstacles=[table_obstacle])
+        start = (48.0, 120.0)
+        target = (280.0, 120.0)
+
+        path = pathfinder.find_path(start, target)
+
+        self.assertTrue(path)
+        self.assertNotEqual(path[-1], target)
+        self.assertFalse(table_obstacle.contains(path[-1][0], path[-1][1]))
+        self.assertFalse(_segment_crosses_rect(start, path[0], table_obstacle))
+        for first, second in zip(path, path[1:]):
+            self.assertFalse(_segment_crosses_rect(first, second, table_obstacle))
+
     def test_queued_student_obstacles_are_hard_blockers(self) -> None:
         pathfinder = GridPathFinder(width=320.0, height=240.0, obstacles=[])
         queued_obstacle = NavRect(130.0, 70.0, 190.0, 170.0, "queued_student")
@@ -434,6 +449,67 @@ class PathFindingThreadingTest(unittest.TestCase):
         self.assertEqual(student.path, [(240.0, 332.0)])
         self.assertEqual((student.target_x, student.target_y), (240.0, 332.0))
         self.assertEqual(student.reroute_count, 1)
+
+    def test_stuck_recovery_nudges_before_reroute(self) -> None:
+        engine = SimulationEngine(
+            SimulationConfig(
+                sim_minutes=1,
+                stall_count=2,
+                table_count=2,
+                seed=20240612,
+                total_student_count=1,
+                max_active_students=1,
+            )
+        )
+        engine.initialize()
+        engine._spawn_group(1)
+        student = next(iter(engine.students.values()))
+        student.state = StudentState.MOVING_TO_SEAT
+        student.x, student.y = 200.0, 300.0
+        student.target_x, student.target_y = 320.0, 300.0
+        student.stuck_time = 30.0
+        calls: list[str] = []
+
+        def nudge(_student):
+            calls.append("nudge")
+            student.x, student.y = 224.0, 300.0
+            return True
+
+        def reroute(_student):
+            calls.append("reroute")
+            student.path = [(280.0, 320.0)]
+            return True
+
+        engine._try_stuck_recovery_step = nudge
+        engine._reroute_student = reroute
+
+        recovered = engine._try_recover_stuck_student(student)
+
+        self.assertTrue(recovered)
+        self.assertEqual(calls, ["nudge", "reroute"])
+        self.assertEqual((student.x, student.y), (224.0, 300.0))
+        self.assertEqual(student.reroute_count, 1)
+        self.assertEqual(student.stuck_time, 0.0)
+
+    def test_stuck_recovery_skips_queued_students(self) -> None:
+        engine = SimulationEngine(
+            SimulationConfig(
+                sim_minutes=1,
+                stall_count=2,
+                table_count=2,
+                seed=20240613,
+                total_student_count=1,
+                max_active_students=1,
+            )
+        )
+        engine.initialize()
+        engine._spawn_group(1)
+        student = next(iter(engine.students.values()))
+        student.state = StudentState.QUEUED
+        student.stuck_time = 30.0
+
+        self.assertFalse(engine._try_recover_stuck_student(student))
+        self.assertEqual(student.stuck_time, 30.0)
 
     def test_congestion_can_trigger_dynamic_reroute(self) -> None:
         engine = SimulationEngine(
