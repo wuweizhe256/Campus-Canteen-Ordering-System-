@@ -40,8 +40,11 @@ STUDENT_COLLISION_PADDING = 2.0
 LOCAL_AVOIDANCE_SIDE_STEP = max(STUDENT_COLLISION_WIDTH, STUDENT_COLLISION_HEIGHT) * 1.5
 LOCAL_AVOIDANCE_REACHABILITY_CHECK_COUNT = 2
 LOCAL_AVOIDANCE_REROUTE_SECONDS = 3.0
+PATH_REUSE_TARGET_TOLERANCE = 8.0
+PATH_REPLAN_COOLDOWN_SECONDS = 0.5
+QUEUE_TARGET_REPLAN_SHIFT = 18.0
+QUEUE_TARGET_REPLAN_NEAR_DISTANCE = 160.0
 STUCK_RECOVERY_SECONDS = 30.0
-RELAY_RECOVERY_SECONDS = 100.0
 TABLE_OVERLAP_RELOCATION_SECONDS = 60.0
 TABLE_SEAT_OFFSETS: dict[int, list[tuple[float, float]]] = {
     2: [(-36.0, 0.0), (36.0, 0.0)],
@@ -937,11 +940,11 @@ class SimulationEngine:
         x = max(64.0, min(self.width - 64.0, x))
         return self._nearest_static_walkable_position(x, y)
 
-    def _start_queue_path(self, student: Student) -> None:
+    def _start_queue_path(self, student: Student, *, force: bool = False) -> None:
         target = self._queue_target_position(student)
         if target is None or student.stall_id is None:
             return
-        self._set_navigation_path(student, target)
+        self._set_navigation_path(student, target, force=force)
 
     def _refresh_moving_queue_targets_parallel(self) -> None:
         tasks: list[tuple[Student, tuple[float, float], tuple[float, float]]] = []
@@ -979,6 +982,13 @@ class SimulationEngine:
             candidate_path,
             ignored_student_id=student.id,
         ):
+            if not self._should_replan_queue_target(student, target, target_shift):
+                student.path[-1] = target
+                student.path_goal = target
+                if len(student.path) == 1:
+                    student.target_x = target_x
+                    student.target_y = target_y
+                return
             if queue_refresh_path_tasks is not None:
                 queue_refresh_path_tasks.append((student, (student.x, student.y), target))
                 return
@@ -990,9 +1000,26 @@ class SimulationEngine:
             return
 
         student.path[-1] = target
+        student.path_goal = target
         if len(student.path) == 1:
             student.target_x = target_x
             student.target_y = target_y
+
+    def _should_replan_queue_target(
+        self,
+        student: Student,
+        target: tuple[float, float],
+        target_shift: float,
+    ) -> bool:
+        if student.path_planned_at is None:
+            return True
+        if self.game_time - student.path_planned_at >= PATH_REPLAN_COOLDOWN_SECONDS:
+            return True
+        if target_shift >= QUEUE_TARGET_REPLAN_SHIFT:
+            return True
+        if distance(student.x, student.y, target[0], target[1]) <= QUEUE_TARGET_REPLAN_NEAR_DISTANCE:
+            return True
+        return False
 
     def _run_queue_refresh_path_tasks(
         self,
@@ -1010,6 +1037,8 @@ class SimulationEngine:
             if not path:
                 continue
             self._set_path(student, path)
+            student.path_goal = _target
+            student.path_planned_at = self.game_time
             student.path_length = self._path_distance(start[0], start[1], student.path)
             student.reroute_count += 1
 
@@ -1028,6 +1057,7 @@ class SimulationEngine:
         student.target_x = target_x
         student.target_y = target_y
         student.path.clear()
+        self._clear_path_metadata(student)
 
     def _join_stall_queue(self, student: Student) -> None:
         if student.stall_id is None:
@@ -1209,6 +1239,8 @@ class SimulationEngine:
     ) -> None:
         self._reserve_student_seat(student, table, seat_index)
         self._set_path(student, path)
+        student.path_goal = path[-1] if path else None
+        student.path_planned_at = self.game_time
         self._start_path_tracking(
             student,
             path,
@@ -1328,6 +1360,7 @@ class SimulationEngine:
         student.target_x = seat_x
         student.target_y = seat_y
         student.path.clear()
+        self._clear_path_metadata(student)
         self._complete_path_tracking(student)
 
     def _snap_student_to_seat_access(self, student: Student) -> None:
@@ -1341,6 +1374,7 @@ class SimulationEngine:
         student.target_x = access_x
         student.target_y = access_y
         student.path.clear()
+        self._clear_path_metadata(student)
         moved = distance(old_x, old_y, access_x, access_y)
         if moved > 0.2:
             student.facing_x = (access_x - old_x) / moved
@@ -1480,12 +1514,13 @@ class SimulationEngine:
             tuple[Student, tuple[float, float], tuple[float, float], str]
         ] | None = None,
         kind: str | None = None,
+        force: bool = False,
     ) -> None:
         exit_area = self._choose_exit(student)
         student.exit_id = exit_area.id
         exit_point = (exit_area.x, exit_area.y)
         if navigation_path_tasks is None:
-            self._set_navigation_path(student, exit_point)
+            self._set_navigation_path(student, exit_point, force=force)
             return
         self._queue_navigation_path_task(
             navigation_path_tasks,
@@ -1563,10 +1598,11 @@ class SimulationEngine:
             tuple[Student, tuple[float, float], tuple[float, float], str]
         ] | None = None,
         kind: str | None = None,
+        force: bool = False,
     ) -> None:
         point = self._nearest_tray_return_center(student.x, student.y)
         if navigation_path_tasks is None:
-            self._set_navigation_path(student, point)
+            self._set_navigation_path(student, point, force=force)
             return
         self._queue_navigation_path_task(
             navigation_path_tasks,
@@ -1607,15 +1643,28 @@ class SimulationEngine:
         lower_clearance = self.height - 64.0 - (table.y + obstacle_height / 2.0)
         return lower_clearance < 72.0
 
-    def _set_navigation_path(self, student: Student, target: tuple[float, float]) -> None:
+    def _set_navigation_path(
+        self,
+        student: Student,
+        target: tuple[float, float],
+        *,
+        force: bool = False,
+    ) -> None:
         start = (student.x, student.y)
+        if not force and self._reuse_current_path(student, target):
+            return
         path = self._build_navigation_path(
             start,
             target,
             ignored_student_id=student.id,
         )
-        self._set_path(student, path)
-        self._start_path_tracking(student, path, start=start, kind=student.state.value)
+        self._apply_navigation_path(
+            student,
+            path,
+            start=start,
+            target=target,
+            kind=student.state.value,
+        )
 
     def _queue_navigation_path_task(
         self,
@@ -1633,14 +1682,27 @@ class SimulationEngine:
         if not tasks:
             return
 
+        pending: list[tuple[Student, tuple[float, float], tuple[float, float], str]] = []
+        for student, start, target, kind in tasks:
+            if self._reuse_current_path(student, target):
+                continue
+            pending.append((student, start, target, kind))
+        if not pending:
+            return
+
         requests = [
             (start, target, student.id)
-            for student, start, target, _kind in tasks
+            for student, start, target, _kind in pending
         ]
         paths = self._build_navigation_paths_parallel(requests)
-        for (student, start, _target, kind), path in zip(tasks, paths):
-            self._set_path(student, path)
-            self._start_path_tracking(student, path, start=start, kind=kind)
+        for (student, start, _target, kind), path in zip(pending, paths):
+            self._apply_navigation_path(
+                student,
+                path,
+                start=start,
+                target=_target,
+                kind=kind,
+            )
 
     def _run_table_path_tasks(
         self,
@@ -1697,9 +1759,14 @@ class SimulationEngine:
 
         paths = self._build_navigation_paths_parallel(requests)
         for student, request, path in zip(students, requests, paths):
-            start, _, _ = request
-            self._set_path(student, path)
-            self._start_path_tracking(student, path, start=start, kind=student.state.value)
+            start, target, _ = request
+            self._apply_navigation_path(
+                student,
+                path,
+                start=start,
+                target=target,
+                kind=student.state.value,
+            )
 
     def _build_navigation_path(
         self,
@@ -1864,6 +1931,42 @@ class SimulationEngine:
         if student.path:
             student.target_x, student.target_y = student.path[0]
 
+    def _clear_path_metadata(self, student: Student) -> None:
+        student.path_goal = None
+        student.path_planned_at = None
+
+    def _apply_navigation_path(
+        self,
+        student: Student,
+        path: list[tuple[float, float]],
+        start: tuple[float, float],
+        target: tuple[float, float],
+        kind: str,
+    ) -> None:
+        self._set_path(student, path)
+        student.path_goal = target
+        student.path_planned_at = self.game_time
+        self._start_path_tracking(student, path, start=start, kind=kind)
+
+    def _reuse_current_path(self, student: Student, target: tuple[float, float]) -> bool:
+        if not student.path:
+            return False
+        if student.path_goal is None:
+            return False
+        if distance(student.path_goal[0], student.path_goal[1], target[0], target[1]) > PATH_REUSE_TARGET_TOLERANCE:
+            return False
+        if self._path_crosses_static_blocking_obstacle(
+            (student.x, student.y),
+            list(student.path),
+            ignored_student_id=student.id,
+        ):
+            return False
+        student.path[-1] = target
+        student.path_goal = target
+        if len(student.path) == 1:
+            student.target_x, student.target_y = target
+        return True
+
     def _start_path_tracking(
         self,
         student: Student,
@@ -1907,6 +2010,7 @@ class SimulationEngine:
         student.path_id = None
         student.path_started_at = None
         student.path_length = None
+        self._clear_path_metadata(student)
 
     def _compact_path(self, path: list[tuple[float, float]]) -> list[tuple[float, float]]:
         compacted: list[tuple[float, float]] = []
@@ -2039,29 +2143,6 @@ class SimulationEngine:
             and min(first[3], second[3]) + padding > max(first[1], second[1])
         )
 
-    def _student_path_pressed_by_dynamic_collision(self, student: Student, x: float, y: float) -> bool:
-        if not self._student_uses_collision_box(student):
-            return False
-
-        candidate_rect = self._student_collision_rect_from_position(x, y)
-        start = self._student_foot_point(student)
-        end = self._foot_point_from_position(student.target_x, student.target_y)
-        for other in self._collision_students(student.id):
-            other_rect = self._student_collision_rect(other)
-            if not self._rects_overlap(candidate_rect, other_rect, STUDENT_COLLISION_PADDING):
-                continue
-            if self._segment_intersects_rect(
-                start,
-                end,
-                self._expand_rect(
-                    other_rect,
-                    STUDENT_COLLISION_WIDTH / 2.0 + STUDENT_COLLISION_PADDING,
-                    STUDENT_COLLISION_HEIGHT / 2.0 + STUDENT_COLLISION_PADDING,
-                ),
-            ):
-                return True
-        return False
-
     def _expand_rect(
         self,
         rect: tuple[float, float, float, float],
@@ -2129,14 +2210,8 @@ class SimulationEngine:
                     student.target_y,
                 )
                 if target_is_static_walkable:
-                    blocked_by_dynamic_student = self._student_path_pressed_by_dynamic_collision(
-                        student,
-                        student.target_x,
-                        student.target_y,
-                    )
-                    if blocked_by_dynamic_student and self._try_static_obstacle_detour(student):
-                        blocked_by_dynamic_student = False
-                    elif blocked_by_dynamic_student and self._try_local_avoidance_step(student, step_distance):
+                    blocked_by_dynamic_student = True
+                    if self._try_local_avoidance_step(student, step_distance):
                         blocked_by_dynamic_student = False
                         used_local_avoidance = True
                 else:
@@ -2159,14 +2234,8 @@ class SimulationEngine:
                     student.x = next_x
                     student.y = next_y
                 else:
-                    blocked_by_dynamic_student = self._student_path_pressed_by_dynamic_collision(
-                        student,
-                        next_x,
-                        next_y,
-                    )
-                if blocked_by_dynamic_student and self._try_static_obstacle_detour(student):
-                    blocked_by_dynamic_student = False
-                elif blocked_by_dynamic_student and self._try_local_avoidance_step(student, step_distance):
+                    blocked_by_dynamic_student = True
+                if blocked_by_dynamic_student and self._try_local_avoidance_step(student, step_distance):
                     blocked_by_dynamic_student = False
                     used_local_avoidance = True
             elif (
@@ -2186,7 +2255,10 @@ class SimulationEngine:
         if moved > 0.2:
             student.facing_x = (student.x - old_x) / moved
             student.facing_y = (student.y - old_y) / moved
-        if target_distance > 18.0 and student.actual_speed < max(1.2, speed * 0.18):
+        if (
+            (target_distance > 18.0 or blocked_by_dynamic_student)
+            and student.actual_speed < max(1.2, speed * 0.18)
+        ):
             student.stuck_time += game_delta
         else:
             student.stuck_time = max(0.0, student.stuck_time - game_delta * 1.8)
@@ -2216,9 +2288,6 @@ class SimulationEngine:
             return False
 
         if student.stuck_time >= STUCK_RECOVERY_SECONDS and self._try_recover_stuck_student(student):
-            return False
-
-        if student.stuck_time >= RELAY_RECOVERY_SECONDS and self._try_relay_recovery(student):
             return False
 
         if student.local_avoidance_time >= LOCAL_AVOIDANCE_REROUTE_SECONDS:
@@ -2254,68 +2323,16 @@ class SimulationEngine:
             student.local_avoidance_count = 0
             return True
 
-        nudged = self._try_stuck_recovery_step(student)
         rerouted = self._reroute_student(student)
         if rerouted:
             student.reroute_count += 1
             student.detour_until = self.game_time + 2.0
-        if nudged or rerouted:
+        if rerouted:
             student.stuck_time = 0.0
             student.local_avoidance_time = 0.0
             student.local_avoidance_count = 0
             return True
         return False
-
-    def _try_relay_recovery(self, student: Student) -> bool:
-        """卡顿超过 RELAY_RECOVERY_SECONDS 时，先找一个可直线到达的中继点分段导航。
-
-        当长期卡顿无法通过常规恢复机制逃脱时，该策略帮助跳出局部阻塞：
-        1. 搜索当前位置可通过直线（无障碍物）到达的安全中继点
-        2. 先走到中继点，再从中继点导航到最终目的地
-        """
-        if student.state in (StudentState.QUEUED, StudentState.EATING, StudentState.DONE):
-            return False
-
-        pathfinder = self._navigation_pathfinder()
-        start = self._student_foot_point(student)
-
-        # 获取最终目标（脚底坐标）
-        if student.path:
-            endpoint = student.path[-1]
-        else:
-            endpoint = (student.target_x, student.target_y)
-        foot_endpoint = self._foot_point_from_position(endpoint[0], endpoint[1])
-
-        dynamic_obstacles = tuple(
-            self._navigation_dynamic_obstacles(
-                ignored_student_id=student.id,
-                start=start,
-                target=foot_endpoint,
-            )
-        )
-
-        relay = pathfinder.find_line_of_sight_relay(start, foot_endpoint, dynamic_obstacles)
-        if relay is None:
-            return False
-
-        # 将脚底坐标的中继点转为世界坐标
-        relay_world = (relay[0], relay[1] - STUDENT_COLLISION_FOOT_OFFSET_Y)
-
-        # 从中继点到终点的第二段路径
-        second_leg = self._build_navigation_path(relay_world, endpoint, ignored_student_id=student.id)
-
-        # 合并路径：当前位置 → 中继点 → 终点
-        path = self._compact_path([relay_world, *second_leg])
-        if not path:
-            return False
-
-        self._set_path(student, path)
-        student.stuck_time = 0.0
-        student.local_avoidance_time = 0.0
-        student.local_avoidance_count = 0
-        student.reroute_count += 1
-        student.detour_until = self.game_time + 3.0
-        return True
 
     def _try_relocate_from_table_obstacle(self, student: Student) -> bool:
         if student.state in (StudentState.QUEUED, StudentState.EATING, StudentState.DONE):
@@ -2405,43 +2422,6 @@ class SimulationEngine:
                 if self._is_walkable_point(candidate_x, candidate_y, students, ignored_student_id=ignored_student_id):
                     return candidate_x, candidate_y
         return None
-
-    def _try_stuck_recovery_step(self, student: Student) -> bool:
-        dx = student.target_x - student.x
-        dy = student.target_y - student.y
-        gap = (dx * dx + dy * dy) ** 0.5
-        if gap < 1.0:
-            dx, dy, gap = student.facing_x, student.facing_y, 1.0
-
-        forward_x = dx / gap
-        forward_y = dy / gap
-        side_x = -forward_y
-        side_y = forward_x
-        directions = (
-            (side_x, side_y),
-            (-side_x, -side_y),
-            (-forward_x, -forward_y),
-            (forward_x, forward_y),
-            (side_x - forward_x, side_y - forward_y),
-            (-side_x - forward_x, -side_y - forward_y),
-            (side_x + forward_x, side_y + forward_y),
-            (-side_x + forward_x, -side_y + forward_y),
-        )
-        for step in (24.0, 40.0, 64.0):
-            for direction_x, direction_y in directions:
-                length = (direction_x * direction_x + direction_y * direction_y) ** 0.5
-                if length <= 0.0:
-                    continue
-                candidate_x = student.x + direction_x / length * step
-                candidate_y = student.y + direction_y / length * step
-                old_x, old_y = student.x, student.y
-                if self._try_place_student_at(student, candidate_x, candidate_y):
-                    moved = distance(old_x, old_y, student.x, student.y)
-                    if moved > 0.2:
-                        student.facing_x = (student.x - old_x) / moved
-                        student.facing_y = (student.y - old_y) / moved
-                    return True
-        return False
 
     def _try_static_obstacle_detour(self, student: Student) -> bool:
         blocking_obstacle = self._path_blocking_static_obstacle(student)
@@ -2863,7 +2843,7 @@ class SimulationEngine:
     def _reroute_student(self, student: Student) -> bool:
         if student.state == StudentState.MOVING_TO_QUEUE:
             before = list(student.path)
-            self._start_queue_path(student)
+            self._start_queue_path(student, force=True)
             return bool(student.path) and student.path != before
         if student.state == StudentState.MOVING_TO_SEAT and student.table_id is not None and student.seat_index is not None:
             table = self.tables[student.table_id]
@@ -2872,10 +2852,10 @@ class SimulationEngine:
             self._set_path(student, path)
             return bool(student.path)
         if student.state == StudentState.MOVING_TO_TRAY_RETURN:
-            self._set_tray_return_path(student)
+            self._set_tray_return_path(student, force=True)
             return bool(student.path)
         if student.state == StudentState.LEAVING:
-            self._set_exit_path(student)
+            self._set_exit_path(student, force=True)
             return bool(student.path)
         return False
 

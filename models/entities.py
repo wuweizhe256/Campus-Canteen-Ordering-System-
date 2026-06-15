@@ -158,6 +158,8 @@ class Student:
     path_id: str | None = None
     path_started_at: float | None = None
     path_length: float | None = None
+    path_goal: tuple[float, float] | None = None
+    path_planned_at: float | None = None
     last_x: float = field(init=False)
     last_y: float = field(init=False)
 

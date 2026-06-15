@@ -223,6 +223,40 @@ class PathFindingThreadingTest(unittest.TestCase):
         self.assertEqual(moving.path[-1], new_target)
         self.assertEqual((moving.target_x, moving.target_y), new_target)
 
+    def test_existing_navigation_path_is_reused_for_same_goal(self) -> None:
+        engine = SimulationEngine(
+            SimulationConfig(
+                sim_minutes=1,
+                stall_count=2,
+                table_count=2,
+                seed=20240623,
+                total_student_count=1,
+                max_active_students=1,
+            )
+        )
+        engine.initialize()
+        engine._spawn_group(1)
+        student = next(iter(engine.students.values()))
+        student.state = StudentState.MOVING_TO_QUEUE
+        goal = (260.0, 180.0)
+        updated_goal = (262.0, 181.0)
+        student.path = [(220.0, 170.0), goal]
+        student.path_goal = goal
+        student.path_planned_at = engine.game_time
+        calls: list[tuple[tuple[float, float], tuple[float, float], int | None]] = []
+
+        def build_path(start, target, ignored_student_id=None):
+            calls.append((start, target, ignored_student_id))
+            return [target]
+
+        engine._build_navigation_path = build_path
+
+        engine._set_navigation_path(student, updated_goal)
+
+        self.assertEqual(calls, [])
+        self.assertEqual(student.path, [(220.0, 170.0), updated_goal])
+        self.assertEqual(student.path_goal, updated_goal)
+
     def test_collision_boxes_include_non_eating_students_only(self) -> None:
         engine = SimulationEngine(
             SimulationConfig(
@@ -342,6 +376,124 @@ class PathFindingThreadingTest(unittest.TestCase):
         self.assertEqual(calls, [((190.0, 150.0), new_target, moving.id)])
         self.assertEqual(moving.path, [(220.0, 210.0), new_target])
         self.assertEqual((moving.target_x, moving.target_y), (220.0, 210.0))
+
+    def test_moving_queue_target_refresh_delays_small_recent_replan(self) -> None:
+        engine = SimulationEngine(
+            SimulationConfig(
+                sim_minutes=1,
+                stall_count=2,
+                table_count=2,
+                seed=20240624,
+                total_student_count=1,
+                max_active_students=1,
+            )
+        )
+        engine.initialize()
+        engine._spawn_group(1)
+        moving = next(iter(engine.students.values()))
+        old_target = (320.0, 156.0)
+        new_target = (332.0, 156.0)
+        moving.state = StudentState.MOVING_TO_QUEUE
+        moving.stall_id = engine.stalls[0].id
+        moving.x, moving.y = 120.0, 120.0
+        moving.path = [(240.0, 150.0), old_target]
+        moving.target_x, moving.target_y = moving.path[0]
+        moving.path_goal = old_target
+        moving.path_planned_at = engine.game_time
+        calls: list[tuple[tuple[float, float], tuple[float, float], int | None]] = []
+
+        def build_path(start, target, ignored_student_id=None):
+            calls.append((start, target, ignored_student_id))
+            return [target]
+
+        engine._queue_target_position = lambda student: new_target
+        engine._path_crosses_static_blocking_obstacle = lambda *args, **kwargs: {"kind": "queued_student"}
+        engine._build_navigation_path = build_path
+
+        engine._refresh_moving_queue_target(moving)
+
+        self.assertEqual(calls, [])
+        self.assertEqual(moving.path, [(240.0, 150.0), new_target])
+        self.assertEqual((moving.target_x, moving.target_y), (240.0, 150.0))
+        self.assertEqual(moving.path_goal, new_target)
+
+    def test_near_endpoint_dynamic_block_triggers_detour_check(self) -> None:
+        engine = SimulationEngine(
+            SimulationConfig(
+                sim_minutes=1,
+                stall_count=2,
+                table_count=2,
+                seed=20240625,
+                total_student_count=2,
+                max_active_students=2,
+            )
+        )
+        engine.initialize()
+        engine._spawn_group(2)
+        moving, blocker = list(engine.students.values())[:2]
+        moving.state = StudentState.LEAVING
+        blocker.state = StudentState.LEAVING
+        moving.x, moving.y = 900.0, 690.0
+        moving.target_x, moving.target_y = 910.0, 690.0
+        moving.path = [(910.0, 690.0)]
+        blocker.x, blocker.y = 910.0, 690.0
+        detour_calls: list[int] = []
+
+        def static_detour(_student):
+            self.fail("dynamic blocking should not run static obstacle detour")
+
+        engine._try_static_obstacle_detour = static_detour
+        engine._try_local_avoidance_step = lambda student, step_distance: False
+
+        def start_detour(student, students):
+            detour_calls.append(student.id)
+
+        engine._try_start_detour = start_detour
+
+        engine._move_student(moving, 0.8, moving.walk_speed)
+        engine._move_student(moving, 0.8, moving.walk_speed)
+
+        self.assertEqual(detour_calls, [moving.id])
+        self.assertGreaterEqual(moving.stuck_time, 1.6)
+
+    def test_far_target_student_collision_triggers_detour_check(self) -> None:
+        engine = SimulationEngine(
+            SimulationConfig(
+                sim_minutes=1,
+                stall_count=2,
+                table_count=2,
+                seed=20240626,
+                total_student_count=2,
+                max_active_students=2,
+            )
+        )
+        engine.initialize()
+        engine._spawn_group(2)
+        moving, blocker = list(engine.students.values())[:2]
+        moving.state = StudentState.LEAVING
+        blocker.state = StudentState.LEAVING
+        moving.x, moving.y = 900.0, 690.0
+        moving.target_x, moving.target_y = 1040.0, 690.0
+        moving.path = [(1040.0, 690.0)]
+        blocker.x, blocker.y = 916.0, 690.0
+        detour_calls: list[int] = []
+
+        def static_detour(_student):
+            self.fail("dynamic blocking should not run static obstacle detour")
+
+        engine._try_static_obstacle_detour = static_detour
+        engine._try_local_avoidance_step = lambda student, step_distance: False
+
+        def start_detour(student, students):
+            detour_calls.append(student.id)
+
+        engine._try_start_detour = start_detour
+
+        engine._move_student(moving, 0.8, 20.0)
+        engine._move_student(moving, 0.8, 20.0)
+
+        self.assertEqual(detour_calls, [moving.id])
+        self.assertGreaterEqual(moving.stuck_time, 1.6)
 
     def test_dynamic_detour_rejects_first_waypoint_crossing_queue(self) -> None:
         engine = SimulationEngine(
@@ -566,7 +718,7 @@ class PathFindingThreadingTest(unittest.TestCase):
         self.assertEqual((student.target_x, student.target_y), (240.0, 332.0))
         self.assertEqual(student.reroute_count, 1)
 
-    def test_stuck_recovery_nudges_before_reroute(self) -> None:
+    def test_stuck_recovery_reroutes_after_static_detour_fails(self) -> None:
         engine = SimulationEngine(
             SimulationConfig(
                 sim_minutes=1,
@@ -586,24 +738,19 @@ class PathFindingThreadingTest(unittest.TestCase):
         student.stuck_time = 30.0
         calls: list[str] = []
 
-        def nudge(_student):
-            calls.append("nudge")
-            student.x, student.y = 224.0, 300.0
-            return True
-
         def reroute(_student):
             calls.append("reroute")
             student.path = [(280.0, 320.0)]
             return True
 
-        engine._try_stuck_recovery_step = nudge
+        engine._try_static_obstacle_detour = lambda _student: False
         engine._reroute_student = reroute
 
         recovered = engine._try_recover_stuck_student(student)
 
         self.assertTrue(recovered)
-        self.assertEqual(calls, ["nudge", "reroute"])
-        self.assertEqual((student.x, student.y), (224.0, 300.0))
+        self.assertEqual(calls, ["reroute"])
+        self.assertEqual((student.x, student.y), (200.0, 300.0))
         self.assertEqual(student.reroute_count, 1)
         self.assertEqual(student.stuck_time, 0.0)
 

@@ -10,6 +10,7 @@ from typing import Iterable
 
 Point = tuple[float, float]
 Cell = tuple[int, int]
+DynamicObstacleIndex = dict[Cell, tuple["NavRect", ...]]
 PathRequest = (
     tuple[Point, Point, Iterable[Point]]
     | tuple[Point, Point, Iterable[Point], Iterable["NavRect"]]
@@ -185,6 +186,7 @@ class GridPathFinder:
         angle_count = 12
         margin = 24.0
         candidates: list[tuple[float, Point]] = []
+        dynamic_obstacle_index = self._build_dynamic_obstacle_index(dynamic_obstacles)
 
         for radius in radii:
             for index in range(angle_count):
@@ -197,9 +199,21 @@ class GridPathFinder:
 
                 if not self._is_passable_point(point_x, point_y):
                     continue
-                if any(rect.contains(point_x, point_y) for rect in dynamic_obstacles):
+                if any(
+                    rect.contains(point_x, point_y)
+                    for rect in self._candidate_dynamic_obstacles(
+                        point_x,
+                        point_y,
+                        dynamic_obstacle_index,
+                    )
+                ):
                     continue
-                if not self._has_line_of_sight(start, (point_x, point_y), dynamic_obstacles):
+                if not self._has_line_of_sight(
+                    start,
+                    (point_x, point_y),
+                    dynamic_obstacles,
+                    dynamic_obstacle_index,
+                ):
                     continue
 
                 # 综合评分：方向对齐程度 + 距离惩罚
@@ -289,12 +303,13 @@ class GridPathFinder:
         dynamic_blocked_cells: set[Cell],
         dynamic_obstacles: tuple[NavRect, ...],
     ) -> list[Point]:
+        dynamic_obstacle_index = self._build_dynamic_obstacle_index(dynamic_obstacles)
         start_cell = self._nearest_passable_cell(self.point_to_cell(start), dynamic_blocked_cells)
         target_cell = self._nearest_passable_cell(self.point_to_cell(target), dynamic_blocked_cells)
         if start_cell is None or target_cell is None:
             return [target]
         if start_cell == target_cell:
-            return [self._final_target_point(start, target, dynamic_obstacles)]
+            return [self._final_target_point(start, target, dynamic_obstacles, dynamic_obstacle_index)]
 
         came_from = self._astar(start_cell, target_cell, congestion_costs, dynamic_costs, dynamic_blocked_cells)
         if target_cell not in came_from:
@@ -302,10 +317,15 @@ class GridPathFinder:
 
         cells = self._reconstruct_cells(came_from, target_cell)
         points = [self.cell_to_point(cell) for cell in cells[1:]]
-        target_point = self._final_target_point(points[-1] if points else start, target, dynamic_obstacles)
+        target_point = self._final_target_point(
+            points[-1] if points else start,
+            target,
+            dynamic_obstacles,
+            dynamic_obstacle_index,
+        )
         if not points or points[-1] != target_point:
             points.append(target_point)
-        return self._smooth_points(start, points, dynamic_obstacles)
+        return self._smooth_points(start, points, dynamic_obstacles, dynamic_obstacle_index)
 
     def _find_path_to_reachable_target(
         self,
@@ -316,6 +336,7 @@ class GridPathFinder:
         dynamic_blocked_cells: set[Cell],
         dynamic_obstacles: tuple[NavRect, ...],
     ) -> tuple[list[Point], Point, bool]:
+        dynamic_obstacle_index = self._build_dynamic_obstacle_index(dynamic_obstacles)
         requested_target_cell = self.point_to_cell(target)
         start_cell = self._nearest_passable_cell(self.point_to_cell(start), dynamic_blocked_cells)
         target_cell = self._nearest_passable_cell(requested_target_cell, dynamic_blocked_cells)
@@ -325,7 +346,14 @@ class GridPathFinder:
             reachable_target = self.cell_to_point(start_cell)
             return [reachable_target], reachable_target, False
 
-        target_inside_dynamic_obstacle = any(rect.contains(target[0], target[1]) for rect in dynamic_obstacles)
+        target_inside_dynamic_obstacle = any(
+            rect.contains(target[0], target[1])
+            for rect in self._candidate_dynamic_obstacles(
+                target[0],
+                target[1],
+                dynamic_obstacle_index,
+            )
+        )
         if start_cell == target_cell:
             target_reachable = not target_inside_dynamic_obstacle and self._is_passable_point(target[0], target[1])
             reachable_target = target if target_reachable else self.cell_to_point(start_cell)
@@ -336,11 +364,16 @@ class GridPathFinder:
         if target_reachable:
             cells = self._reconstruct_cells(came_from, target_cell)
             points = [self.cell_to_point(cell) for cell in cells[1:]]
-            final_target = self._final_target_point(points[-1] if points else start, target, dynamic_obstacles)
+            final_target = self._final_target_point(
+                points[-1] if points else start,
+                target,
+                dynamic_obstacles,
+                dynamic_obstacle_index,
+            )
             if not points or points[-1] != final_target:
                 points.append(final_target)
             target_reachable = final_target == target
-            return self._smooth_points(start, points, dynamic_obstacles), final_target, target_reachable
+            return self._smooth_points(start, points, dynamic_obstacles, dynamic_obstacle_index), final_target, target_reachable
 
         reachable_cell = self._nearest_reached_cell(
             came_from,
@@ -356,7 +389,7 @@ class GridPathFinder:
         points = [self.cell_to_point(cell) for cell in cells[1:]]
         if not points or points[-1] != reachable_target:
             points.append(reachable_target)
-        return self._smooth_points(start, points, dynamic_obstacles), reachable_target, False
+        return self._smooth_points(start, points, dynamic_obstacles, dynamic_obstacle_index), reachable_target, False
 
     def _nearest_reached_cell(
         self,
@@ -381,11 +414,22 @@ class GridPathFinder:
         anchor: Point,
         target: Point,
         dynamic_obstacles: tuple[NavRect, ...] = (),
+        dynamic_obstacle_index: DynamicObstacleIndex | None = None,
     ) -> Point:
+        if dynamic_obstacle_index is None:
+            dynamic_obstacle_index = self._build_dynamic_obstacle_index(dynamic_obstacles)
+
         if (
             self._is_passable_point(target[0], target[1])
-            and not any(rect.contains(target[0], target[1]) for rect in dynamic_obstacles)
-            and self._has_line_of_sight(anchor, target, dynamic_obstacles)
+            and not any(
+                rect.contains(target[0], target[1])
+                for rect in self._candidate_dynamic_obstacles(
+                    target[0],
+                    target[1],
+                    dynamic_obstacle_index,
+                )
+            )
+            and self._has_line_of_sight(anchor, target, dynamic_obstacles, dynamic_obstacle_index)
         ):
             return target
         return anchor
@@ -647,28 +691,60 @@ class GridPathFinder:
         start: Point,
         points: list[Point],
         dynamic_obstacles: tuple[NavRect, ...] = (),
+        dynamic_obstacle_index: DynamicObstacleIndex | None = None,
     ) -> list[Point]:
         if len(points) <= 2:
             return points
 
         smoothed: list[Point] = []
+        line_of_sight_cache: dict[tuple[Point, Point], bool] = {}
+        if dynamic_obstacle_index is None:
+            dynamic_obstacle_index = self._build_dynamic_obstacle_index(dynamic_obstacles)
         anchor = start
         index = 0
         while index < len(points):
             next_index = len(points) - 1
-            while next_index > index and not self._has_line_of_sight(anchor, points[next_index], dynamic_obstacles):
+            while next_index > index and not self._cached_line_of_sight(
+                anchor,
+                points[next_index],
+                dynamic_obstacles,
+                dynamic_obstacle_index,
+                line_of_sight_cache,
+            ):
                 next_index -= 1
             smoothed.append(points[next_index])
             anchor = points[next_index]
             index = next_index + 1
         return smoothed
 
+    def _cached_line_of_sight(
+        self,
+        start: Point,
+        end: Point,
+        dynamic_obstacles: tuple[NavRect, ...],
+        dynamic_obstacle_index: DynamicObstacleIndex,
+        cache: dict[tuple[Point, Point], bool],
+    ) -> bool:
+        key = (start, end)
+        if key not in cache:
+            cache[key] = self._has_line_of_sight(
+                start,
+                end,
+                dynamic_obstacles,
+                dynamic_obstacle_index,
+            )
+        return cache[key]
+
     def _has_line_of_sight(
         self,
         start: Point,
         end: Point,
         dynamic_obstacles: tuple[NavRect, ...] = (),
+        dynamic_obstacle_index: DynamicObstacleIndex | None = None,
     ) -> bool:
+        if dynamic_obstacle_index is None:
+            dynamic_obstacle_index = self._build_dynamic_obstacle_index(dynamic_obstacles)
+
         dx = end[0] - start[0]
         dy = end[1] - start[1]
         length = (dx * dx + dy * dy) ** 0.5
@@ -679,6 +755,36 @@ class GridPathFinder:
             y = start[1] + dy * ratio
             if not self._is_passable_point(x, y):
                 return False
-            if any(rect.contains(x, y) for rect in dynamic_obstacles):
+            if any(
+                rect.contains(x, y)
+                for rect in self._candidate_dynamic_obstacles(
+                    x,
+                    y,
+                    dynamic_obstacle_index,
+                )
+            ):
                 return False
         return True
+
+    def _build_dynamic_obstacle_index(
+        self,
+        dynamic_obstacles: tuple[NavRect, ...],
+    ) -> DynamicObstacleIndex:
+        buckets: dict[Cell, list[NavRect]] = {}
+        for rect in dynamic_obstacles:
+            min_cell = self.point_to_cell((rect.left, rect.top))
+            max_cell = self.point_to_cell((rect.right, rect.bottom))
+            min_row, max_row = sorted((min_cell[0], max_cell[0]))
+            min_col, max_col = sorted((min_cell[1], max_cell[1]))
+            for row in range(min_row, max_row + 1):
+                for col in range(min_col, max_col + 1):
+                    buckets.setdefault((row, col), []).append(rect)
+        return {cell: tuple(rects) for cell, rects in buckets.items()}
+
+    def _candidate_dynamic_obstacles(
+        self,
+        x: float,
+        y: float,
+        dynamic_obstacle_index: DynamicObstacleIndex,
+    ) -> tuple[NavRect, ...]:
+        return dynamic_obstacle_index.get(self.point_to_cell((x, y)), ())
