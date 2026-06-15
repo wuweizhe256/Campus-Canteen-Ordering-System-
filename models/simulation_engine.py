@@ -943,6 +943,19 @@ class SimulationEngine:
         if target_shift <= 4.0:
             return
 
+        candidate_path = [*student.path[:-1], target]
+        if self._path_crosses_static_blocking_obstacle(
+            (student.x, student.y),
+            candidate_path,
+            ignored_student_id=student.id,
+        ):
+            path = self._build_navigation_path((student.x, student.y), target, ignored_student_id=student.id)
+            if path:
+                self._set_path(student, path)
+                student.path_length = self._path_distance(student.x, student.y, student.path)
+                student.reroute_count += 1
+            return
+
         student.path[-1] = target
         if len(student.path) == 1:
             student.target_x = target_x
@@ -1887,7 +1900,9 @@ class SimulationEngine:
                         student.target_x,
                         student.target_y,
                     )
-                    if blocked_by_dynamic_student and self._try_local_avoidance_step(student, step_distance):
+                    if blocked_by_dynamic_student and self._try_static_obstacle_detour(student):
+                        blocked_by_dynamic_student = False
+                    elif blocked_by_dynamic_student and self._try_local_avoidance_step(student, step_distance):
                         blocked_by_dynamic_student = False
                         used_local_avoidance = True
                 else:
@@ -1915,7 +1930,9 @@ class SimulationEngine:
                         next_x,
                         next_y,
                     )
-                if blocked_by_dynamic_student and self._try_local_avoidance_step(student, step_distance):
+                if blocked_by_dynamic_student and self._try_static_obstacle_detour(student):
+                    blocked_by_dynamic_student = False
+                elif blocked_by_dynamic_student and self._try_local_avoidance_step(student, step_distance):
                     blocked_by_dynamic_student = False
                     used_local_avoidance = True
             elif (
@@ -2219,9 +2236,7 @@ class SimulationEngine:
     def _path_blocking_static_obstacle(self, student: Student) -> dict[str, Any] | None:
         start = self._student_foot_point(student)
         end = self._foot_point_from_position(student.target_x, student.target_y)
-        for obstacle in self._obstacle_frames():
-            if obstacle.get("kind") != "table":
-                continue
+        for obstacle in self._static_blocking_obstacle_frames(ignored_student_id=student.id):
             rect = (
                 float(obstacle["left"]),
                 float(obstacle["top"]),
@@ -2234,6 +2249,42 @@ class SimulationEngine:
                 STUDENT_COLLISION_HEIGHT / 2.0 + STUDENT_COLLISION_PADDING,
             )
             if self._segment_intersects_rect(start, end, expanded):
+                return obstacle
+        return None
+
+    def _static_blocking_obstacle_frames(
+        self,
+        ignored_student_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        obstacles = [
+            item
+            for item in self._obstacle_frames()
+            if item.get("kind") == "table"
+        ]
+        for queued_student in self.students.values():
+            if queued_student.id == ignored_student_id or queued_student.state != StudentState.QUEUED:
+                continue
+            left, top, right, bottom = self._student_collision_rect(queued_student)
+            obstacles.append(
+                {
+                    "left": left,
+                    "top": top,
+                    "right": right,
+                    "bottom": bottom,
+                    "kind": "queued_student",
+                    "student_id": queued_student.id,
+                }
+            )
+        return obstacles
+
+    def _path_crosses_static_blocking_obstacle(
+        self,
+        start: tuple[float, float],
+        path: list[tuple[float, float]],
+        ignored_student_id: int | None = None,
+    ) -> dict[str, Any] | None:
+        for obstacle in self._static_blocking_obstacle_frames(ignored_student_id):
+            if self._path_still_crosses_obstacle(start, path, obstacle):
                 return obstacle
         return None
 
@@ -2557,7 +2608,11 @@ class SimulationEngine:
         student.detour_until = self.game_time + 1.2
         original_path = list(student.path) if student.path else [(student.target_x, student.target_y)]
         candidate = self._find_detour_point(student, students)
-        if candidate is not None:
+        if candidate is not None and not self._path_crosses_static_blocking_obstacle(
+            (student.x, student.y),
+            [candidate],
+            ignored_student_id=student.id,
+        ):
             student.path = self._compact_path([candidate, *original_path])
             student.target_x, student.target_y = student.path[0]
             student.reroute_count += 1

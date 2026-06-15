@@ -273,6 +273,120 @@ class PathFindingThreadingTest(unittest.TestCase):
 
         self.assertIn("queued_student", {obstacle.kind for obstacle in obstacles})
 
+    def test_queued_student_is_treated_as_static_path_blocker(self) -> None:
+        engine = SimulationEngine(
+            SimulationConfig(
+                sim_minutes=1,
+                stall_count=2,
+                table_count=2,
+                seed=20240619,
+                total_student_count=2,
+                max_active_students=2,
+            )
+        )
+        engine.initialize()
+        engine._spawn_group(2)
+        queued, moving = list(engine.students.values())[:2]
+        stall = engine.stalls[0]
+        queued.state = StudentState.QUEUED
+        queued.stall_id = stall.id
+        queued.x, queued.y = engine._queue_slot_position(stall, 0)
+        stall.queue = [queued.id]
+        moving.state = StudentState.MOVING_TO_QUEUE
+        moving.stall_id = stall.id
+        moving.x, moving.y = 190.0, 150.0
+        moving.target_x, moving.target_y = engine._queue_slot_position(stall, 1)
+
+        blocker = engine._path_blocking_static_obstacle(moving)
+
+        self.assertIsNotNone(blocker)
+        self.assertEqual(blocker.get("kind"), "queued_student")
+        self.assertEqual(blocker.get("student_id"), queued.id)
+
+    def test_moving_queue_target_refresh_replans_when_tail_shift_crosses_queue(self) -> None:
+        engine = SimulationEngine(
+            SimulationConfig(
+                sim_minutes=1,
+                stall_count=2,
+                table_count=2,
+                seed=20240620,
+                total_student_count=2,
+                max_active_students=2,
+            )
+        )
+        engine.initialize()
+        engine._spawn_group(2)
+        queued, moving = list(engine.students.values())[:2]
+        stall = engine.stalls[0]
+        old_target = engine._queue_slot_position(stall, 0)
+        new_target = engine._queue_slot_position(stall, 1)
+        queued.state = StudentState.QUEUED
+        queued.stall_id = stall.id
+        queued.x, queued.y = old_target
+        stall.queue = [queued.id]
+        moving.state = StudentState.MOVING_TO_QUEUE
+        moving.stall_id = stall.id
+        moving.x, moving.y = 190.0, 150.0
+        moving.path = [old_target]
+        moving.target_x, moving.target_y = old_target
+        calls: list[tuple[tuple[float, float], tuple[float, float], int | None]] = []
+
+        def build_path(start, target, ignored_student_id=None):
+            calls.append((start, target, ignored_student_id))
+            return [(220.0, 210.0), target]
+
+        engine._build_navigation_path = build_path
+
+        engine._refresh_moving_queue_target(moving)
+
+        self.assertEqual(calls, [((190.0, 150.0), new_target, moving.id)])
+        self.assertEqual(moving.path, [(220.0, 210.0), new_target])
+        self.assertEqual((moving.target_x, moving.target_y), (220.0, 210.0))
+
+    def test_dynamic_detour_rejects_first_waypoint_crossing_queue(self) -> None:
+        engine = SimulationEngine(
+            SimulationConfig(
+                sim_minutes=1,
+                stall_count=2,
+                table_count=2,
+                seed=20240621,
+                total_student_count=2,
+                max_active_students=2,
+            )
+        )
+        engine.initialize()
+        engine._spawn_group(2)
+        queued, moving = list(engine.students.values())[:2]
+        stall = engine.stalls[0]
+        queued.state = StudentState.QUEUED
+        queued.stall_id = stall.id
+        queued.x, queued.y = engine._queue_slot_position(stall, 0)
+        stall.queue = [queued.id]
+        moving.state = StudentState.MOVING_TO_QUEUE
+        moving.stall_id = stall.id
+        moving.x, moving.y = 190.0, 150.0
+        moving.target_x, moving.target_y = engine._queue_slot_position(stall, 1)
+        moving.path = [(moving.target_x, moving.target_y)]
+        rejected_candidate = (moving.target_x, moving.target_y)
+        reroute_calls = 0
+
+        def find_detour(_student, _students):
+            return rejected_candidate
+
+        def reroute(_student):
+            nonlocal reroute_calls
+            reroute_calls += 1
+            moving.path = [(240.0, 220.0), (moving.target_x, moving.target_y)]
+            return True
+
+        engine._find_detour_point = find_detour
+        engine._reroute_student = reroute
+
+        engine._try_start_detour(moving, [queued, moving])
+
+        self.assertEqual(reroute_calls, 1)
+        self.assertNotEqual(moving.path[0], rejected_candidate)
+
     def test_seated_students_do_not_need_navigation_work(self) -> None:
         engine = SimulationEngine(
             SimulationConfig(
