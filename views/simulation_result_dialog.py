@@ -65,11 +65,11 @@ class SimulationResultDialog(QDialog):
     通过卡片布局展示终局信息、全局统计指标以及窗口营收排名。
     """
 
-    # 金银铜色
+    # 金银铜色（仅背景与前景色，不使用奖牌符号）
     _MEDAL_COLORS = {
-        0: ("#FFD700", "#B8860B", "🥇"),   # 金
-        1: ("#C0C0C0", "#707070", "🥈"),   # 银
-        2: ("#CD7F32", "#8B4513", "🥉"),   # 铜
+        0: ("#FFD700", "#B8860B"),   # 金
+        1: ("#C0C0C0", "#707070"),   # 银
+        2: ("#CD7F32", "#8B4513"),   # 铜
     }
 
     def __init__(
@@ -236,9 +236,6 @@ class SimulationResultDialog(QDialog):
         form.addRow("座位利用率", self._value_label(
             _pct(s.get("seat_utilization"))
         ))
-        form.addRow("拥堵指数", self._value_label(
-            _fmt(s.get("congestion_index"), precision=3)
-        ))
         form.addRow("完成订单", self._value_label(
             _fmt(s.get("completed_order_count"), " 单")
         ))
@@ -312,18 +309,14 @@ class SimulationResultDialog(QDialog):
                 item = QTableWidgetItem(text)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
-                # 前三名特殊样式
+                # 前三名特殊样式（金银铜高亮背景）
                 if rank < 3:
-                    bg, fg, _medal = self._MEDAL_COLORS[rank]
+                    bg, fg = self._MEDAL_COLORS[rank]
                     item.setBackground(QColor(bg))
                     item.setForeground(QColor(fg))
                     font = item.font()
                     font.setBold(True)
                     item.setFont(font)
-
-                    # 排名列加奖牌图标
-                    if col == 0:
-                        item.setText(f"{_medal} {rank + 1}")
 
                 table.setItem(row, col, item)
 
@@ -335,17 +328,17 @@ class SimulationResultDialog(QDialog):
         if len(self._stall_revenues) >= 3:
             podium = self._stall_revenues[:3]
             podium_text = (
-                f"🥇 {podium[0]['name']}　｜　"
-                f"🥈 {podium[1]['name']}　｜　"
-                f"🥉 {podium[2]['name']}"
+                f"① {podium[0]['name']}　｜　"
+                f"② {podium[1]['name']}　｜　"
+                f"③ {podium[2]['name']}"
             )
         elif len(self._stall_revenues) == 2:
             podium_text = (
-                f"🥇 {self._stall_revenues[0]['name']}　｜　"
-                f"🥈 {self._stall_revenues[1]['name']}"
+                f"① {self._stall_revenues[0]['name']}　｜　"
+                f"② {self._stall_revenues[1]['name']}"
             )
         elif len(self._stall_revenues) == 1:
-            podium_text = f"🥇 {self._stall_revenues[0]['name']}"
+            podium_text = f"① {self._stall_revenues[0]['name']}"
         else:
             podium_text = "暂无窗口数据"
 
