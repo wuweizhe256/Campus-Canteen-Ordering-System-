@@ -80,6 +80,7 @@ class GridPathFinder:
         self.rows = max(1, int(height // cell_size) + 1)
         self.obstacles = tuple(obstacles)
         self.doorways = tuple(doorways)
+        self._obstacle_index = self._build_obstacle_index()
         self._cell_points = self._build_cell_points()
         self._passable_grid = self._build_passable_grid()
         self._neighbors_cache = self._build_neighbors_cache()
@@ -144,9 +145,20 @@ class GridPathFinder:
                 for start, target, congestion_points, dynamic_obstacles in materialized
             ]
 
+        congestion_cost_cache = self._build_batch_congestion_cost_cache(materialized)
+        dynamic_context_cache = self._build_batch_dynamic_context_cache(materialized)
         worker_count = self._resolve_worker_count(len(materialized), max_workers)
         with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="astar") as executor:
-            return list(executor.map(self._find_path_request, materialized))
+            return list(
+                executor.map(
+                    lambda request: self._find_path_request_cached(
+                        request,
+                        congestion_cost_cache,
+                        dynamic_context_cache,
+                    ),
+                    materialized,
+                )
+            )
 
     def find_line_of_sight_relay(
         self,
@@ -220,6 +232,47 @@ class GridPathFinder:
     ) -> list[Point]:
         start, target, congestion_points, dynamic_obstacles = request
         return self.find_path(start, target, congestion_points, dynamic_obstacles)
+
+    def _find_path_request_cached(
+        self,
+        request: tuple[Point, Point, tuple[Point, ...], tuple[NavRect, ...]],
+        congestion_cost_cache: dict[tuple[Point, ...], dict[Cell, float]],
+        dynamic_context_cache: dict[tuple[NavRect, ...], tuple[dict[Cell, float], set[Cell]]],
+    ) -> list[Point]:
+        start, target, congestion_points, dynamic_obstacles = request
+        congestion_costs = congestion_cost_cache[congestion_points]
+        dynamic_costs, dynamic_blocked_cells = dynamic_context_cache[dynamic_obstacles]
+        return self._find_path(
+            start,
+            target,
+            congestion_costs,
+            dynamic_costs,
+            dynamic_blocked_cells,
+            dynamic_obstacles,
+        )
+
+    def _build_batch_congestion_cost_cache(
+        self,
+        requests: list[tuple[Point, Point, tuple[Point, ...], tuple[NavRect, ...]]],
+    ) -> dict[tuple[Point, ...], dict[Cell, float]]:
+        cache: dict[tuple[Point, ...], dict[Cell, float]] = {}
+        for _start, _target, congestion_points, _dynamic_obstacles in requests:
+            if congestion_points not in cache:
+                cache[congestion_points] = self._build_congestion_costs(congestion_points)
+        return cache
+
+    def _build_batch_dynamic_context_cache(
+        self,
+        requests: list[tuple[Point, Point, tuple[Point, ...], tuple[NavRect, ...]]],
+    ) -> dict[tuple[NavRect, ...], tuple[dict[Cell, float], set[Cell]]]:
+        cache: dict[tuple[NavRect, ...], tuple[dict[Cell, float], set[Cell]]] = {}
+        for _start, _target, _congestion_points, dynamic_obstacles in requests:
+            if dynamic_obstacles not in cache:
+                cache[dynamic_obstacles] = (
+                    self._build_dynamic_obstacle_costs(dynamic_obstacles),
+                    self._build_dynamic_blocked_cells(dynamic_obstacles),
+                )
+        return cache
 
     def _resolve_worker_count(self, request_count: int, max_workers: int | None = None) -> int:
         if request_count <= 0:
@@ -417,7 +470,7 @@ class GridPathFinder:
         if x < margin or x > self.width - margin or y < margin or y > self.height - margin:
             return False
 
-        for rect in self.obstacles:
+        for rect in self._candidate_static_obstacles(x, y):
             if rect.kind == "wall" and any(doorway.contains(x, y) for doorway in self.doorways):
                 continue
             if rect.contains(x, y, self.clearance):
@@ -451,12 +504,27 @@ class GridPathFinder:
         if x < margin or x > self.width - margin or y < margin or y > self.height - margin:
             return False
 
-        for rect in self.obstacles:
+        for rect in self._candidate_static_obstacles(x, y):
             if rect.kind == "wall" and any(doorway.contains(x, y) for doorway in self.doorways):
                 continue
             if rect.contains(x, y, self.clearance):
                 return False
         return True
+
+    def _build_obstacle_index(self) -> dict[Cell, tuple[NavRect, ...]]:
+        buckets: dict[Cell, list[NavRect]] = {}
+        for rect in self.obstacles:
+            min_cell = self.point_to_cell((rect.left - self.clearance, rect.top - self.clearance))
+            max_cell = self.point_to_cell((rect.right + self.clearance, rect.bottom + self.clearance))
+            min_row, max_row = sorted((min_cell[0], max_cell[0]))
+            min_col, max_col = sorted((min_cell[1], max_cell[1]))
+            for row in range(min_row, max_row + 1):
+                for col in range(min_col, max_col + 1):
+                    buckets.setdefault((row, col), []).append(rect)
+        return {cell: tuple(rects) for cell, rects in buckets.items()}
+
+    def _candidate_static_obstacles(self, x: float, y: float) -> tuple[NavRect, ...]:
+        return self._obstacle_index.get(self.point_to_cell((x, y)), ())
 
     def _nearest_passable_cell(self, origin: Cell, dynamic_blocked_cells: set[Cell] | None = None) -> Cell | None:
         dynamic_blocked_cells = dynamic_blocked_cells or set()

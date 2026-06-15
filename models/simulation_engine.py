@@ -772,7 +772,14 @@ class SimulationEngine:
 
     def _update_students(self, game_delta: float) -> None:
         to_remove: list[int] = []
+        navigation_path_tasks: list[
+            tuple[Student, tuple[float, float], tuple[float, float], str]
+        ] = []
+        table_path_tasks: list[
+            tuple[Student, tuple[float, float], Table, int, float, float]
+        ] = []
         self._start_due_queue_paths_parallel()
+        self._refresh_moving_queue_targets_parallel()
         for student in list(self.students.values()):
             if student.state == StudentState.DECIDING:
                 if self.game_time >= student.decision_done_at:
@@ -781,7 +788,6 @@ class SimulationEngine:
                 else:
                     self._wander_near_door(student, game_delta)
             elif student.state == StudentState.MOVING_TO_QUEUE:
-                self._refresh_moving_queue_target(student)
                 arrived = self._move_student(student, game_delta, student.walk_speed)
                 if arrived:
                     self._join_stall_queue(student)
@@ -789,9 +795,17 @@ class SimulationEngine:
                 self._set_queue_target(student)
                 self._move_student(student, game_delta, student.walk_speed)
             elif student.state == StudentState.SEARCHING_SEAT:
-                self._send_student_to_table(student)
+                self._send_student_to_table(
+                    student,
+                    table_path_tasks=table_path_tasks,
+                    navigation_path_tasks=navigation_path_tasks,
+                )
             elif student.state == StudentState.WAITING_SEAT:
-                self._send_student_to_table(student)
+                self._send_student_to_table(
+                    student,
+                    table_path_tasks=table_path_tasks,
+                    navigation_path_tasks=navigation_path_tasks,
+                )
                 self._move_student(student, game_delta, student.walk_speed)
             elif student.state == StudentState.MOVING_TO_SEAT:
                 arrived = self._move_student(student, game_delta, student.table_walk_speed)
@@ -821,7 +835,7 @@ class SimulationEngine:
                     )
                     self._snap_student_to_seat_access(student)
                     self._release_seat(student)
-                    self._set_tray_return_path(student)
+                    self._set_tray_return_path(student, navigation_path_tasks)
                     student.state = StudentState.MOVING_TO_TRAY_RETURN
                     self.finished_eating_students += 1
             elif student.state == StudentState.MOVING_TO_TRAY_RETURN:
@@ -833,7 +847,7 @@ class SimulationEngine:
                         from_state=student.state,
                         to_state=StudentState.LEAVING,
                     )
-                    self._set_exit_path(student)
+                    self._set_exit_path(student, navigation_path_tasks)
                     student.state = StudentState.LEAVING
             elif student.state == StudentState.LEAVING:
                 arrived = self._move_student(student, game_delta, student.walk_speed * 0.95)
@@ -860,6 +874,8 @@ class SimulationEngine:
                     )
                     to_remove.append(student.id)
 
+        self._run_table_path_tasks(table_path_tasks)
+        self._run_navigation_path_tasks(navigation_path_tasks)
         for student_id in to_remove:
             self.students.pop(student_id, None)
 
@@ -927,7 +943,21 @@ class SimulationEngine:
             return
         self._set_navigation_path(student, target)
 
-    def _refresh_moving_queue_target(self, student: Student) -> None:
+    def _refresh_moving_queue_targets_parallel(self) -> None:
+        tasks: list[tuple[Student, tuple[float, float], tuple[float, float]]] = []
+        for student in self.students.values():
+            if student.state != StudentState.MOVING_TO_QUEUE:
+                continue
+            self._refresh_moving_queue_target(student, tasks)
+        self._run_queue_refresh_path_tasks(tasks)
+
+    def _refresh_moving_queue_target(
+        self,
+        student: Student,
+        queue_refresh_path_tasks: list[
+            tuple[Student, tuple[float, float], tuple[float, float]]
+        ] | None = None,
+    ) -> None:
         target = self._queue_target_position(student)
         if target is None:
             return
@@ -949,6 +979,9 @@ class SimulationEngine:
             candidate_path,
             ignored_student_id=student.id,
         ):
+            if queue_refresh_path_tasks is not None:
+                queue_refresh_path_tasks.append((student, (student.x, student.y), target))
+                return
             path = self._build_navigation_path((student.x, student.y), target, ignored_student_id=student.id)
             if path:
                 self._set_path(student, path)
@@ -960,6 +993,25 @@ class SimulationEngine:
         if len(student.path) == 1:
             student.target_x = target_x
             student.target_y = target_y
+
+    def _run_queue_refresh_path_tasks(
+        self,
+        tasks: list[tuple[Student, tuple[float, float], tuple[float, float]]],
+    ) -> None:
+        if not tasks:
+            return
+
+        requests = [
+            (start, target, student.id)
+            for student, start, target in tasks
+        ]
+        paths = self._build_navigation_paths_parallel(requests)
+        for (student, start, _target), path in zip(tasks, paths):
+            if not path:
+                continue
+            self._set_path(student, path)
+            student.path_length = self._path_distance(start[0], start[1], student.path)
+            student.reroute_count += 1
 
     def _queue_approach_y(self, student: Student) -> float:
         if student.y >= 470.0:
@@ -1079,7 +1131,16 @@ class SimulationEngine:
                     )
             stall.refresh_status()
 
-    def _send_student_to_table(self, student: Student) -> None:
+    def _send_student_to_table(
+        self,
+        student: Student,
+        table_path_tasks: list[
+            tuple[Student, tuple[float, float], Table, int, float, float]
+        ] | None = None,
+        navigation_path_tasks: list[
+            tuple[Student, tuple[float, float], tuple[float, float], str]
+        ] | None = None,
+    ) -> None:
         free: list[tuple[Table, int]] = []
         for table in self.tables:
             for seat_index in table.free_seat_indexes():
@@ -1088,27 +1149,70 @@ class SimulationEngine:
             if student.waiting_seat_since is None:
                 student.waiting_seat_since = self.game_time
             if self.game_time - student.waiting_seat_since >= MAX_SEAT_WAIT_SECONDS:
-                self._send_student_to_exit(student, reason="seat_wait_timeout")
+                self._send_student_to_exit(
+                    student,
+                    reason="seat_wait_timeout",
+                    navigation_path_tasks=navigation_path_tasks,
+                )
                 return
             if student.state != StudentState.WAITING_SEAT:
                 student.state = StudentState.WAITING_SEAT
-                self._set_navigation_path(student, (self.width - 70.0, self.top_walkway_y))
+                wait_target = (self.width - 70.0, self.top_walkway_y)
+                if navigation_path_tasks is None:
+                    self._set_navigation_path(student, wait_target)
+                else:
+                    self._queue_navigation_path_task(
+                        navigation_path_tasks,
+                        student,
+                        wait_target,
+                        student.state.value,
+                    )
                 return
             student.state = StudentState.WAITING_SEAT
             return
 
         student.waiting_seat_since = None
-        table, seat_index, path, walk_distance = self._best_seat_candidate(student, free)
+        table, seat_index, seat_x, seat_y = self._best_seat_assignment_candidate(student, free)
+        self._reserve_student_seat(student, table, seat_index)
+        if table_path_tasks is not None:
+            table_path_tasks.append(
+                (
+                    student,
+                    (student.x, student.y),
+                    table,
+                    seat_index,
+                    seat_x,
+                    seat_y,
+                )
+            )
+            return
+
+        path = self._build_table_path(student.x, student.y, table, seat_index, seat_x, seat_y)
+        walk_distance = self._path_distance(student.x, student.y, path)
+        self._start_student_seat_move(student, table, seat_index, path, walk_distance, (student.x, student.y))
+
+    def _reserve_student_seat(self, student: Student, table: Table, seat_index: int) -> None:
         seat = table.seats[seat_index]
         seat.status = SeatStatus.RESERVED
         seat.student_id = student.id
         student.table_id = table.id
         student.seat_index = seat_index
+
+    def _start_student_seat_move(
+        self,
+        student: Student,
+        table: Table,
+        seat_index: int,
+        path: list[tuple[float, float]],
+        walk_distance: float,
+        start: tuple[float, float],
+    ) -> None:
+        self._reserve_student_seat(student, table, seat_index)
         self._set_path(student, path)
         self._start_path_tracking(
             student,
             path,
-            start=(student.x, student.y),
+            start=start,
             kind="seat",
         )
         student.table_walk_speed = max(6.0, walk_distance / student.table_walk_time)
@@ -1127,11 +1231,11 @@ class SimulationEngine:
             )
         )
 
-    def _best_seat_candidate(
+    def _best_seat_assignment_candidate(
         self,
         student: Student,
         free: list[tuple[Table, int]],
-    ) -> tuple[Table, int, list[tuple[float, float]], float]:
+    ) -> tuple[Table, int, float, float]:
         best: tuple[float, Table, int, float, float] | None = None
         for table, seat_index in free:
             seat_x, seat_y = self._seat_position(table, seat_index)
@@ -1154,6 +1258,14 @@ class SimulationEngine:
                 best = (score, table, seat_index, seat_x, seat_y)
         assert best is not None
         _, table, seat_index, seat_x, seat_y = best
+        return table, seat_index, seat_x, seat_y
+
+    def _best_seat_candidate(
+        self,
+        student: Student,
+        free: list[tuple[Table, int]],
+    ) -> tuple[Table, int, list[tuple[float, float]], float]:
+        table, seat_index, seat_x, seat_y = self._best_seat_assignment_candidate(student, free)
         path = self._build_table_path(student.x, student.y, table, seat_index, seat_x, seat_y)
         walk_distance = self._path_distance(student.x, student.y, path)
         return table, seat_index, path, walk_distance
@@ -1361,13 +1473,35 @@ class SimulationEngine:
                     return candidate_x, candidate_y
         return x, y
 
-    def _set_exit_path(self, student: Student) -> None:
+    def _set_exit_path(
+        self,
+        student: Student,
+        navigation_path_tasks: list[
+            tuple[Student, tuple[float, float], tuple[float, float], str]
+        ] | None = None,
+        kind: str | None = None,
+    ) -> None:
         exit_area = self._choose_exit(student)
         student.exit_id = exit_area.id
         exit_point = (exit_area.x, exit_area.y)
-        self._set_navigation_path(student, exit_point)
+        if navigation_path_tasks is None:
+            self._set_navigation_path(student, exit_point)
+            return
+        self._queue_navigation_path_task(
+            navigation_path_tasks,
+            student,
+            exit_point,
+            kind or student.state.value,
+        )
 
-    def _send_student_to_exit(self, student: Student, reason: str) -> None:
+    def _send_student_to_exit(
+        self,
+        student: Student,
+        reason: str,
+        navigation_path_tasks: list[
+            tuple[Student, tuple[float, float], tuple[float, float], str]
+        ] | None = None,
+    ) -> None:
         self.issues.append(f"student {student.id} leaving early: {reason}")
         if student.order_id is not None and student.stall_id is not None:
             stall = self.stalls[student.stall_id]
@@ -1387,7 +1521,11 @@ class SimulationEngine:
                 )
         self._release_seat(student)
         previous_state = student.state
-        self._set_exit_path(student)
+        self._set_exit_path(
+            student,
+            navigation_path_tasks=navigation_path_tasks,
+            kind=previous_state.value if isinstance(previous_state, StudentState) else str(previous_state),
+        )
         student.state = StudentState.LEAVING
         self._record_student_event(
             "early_leave_started",
@@ -1418,9 +1556,24 @@ class SimulationEngine:
             and distance(student.x, student.y, exit_area.x, exit_area.y) <= 140.0
         )
 
-    def _set_tray_return_path(self, student: Student) -> None:
+    def _set_tray_return_path(
+        self,
+        student: Student,
+        navigation_path_tasks: list[
+            tuple[Student, tuple[float, float], tuple[float, float], str]
+        ] | None = None,
+        kind: str | None = None,
+    ) -> None:
         point = self._nearest_tray_return_center(student.x, student.y)
-        self._set_navigation_path(student, point)
+        if navigation_path_tasks is None:
+            self._set_navigation_path(student, point)
+            return
+        self._queue_navigation_path_task(
+            navigation_path_tasks,
+            student,
+            point,
+            kind or student.state.value,
+        )
 
     def _nearest_tray_return_center(self, x: float, y: float) -> tuple[float, float]:
         if not self.tray_return_points:
@@ -1463,6 +1616,64 @@ class SimulationEngine:
         )
         self._set_path(student, path)
         self._start_path_tracking(student, path, start=start, kind=student.state.value)
+
+    def _queue_navigation_path_task(
+        self,
+        tasks: list[tuple[Student, tuple[float, float], tuple[float, float], str]],
+        student: Student,
+        target: tuple[float, float],
+        kind: str,
+    ) -> None:
+        tasks.append((student, (student.x, student.y), target, kind))
+
+    def _run_navigation_path_tasks(
+        self,
+        tasks: list[tuple[Student, tuple[float, float], tuple[float, float], str]],
+    ) -> None:
+        if not tasks:
+            return
+
+        requests = [
+            (start, target, student.id)
+            for student, start, target, _kind in tasks
+        ]
+        paths = self._build_navigation_paths_parallel(requests)
+        for (student, start, _target, kind), path in zip(tasks, paths):
+            self._set_path(student, path)
+            self._start_path_tracking(student, path, start=start, kind=kind)
+
+    def _run_table_path_tasks(
+        self,
+        tasks: list[tuple[Student, tuple[float, float], Table, int, float, float]],
+    ) -> None:
+        if not tasks:
+            return
+
+        path_requests: list[tuple[tuple[float, float], tuple[float, float], int | None]] = []
+        prefixes: list[list[tuple[float, float]]] = []
+        for student, start, table, seat_index, _seat_x, _seat_y in tasks:
+            side_step = self._post_pickup_side_step_position(start[0], start[1], table)
+            access_position = self._seat_access_position(table, seat_index)
+            if side_step is None:
+                prefixes.append([])
+                path_requests.append((start, access_position, None))
+            else:
+                prefixes.append([side_step])
+                path_requests.append((side_step, access_position, None))
+
+        paths = self._build_navigation_paths_parallel(path_requests)
+        for task, prefix, path in zip(tasks, prefixes, paths):
+            student, start, table, seat_index, _seat_x, _seat_y = task
+            full_path = self._compact_path([*prefix, *path])
+            walk_distance = self._path_distance(start[0], start[1], full_path)
+            self._start_student_seat_move(
+                student,
+                table,
+                seat_index,
+                full_path,
+                walk_distance,
+                start,
+            )
 
     def _start_due_queue_paths_parallel(self) -> None:
         students: list[Student] = []
@@ -1537,19 +1748,26 @@ class SimulationEngine:
             return []
 
         pathfinder = self._navigation_pathfinder()
-        foot_requests = [
-            (
-                self._foot_point_from_position(start[0], start[1]),
-                self._foot_point_from_position(target[0], target[1]),
-                self._navigation_congestion_points(ignored_student_id),
-                self._navigation_dynamic_obstacles(
-                    ignored_student_id,
-                    self._foot_point_from_position(start[0], start[1]),
-                    self._foot_point_from_position(target[0], target[1]),
-                ),
+        congestion_point_items = self._navigation_congestion_point_items()
+        foot_requests = []
+        for start, target, ignored_student_id in requests:
+            foot_start = self._foot_point_from_position(start[0], start[1])
+            foot_target = self._foot_point_from_position(target[0], target[1])
+            foot_requests.append(
+                (
+                    foot_start,
+                    foot_target,
+                    self._navigation_congestion_points_from_items(
+                        congestion_point_items,
+                        ignored_student_id,
+                    ),
+                    self._navigation_dynamic_obstacles(
+                        ignored_student_id,
+                        foot_start,
+                        foot_target,
+                    ),
+                )
             )
-            for start, target, ignored_student_id in requests
-        ]
         return [
             self._compact_path([(x, y - STUDENT_COLLISION_FOOT_OFFSET_Y) for x, y in foot_path])
             for foot_path in pathfinder.find_paths_parallel(foot_requests)
@@ -1593,11 +1811,27 @@ class SimulationEngine:
         return self._navigation_doorway_cache
 
     def _navigation_congestion_points(self, ignored_student_id: int | None = None) -> list[tuple[float, float]]:
+        return self._navigation_congestion_points_from_items(
+            self._navigation_congestion_point_items(),
+            ignored_student_id,
+        )
+
+    def _navigation_congestion_point_items(self) -> list[tuple[int, tuple[float, float]]]:
         return [
-            self._student_foot_point(student)
+            (student.id, self._student_foot_point(student))
             for student in self.students.values()
-            if student.id != ignored_student_id
-            and student.state not in (StudentState.QUEUED, StudentState.EATING, StudentState.DONE)
+            if student.state not in (StudentState.QUEUED, StudentState.EATING, StudentState.DONE)
+        ]
+
+    def _navigation_congestion_points_from_items(
+        self,
+        items: list[tuple[int, tuple[float, float]]],
+        ignored_student_id: int | None = None,
+    ) -> list[tuple[float, float]]:
+        return [
+            point
+            for student_id, point in items
+            if student_id != ignored_student_id
         ]
 
     def _navigation_dynamic_obstacles(
