@@ -754,13 +754,13 @@ class PathFindingThreadingTest(unittest.TestCase):
         yielding.x, yielding.y = 900.0, walkway_y
         yielding.target_x, yielding.target_y = 760.0, walkway_y
 
-        moved = engine._try_bottom_walkway_yield_step(yielding, -1.0, 0.0, 10.0)
+        moved = engine._try_oncoming_yield_step(yielding, -1.0, 0.0, 10.0)
 
         self.assertTrue(moved)
         self.assertGreater(yielding.x, 900.0)
         self.assertFalse(_student_boxes_overlap(engine, yielding, blocker))
 
-    def test_bottom_walkway_yield_does_not_run_outside_bottom_walkway(self) -> None:
+    def test_oncoming_yield_runs_outside_bottom_walkway(self) -> None:
         engine = SimulationEngine(
             SimulationConfig(
                 sim_minutes=1,
@@ -782,10 +782,38 @@ class PathFindingThreadingTest(unittest.TestCase):
         yielding.x, yielding.y = 900.0, middle_y
         yielding.target_x, yielding.target_y = 760.0, middle_y
 
-        moved = engine._try_bottom_walkway_yield_step(yielding, -1.0, 0.0, 10.0)
+        moved = engine._try_oncoming_yield_step(yielding, -1.0, 0.0, 10.0)
 
-        self.assertFalse(moved)
-        self.assertEqual((yielding.x, yielding.y), (900.0, middle_y))
+        self.assertTrue(moved)
+        self.assertGreater(yielding.x, 900.0)
+        self.assertFalse(_student_boxes_overlap(engine, yielding, blocker))
+
+    def test_oncoming_yield_handles_vertical_aisle(self) -> None:
+        engine = SimulationEngine(
+            SimulationConfig(
+                sim_minutes=1,
+                stall_count=2,
+                table_count=2,
+                seed=20240629,
+                total_student_count=2,
+                max_active_students=2,
+            )
+        )
+        engine.initialize()
+        engine._spawn_group(2)
+        blocker, yielding = list(engine.students.values())[:2]
+        blocker.state = StudentState.LEAVING
+        yielding.state = StudentState.LEAVING
+        blocker.x, blocker.y = 720.0, 476.0
+        blocker.target_x, blocker.target_y = 720.0, 640.0
+        yielding.x, yielding.y = 720.0, 500.0
+        yielding.target_x, yielding.target_y = 720.0, 360.0
+
+        moved = engine._try_oncoming_yield_step(yielding, 0.0, -1.0, 10.0)
+
+        self.assertTrue(moved)
+        self.assertGreater(yielding.y, 500.0)
+        self.assertFalse(_student_boxes_overlap(engine, yielding, blocker))
 
     def test_unreachable_endpoint_repair_replaces_path_target(self) -> None:
         engine = SimulationEngine(
@@ -942,6 +970,94 @@ class PathFindingThreadingTest(unittest.TestCase):
         self.assertGreater(student.detour_until, engine.game_time)
         self.assertFalse(engine._path_still_crosses_obstacle(start, student.path, blocking_obstacle))
 
+    def test_lower_left_table_corner_stuck_moves_down_before_reroute(self) -> None:
+        engine = SimulationEngine(
+            SimulationConfig(
+                sim_minutes=1,
+                stall_count=2,
+                table_count=2,
+                seed=20240631,
+                total_student_count=1,
+                max_active_students=1,
+            )
+        )
+        engine.initialize()
+        engine._spawn_group(1)
+        student = next(iter(engine.students.values()))
+        table = engine.tables[0]
+        obstacle_width, obstacle_height = TABLE_OBSTACLE_SIZES[table.seat_count]
+        obstacle_left = table.x - obstacle_width / 2.0
+        obstacle_bottom = table.y + obstacle_height / 2.0
+        student.state = StudentState.MOVING_TO_SEAT
+        student.x = obstacle_left + 4.0
+        student.y = obstacle_bottom - STUDENT_COLLISION_FOOT_OFFSET_Y - 4.0
+        student.target_x, student.target_y = table.x + 140.0, student.y
+        student.path = [(student.target_x, student.target_y)]
+        student.stuck_time = 1.1
+        student.detour_until = 10.0
+        old_y = student.y
+        reroute_calls = 0
+
+        def reroute(_student):
+            nonlocal reroute_calls
+            reroute_calls += 1
+            student.path = [(student.x + 40.0, student.y)]
+            return True
+
+        engine._reroute_student = reroute
+
+        arrived = engine._move_student(student, 0.2, 20.0)
+
+        self.assertFalse(arrived)
+        self.assertGreater(student.y, old_y)
+        self.assertEqual(reroute_calls, 1)
+        self.assertEqual(student.stuck_time, 0.0)
+        self.assertEqual(student.local_avoidance_time, 0.0)
+
+    def test_repeated_table_corner_reroute_offsets_before_replanning(self) -> None:
+        engine = SimulationEngine(
+            SimulationConfig(
+                sim_minutes=1,
+                stall_count=2,
+                table_count=2,
+                seed=20240632,
+                total_student_count=1,
+                max_active_students=1,
+            )
+        )
+        engine.initialize()
+        engine._spawn_group(1)
+        student = next(iter(engine.students.values()))
+        table = engine.tables[0]
+        obstacle_width, obstacle_height = TABLE_OBSTACLE_SIZES[table.seat_count]
+        obstacle_left = table.x - obstacle_width / 2.0
+        obstacle_bottom = table.y + obstacle_height / 2.0
+        student.state = StudentState.MOVING_TO_SEAT
+        student.table_id = table.id
+        student.seat_index = 0
+        student.x = obstacle_left + 4.0
+        student.y = obstacle_bottom - STUDENT_COLLISION_FOOT_OFFSET_Y - 4.0
+        student.target_x, student.target_y = table.x + 140.0, student.y
+        student.path = [(student.target_x, student.target_y)]
+        student.table_corner_reroute_window_started_at = engine.game_time
+        student.table_corner_reroute_count = 1
+        old_y = student.y
+        path_starts: list[tuple[float, float]] = []
+
+        def build_table_path(start_x, start_y, _table, _seat_index, _seat_x, _seat_y):
+            path_starts.append((start_x, start_y))
+            return [(start_x + 40.0, start_y)]
+
+        engine._build_table_path = build_table_path
+
+        rerouted = engine._reroute_student(student)
+
+        self.assertTrue(rerouted)
+        self.assertGreater(student.y, old_y)
+        self.assertEqual(path_starts, [(student.x, student.y)])
+        self.assertEqual(student.table_corner_reroute_count, 0)
+        self.assertIsNone(student.table_corner_reroute_window_started_at)
+
     def test_table_overlap_timeout_relocates_student_to_empty_space(self) -> None:
         engine = SimulationEngine(
             SimulationConfig(
@@ -974,6 +1090,40 @@ class PathFindingThreadingTest(unittest.TestCase):
         self.assertIsNone(engine._student_table_overlap_obstacle(student))
         self.assertTrue(engine._is_static_walkable_point(student.x, student.y))
         self.assertTrue(student.path)
+        self.assertEqual(student.table_overlap_time, 0.0)
+        self.assertEqual(student.stuck_time, 0.0)
+        self.assertGreaterEqual(student.reroute_count, 1)
+
+    def test_table_overlap_relocates_quickly_during_movement(self) -> None:
+        engine = SimulationEngine(
+            SimulationConfig(
+                sim_minutes=1,
+                stall_count=2,
+                table_count=2,
+                seed=20240630,
+                total_student_count=1,
+                max_active_students=1,
+            )
+        )
+        engine.initialize()
+        engine._spawn_group(1)
+        student = next(iter(engine.students.values()))
+        blocked_table = engine.tables[0]
+        target_table = engine.tables[1]
+        student.state = StudentState.MOVING_TO_SEAT
+        student.table_id = target_table.id
+        student.seat_index = 0
+        student.x = blocked_table.x
+        student.y = blocked_table.y - STUDENT_COLLISION_FOOT_OFFSET_Y
+        student.target_x, student.target_y = engine._seat_access_position(target_table, 0)
+        student.path = [(student.target_x, student.target_y)]
+        student.table_overlap_time = 1.4
+
+        arrived = engine._move_student(student, game_delta=0.2, speed=20.0)
+
+        self.assertFalse(arrived)
+        self.assertIsNone(engine._student_table_overlap_obstacle(student))
+        self.assertTrue(engine._is_static_walkable_point(student.x, student.y))
         self.assertEqual(student.table_overlap_time, 0.0)
         self.assertEqual(student.stuck_time, 0.0)
         self.assertGreaterEqual(student.reroute_count, 1)

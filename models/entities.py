@@ -152,6 +152,8 @@ class Student:
     local_avoidance_time: float = 0.0
     local_avoidance_count: int = 0
     reroute_count: int = 0
+    table_corner_reroute_count: int = 0
+    table_corner_reroute_window_started_at: float | None = None
     facing_x: float = 1.0
     facing_y: float = 0.0
     waiting_seat_since: float | None = None

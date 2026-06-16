@@ -40,14 +40,20 @@ STUDENT_COLLISION_PADDING = 2.0
 LOCAL_AVOIDANCE_SIDE_STEP = max(STUDENT_COLLISION_WIDTH, STUDENT_COLLISION_HEIGHT) * 1.5
 LOCAL_AVOIDANCE_REACHABILITY_CHECK_COUNT = 2
 LOCAL_AVOIDANCE_REROUTE_SECONDS = 3.0
+ONCOMING_YIELD_BACK_STEP = 34.0
+ONCOMING_YIELD_AHEAD_DISTANCE = STUDENT_COLLISION_WIDTH * 2.6
+ONCOMING_YIELD_LATERAL_DISTANCE = STUDENT_COLLISION_HEIGHT * 1.8
 BOTTOM_WALKWAY_YIELD_BAND = 42.0
-BOTTOM_WALKWAY_YIELD_BACK_STEP = 34.0
+TABLE_CORNER_RECOVERY_SECONDS = 1.2
+TABLE_CORNER_RECOVERY_STEP = 34.0
+TABLE_CORNER_REROUTE_WINDOW_SECONDS = 4.0
+TABLE_CORNER_REROUTE_LIMIT = 2
 PATH_REUSE_TARGET_TOLERANCE = 8.0
 PATH_REPLAN_COOLDOWN_SECONDS = 0.5
 QUEUE_TARGET_REPLAN_SHIFT = 18.0
 QUEUE_TARGET_REPLAN_NEAR_DISTANCE = 160.0
 STUCK_RECOVERY_SECONDS = 30.0
-TABLE_OVERLAP_RELOCATION_SECONDS = 60.0
+TABLE_OVERLAP_RELOCATION_SECONDS = 1.5
 TABLE_SEAT_OFFSETS: dict[int, list[tuple[float, float]]] = {
     2: [(-36.0, 0.0), (36.0, 0.0)],
     4: [(-46.0, -22.0), (46.0, -22.0), (-46.0, 26.0), (46.0, 26.0)],
@@ -2306,6 +2312,12 @@ class SimulationEngine:
             return False
 
         if (
+            student.stuck_time >= TABLE_CORNER_RECOVERY_SECONDS
+            and self._try_lower_left_table_corner_recovery(student)
+        ):
+            return False
+
+        if (
             student.table_overlap_time >= TABLE_OVERLAP_RELOCATION_SECONDS
             and self._try_relocate_from_table_obstacle(student)
         ):
@@ -2357,6 +2369,51 @@ class SimulationEngine:
             student.local_avoidance_count = 0
             return True
         return False
+
+    def _try_lower_left_table_corner_recovery(self, student: Student) -> bool:
+        if student.state in (StudentState.QUEUED, StudentState.EATING, StudentState.DONE):
+            return False
+        if self._lower_left_table_corner_obstacle(student) is None:
+            return False
+        if not self._try_lower_left_table_corner_offset(student):
+            return False
+
+        rerouted = self._reroute_student(student)
+        student.stuck_time = 0.0
+        student.local_avoidance_time = 0.0
+        student.local_avoidance_count = 0
+        student.detour_until = self.game_time + 1.2
+        if rerouted:
+            student.reroute_count += 1
+        return True
+
+    def _try_lower_left_table_corner_offset(self, student: Student) -> bool:
+        for step in (
+            TABLE_CORNER_RECOVERY_STEP,
+            TABLE_CORNER_RECOVERY_STEP * 1.5,
+            TABLE_CORNER_RECOVERY_STEP * 2.0,
+        ):
+            for offset_x in (0.0, -12.0, 12.0):
+                old_x, old_y = student.x, student.y
+                if not self._try_place_student_at(student, student.x + offset_x, student.y + step):
+                    continue
+                moved = distance(old_x, old_y, student.x, student.y)
+                if moved > 0.2:
+                    student.facing_x = (student.x - old_x) / moved
+                    student.facing_y = (student.y - old_y) / moved
+                return True
+        return False
+
+    def _lower_left_table_corner_obstacle(self, student: Student) -> dict[str, Any] | None:
+        foot_x, foot_y = self._student_foot_point(student)
+        for obstacle in self._obstacle_frames():
+            if obstacle.get("kind") != "table":
+                continue
+            left = float(obstacle["left"])
+            bottom = float(obstacle["bottom"])
+            if left - 48.0 <= foot_x <= left + 44.0 and bottom - 56.0 <= foot_y <= bottom + 64.0:
+                return obstacle
+        return None
 
     def _try_relocate_from_table_obstacle(self, student: Student) -> bool:
         if student.state in (StudentState.QUEUED, StudentState.EATING, StudentState.DONE):
@@ -2625,57 +2682,75 @@ class SimulationEngine:
         for candidate_x, candidate_y in candidates:
             if self._try_place_student_at(student, candidate_x, candidate_y):
                 return True
-        return self._try_bottom_walkway_yield_step(student, forward_x, forward_y, step_distance)
+        return self._try_oncoming_yield_step(student, forward_x, forward_y, step_distance)
 
-    def _try_bottom_walkway_yield_step(
+    def _try_oncoming_yield_step(
         self,
         student: Student,
         forward_x: float,
         forward_y: float,
         step_distance: float,
     ) -> bool:
-        if not self._is_bottom_walkway_yield_candidate(student, forward_x, forward_y):
+        if not self._is_oncoming_yield_candidate(student, forward_x, forward_y):
             return False
-        if not self._has_bottom_walkway_yield_priority(student, forward_x):
+        if not self._has_oncoming_yield_priority(student, forward_x, forward_y):
             return False
 
-        back_step = max(BOTTOM_WALKWAY_YIELD_BACK_STEP, step_distance * 1.5)
-        center_y = self.bottom_walkway_y - STUDENT_COLLISION_FOOT_OFFSET_Y
-        eased_y = student.y + (center_y - student.y) * 0.35
-        candidates = (
-            (student.x - forward_x * back_step, eased_y),
-            (student.x - forward_x * back_step, student.y),
-            (student.x - forward_x * back_step, max(28.0, eased_y - 10.0)),
-        )
+        back_step = max(ONCOMING_YIELD_BACK_STEP, step_distance * 1.5)
+        back_x = student.x - forward_x * back_step
+        back_y = student.y - forward_y * back_step
+        side_x = -forward_y
+        side_y = forward_x
+        candidates = [
+            (back_x, back_y),
+            (back_x + side_x * 12.0, back_y + side_y * 12.0),
+            (back_x - side_x * 12.0, back_y - side_y * 12.0),
+        ]
+        if self._is_bottom_walkway_yield_area(student) and abs(forward_x) >= 0.75 and abs(forward_y) <= 0.45:
+            center_y = self.bottom_walkway_y - STUDENT_COLLISION_FOOT_OFFSET_Y
+            eased_y = student.y + (center_y - student.y) * 0.35
+            candidates = [
+                (back_x, eased_y),
+                (back_x, student.y),
+                (back_x, max(28.0, eased_y - 10.0)),
+            ]
         for candidate_x, candidate_y in candidates:
             if self._try_place_student_at(student, candidate_x, candidate_y):
                 return True
         return False
 
-    def _is_bottom_walkway_yield_candidate(
+    def _is_oncoming_yield_candidate(
         self,
         student: Student,
         forward_x: float,
         forward_y: float,
     ) -> bool:
-        _foot_x, foot_y = self._student_foot_point(student)
-        if abs(foot_y - self.bottom_walkway_y) > BOTTOM_WALKWAY_YIELD_BAND:
-            return False
-        return abs(forward_x) >= 0.75 and abs(forward_y) <= 0.45
+        return hypot(forward_x, forward_y) >= 0.5
 
-    def _has_bottom_walkway_yield_priority(self, student: Student, forward_x: float) -> bool:
+    def _is_bottom_walkway_yield_area(self, student: Student) -> bool:
+        _foot_x, foot_y = self._student_foot_point(student)
+        return abs(foot_y - self.bottom_walkway_y) <= BOTTOM_WALKWAY_YIELD_BAND
+
+    def _has_oncoming_yield_priority(self, student: Student, forward_x: float, forward_y: float) -> bool:
         student_foot_x, student_foot_y = self._student_foot_point(student)
         for other in self._collision_students(student.id):
             other_foot_x, other_foot_y = self._student_foot_point(other)
-            if abs(other_foot_y - self.bottom_walkway_y) > BOTTOM_WALKWAY_YIELD_BAND:
+            delta_x = other_foot_x - student_foot_x
+            delta_y = other_foot_y - student_foot_y
+            ahead_distance = delta_x * forward_x + delta_y * forward_y
+            if ahead_distance <= 0.0 or ahead_distance > ONCOMING_YIELD_AHEAD_DISTANCE:
                 continue
-            ahead_distance = (other_foot_x - student_foot_x) * forward_x
-            if ahead_distance <= 0.0 or ahead_distance > STUDENT_COLLISION_WIDTH * 2.6:
-                continue
-            if abs(other_foot_y - student_foot_y) > STUDENT_COLLISION_HEIGHT * 1.8:
+            lateral_distance = abs(delta_x * -forward_y + delta_y * forward_x)
+            if lateral_distance > ONCOMING_YIELD_LATERAL_DISTANCE:
                 continue
             other_dx = other.target_x - other.x
-            if abs(other_dx) <= 4.0 or forward_x * other_dx >= 0.0:
+            other_dy = other.target_y - other.y
+            other_gap = hypot(other_dx, other_dy)
+            if other_gap <= 4.0:
+                continue
+            other_forward_x = other_dx / other_gap
+            other_forward_y = other_dy / other_gap
+            if forward_x * other_forward_x + forward_y * other_forward_y >= -0.35:
                 continue
             if student.id > other.id:
                 return True
@@ -2919,6 +2994,7 @@ class SimulationEngine:
             return
 
     def _reroute_student(self, student: Student) -> bool:
+        self._apply_table_corner_reroute_fallback(student)
         if student.state == StudentState.MOVING_TO_QUEUE:
             before = list(student.path)
             self._start_queue_path(student, force=True)
@@ -2936,6 +3012,32 @@ class SimulationEngine:
             self._set_exit_path(student, force=True)
             return bool(student.path)
         return False
+
+    def _apply_table_corner_reroute_fallback(self, student: Student) -> None:
+        if student.state in (StudentState.QUEUED, StudentState.EATING, StudentState.DONE):
+            return
+        if self._lower_left_table_corner_obstacle(student) is None:
+            student.table_corner_reroute_count = 0
+            student.table_corner_reroute_window_started_at = None
+            return
+
+        window_started_at = student.table_corner_reroute_window_started_at
+        if window_started_at is None or self.game_time - window_started_at > TABLE_CORNER_REROUTE_WINDOW_SECONDS:
+            student.table_corner_reroute_window_started_at = self.game_time
+            student.table_corner_reroute_count = 1
+            return
+
+        student.table_corner_reroute_count += 1
+        if student.table_corner_reroute_count < TABLE_CORNER_REROUTE_LIMIT:
+            return
+
+        if self._try_lower_left_table_corner_offset(student):
+            student.stuck_time = 0.0
+            student.local_avoidance_time = 0.0
+            student.local_avoidance_count = 0
+            student.detour_until = self.game_time + 1.2
+            student.table_corner_reroute_count = 0
+            student.table_corner_reroute_window_started_at = None
 
     def _find_detour_point(
         self,
