@@ -40,6 +40,8 @@ STUDENT_COLLISION_PADDING = 2.0
 LOCAL_AVOIDANCE_SIDE_STEP = max(STUDENT_COLLISION_WIDTH, STUDENT_COLLISION_HEIGHT) * 1.5
 LOCAL_AVOIDANCE_REACHABILITY_CHECK_COUNT = 2
 LOCAL_AVOIDANCE_REROUTE_SECONDS = 3.0
+BOTTOM_WALKWAY_YIELD_BAND = 42.0
+BOTTOM_WALKWAY_YIELD_BACK_STEP = 34.0
 PATH_REUSE_TARGET_TOLERANCE = 8.0
 PATH_REPLAN_COOLDOWN_SECONDS = 0.5
 QUEUE_TARGET_REPLAN_SHIFT = 18.0
@@ -2600,6 +2602,60 @@ class SimulationEngine:
 
         for candidate_x, candidate_y in candidates:
             if self._try_place_student_at(student, candidate_x, candidate_y):
+                return True
+        return self._try_bottom_walkway_yield_step(student, forward_x, forward_y, step_distance)
+
+    def _try_bottom_walkway_yield_step(
+        self,
+        student: Student,
+        forward_x: float,
+        forward_y: float,
+        step_distance: float,
+    ) -> bool:
+        if not self._is_bottom_walkway_yield_candidate(student, forward_x, forward_y):
+            return False
+        if not self._has_bottom_walkway_yield_priority(student, forward_x):
+            return False
+
+        back_step = max(BOTTOM_WALKWAY_YIELD_BACK_STEP, step_distance * 1.5)
+        center_y = self.bottom_walkway_y - STUDENT_COLLISION_FOOT_OFFSET_Y
+        eased_y = student.y + (center_y - student.y) * 0.35
+        candidates = (
+            (student.x - forward_x * back_step, eased_y),
+            (student.x - forward_x * back_step, student.y),
+            (student.x - forward_x * back_step, max(28.0, eased_y - 10.0)),
+        )
+        for candidate_x, candidate_y in candidates:
+            if self._try_place_student_at(student, candidate_x, candidate_y):
+                return True
+        return False
+
+    def _is_bottom_walkway_yield_candidate(
+        self,
+        student: Student,
+        forward_x: float,
+        forward_y: float,
+    ) -> bool:
+        _foot_x, foot_y = self._student_foot_point(student)
+        if abs(foot_y - self.bottom_walkway_y) > BOTTOM_WALKWAY_YIELD_BAND:
+            return False
+        return abs(forward_x) >= 0.75 and abs(forward_y) <= 0.45
+
+    def _has_bottom_walkway_yield_priority(self, student: Student, forward_x: float) -> bool:
+        student_foot_x, student_foot_y = self._student_foot_point(student)
+        for other in self._collision_students(student.id):
+            other_foot_x, other_foot_y = self._student_foot_point(other)
+            if abs(other_foot_y - self.bottom_walkway_y) > BOTTOM_WALKWAY_YIELD_BAND:
+                continue
+            ahead_distance = (other_foot_x - student_foot_x) * forward_x
+            if ahead_distance <= 0.0 or ahead_distance > STUDENT_COLLISION_WIDTH * 2.6:
+                continue
+            if abs(other_foot_y - student_foot_y) > STUDENT_COLLISION_HEIGHT * 1.8:
+                continue
+            other_dx = other.target_x - other.x
+            if abs(other_dx) <= 4.0 or forward_x * other_dx >= 0.0:
+                continue
+            if student.id > other.id:
                 return True
         return False
 

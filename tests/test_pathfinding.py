@@ -687,6 +687,61 @@ class PathFindingThreadingTest(unittest.TestCase):
         self.assertEqual(first.reroute_count, 1)
         self.assertEqual(first.local_avoidance_time, 0.0)
 
+    def test_bottom_walkway_oncoming_student_can_yield_backward(self) -> None:
+        engine = SimulationEngine(
+            SimulationConfig(
+                sim_minutes=1,
+                stall_count=2,
+                table_count=2,
+                seed=20240627,
+                total_student_count=2,
+                max_active_students=2,
+            )
+        )
+        engine.initialize()
+        engine._spawn_group(2)
+        blocker, yielding = list(engine.students.values())[:2]
+        walkway_y = engine.bottom_walkway_y - STUDENT_COLLISION_FOOT_OFFSET_Y
+        blocker.state = StudentState.LEAVING
+        yielding.state = StudentState.LEAVING
+        blocker.x, blocker.y = 876.0, walkway_y
+        blocker.target_x, blocker.target_y = 1040.0, walkway_y
+        yielding.x, yielding.y = 900.0, walkway_y
+        yielding.target_x, yielding.target_y = 760.0, walkway_y
+
+        moved = engine._try_bottom_walkway_yield_step(yielding, -1.0, 0.0, 10.0)
+
+        self.assertTrue(moved)
+        self.assertGreater(yielding.x, 900.0)
+        self.assertFalse(_student_boxes_overlap(engine, yielding, blocker))
+
+    def test_bottom_walkway_yield_does_not_run_outside_bottom_walkway(self) -> None:
+        engine = SimulationEngine(
+            SimulationConfig(
+                sim_minutes=1,
+                stall_count=2,
+                table_count=2,
+                seed=20240628,
+                total_student_count=2,
+                max_active_students=2,
+            )
+        )
+        engine.initialize()
+        engine._spawn_group(2)
+        blocker, yielding = list(engine.students.values())[:2]
+        middle_y = 520.0
+        blocker.state = StudentState.LEAVING
+        yielding.state = StudentState.LEAVING
+        blocker.x, blocker.y = 876.0, middle_y
+        blocker.target_x, blocker.target_y = 1040.0, middle_y
+        yielding.x, yielding.y = 900.0, middle_y
+        yielding.target_x, yielding.target_y = 760.0, middle_y
+
+        moved = engine._try_bottom_walkway_yield_step(yielding, -1.0, 0.0, 10.0)
+
+        self.assertFalse(moved)
+        self.assertEqual((yielding.x, yielding.y), (900.0, middle_y))
+
     def test_unreachable_endpoint_repair_replaces_path_target(self) -> None:
         engine = SimulationEngine(
             SimulationConfig(
