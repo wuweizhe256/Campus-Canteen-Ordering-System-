@@ -2107,6 +2107,18 @@ class SimulationEngine:
                 return True
         return False
 
+    def _queued_student_collision_blocked(self, student: Student, x: float, y: float) -> bool:
+        if not self._student_uses_collision_box(student):
+            return False
+
+        candidate_rect = self._student_collision_rect_from_position(x, y)
+        for other in self.students.values():
+            if other.id == student.id or other.state != StudentState.QUEUED:
+                continue
+            if self._rects_overlap(candidate_rect, self._student_collision_rect(other), STUDENT_COLLISION_PADDING):
+                return True
+        return False
+
     def _can_place_student_at(
         self,
         student: Student,
@@ -2212,8 +2224,12 @@ class SimulationEngine:
                     student.target_y,
                 )
                 if target_is_static_walkable:
-                    blocked_by_dynamic_student = True
-                    if self._try_local_avoidance_step(student, step_distance):
+                    if self._queued_student_collision_blocked(student, student.target_x, student.target_y):
+                        if self.game_time < student.detour_until or not self._try_static_obstacle_detour(student):
+                            self._reroute_student(student)
+                    else:
+                        blocked_by_dynamic_student = True
+                    if blocked_by_dynamic_student and self._try_local_avoidance_step(student, step_distance):
                         blocked_by_dynamic_student = False
                         used_local_avoidance = True
                 else:
@@ -2235,6 +2251,12 @@ class SimulationEngine:
                 if self._is_entrance_release_step(student, next_x, next_y):
                     student.x = next_x
                     student.y = next_y
+                elif self._queued_student_collision_blocked(student, next_x, next_y):
+                    if (
+                        self.game_time >= student.detour_until
+                        and (self._try_static_obstacle_detour(student) or self._reroute_student(student))
+                    ):
+                        student.detour_until = self.game_time + 2.0
                 else:
                     blocked_by_dynamic_student = True
                 if blocked_by_dynamic_student and self._try_local_avoidance_step(student, step_distance):

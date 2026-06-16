@@ -649,6 +649,51 @@ class PathFindingThreadingTest(unittest.TestCase):
         self.assertEqual(calls, 0)
         self.assertEqual((student.x, student.y), (120.0, 360.0))
 
+    def test_queued_student_block_uses_static_detour_not_local_avoidance(self) -> None:
+        engine = SimulationEngine(
+            SimulationConfig(
+                sim_minutes=1,
+                stall_count=2,
+                table_count=2,
+                seed=20240629,
+                total_student_count=2,
+                max_active_students=2,
+            )
+        )
+        engine.initialize()
+        engine._spawn_group(2)
+        moving, queued = list(engine.students.values())[:2]
+        moving.state = StudentState.MOVING_TO_QUEUE
+        queued.state = StudentState.QUEUED
+        moving.x, moving.y = 200.0, 156.0
+        moving.target_x, moving.target_y = 240.0, 156.0
+        moving.path = [(240.0, 156.0)]
+        queued.x, queued.y = 220.0, 156.0
+        local_avoidance_calls = 0
+        static_detour_calls = 0
+
+        def local_avoidance(_student, _step_distance):
+            nonlocal local_avoidance_calls
+            local_avoidance_calls += 1
+            return False
+
+        def static_detour(_student):
+            nonlocal static_detour_calls
+            static_detour_calls += 1
+            moving.path = [(210.0, 190.0), (240.0, 156.0)]
+            moving.target_x, moving.target_y = moving.path[0]
+            return True
+
+        engine._try_local_avoidance_step = local_avoidance
+        engine._try_static_obstacle_detour = static_detour
+
+        arrived = engine._move_student(moving, game_delta=1.0, speed=20.0)
+
+        self.assertFalse(arrived)
+        self.assertEqual(local_avoidance_calls, 0)
+        self.assertEqual(static_detour_calls, 1)
+        self.assertEqual((moving.target_x, moving.target_y), (210.0, 190.0))
+
     def test_local_avoidance_timeout_triggers_reroute(self) -> None:
         engine = SimulationEngine(
             SimulationConfig(
